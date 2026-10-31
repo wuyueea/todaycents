@@ -1,7 +1,7 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
-  appId: 'app.ledger.local',
+  appId: 'io.github.wuyueea.todaycents',
   appName: '记账本',
   webDir: 'dist'
 };

@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build:android": "pnpm build && cap sync android && cd android && gradlew.bat assembleDebug"
+    "build:android": "pnpm build && cap sync android && cd android && gradlew.bat assembleDebug",
+    "build:android:release": "pnpm build && cap sync android && cd android && gradlew.bat assembleRelease"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.1",

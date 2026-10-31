@@ -2,6 +2,6 @@
 <resources>
     <string name="app_name">记账本</string>
     <string name="title_activity_main">记账本</string>
-    <string name="package_name">app.ledger.local</string>
-    <string name="custom_url_scheme">app.ledger.local</string>
+    <string name="package_name">io.github.wuyueea.todaycents</string>
+    <string name="custom_url_scheme">io.github.wuyueea.todaycents</string>
 </resources>

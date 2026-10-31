@@ -1,4 +1,4 @@
-package app.ledger.local;
+package io.github.wuyueea.todaycents;
 
 import static org.junit.Assert.*;
 

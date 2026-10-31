@@ -33,7 +33,7 @@
 - 原生 Android 外壳（Java）
 - Vitest（SSR + 真 SQLite）
 
-没有引入 UI 组件库；没有运行时网络请求。
+Android 包名：`io.github.wuyueea.todaycents`，最低 Android 8.0（API 26）。没有引入 UI 组件库；没有运行时网络请求。
 
 ## 开发
 
@@ -54,17 +54,27 @@ pnpm build
 
 ### 构建 Android APK
 
+Debug 包：
+
 ```bash
 pnpm run build:android
 ```
-
-构建产物：
 
 ```text
 android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-这是 **debug APK**；正式分发前需要配置自己的 release keystore，且不要提交密钥。
+Release 签名包：
+
+```bash
+pnpm run build:android:release
+```
+
+```text
+android/app/build/outputs/apk/release/app-release.apk
+```
+
+Release 构建会在仓库根目录读取 `keystore.properties`（不要提交）；没有该文件时只能生成未签名包。密钥和密码必须自行备份。
 
 ## 数据与隐私
 

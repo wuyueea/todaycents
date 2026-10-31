@@ -1,4 +1,4 @@
-package app.ledger.local;
+package io.github.wuyueea.todaycents;
 
 import android.Manifest;
 import android.content.Context;

@@ -1,4 +1,4 @@
-package app.ledger.local;
+package io.github.wuyueea.todaycents;
 
 import static org.junit.Assert.*;
 
@@ -21,6 +21,6 @@ public class ExampleInstrumentedTest {
         // Context of the app under test.
         Context appContext = InstrumentationRegistry.getInstrumentation().getTargetContext();
 
-        assertEquals("app.ledger.local", appContext.getPackageName());
+        assertEquals("io.github.wuyueea.todaycents", appContext.getPackageName());
     }
 }
