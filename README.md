@@ -5,8 +5,15 @@
 > 当前状态：个人项目，UI v1 已落地，709 个测试通过。欢迎围观和提 issue，但项目仍会按自己的节奏演进。
 
 <p align="center">
-  <img src="docs/screenshots/today.png" width="300" alt="今天">
-  <img src="docs/screenshots/ledger.png" width="300" alt="流水">
+  <img src="docs/screenshots/today.jpg" width="230" alt="今天">
+  <img src="docs/screenshots/ledger.jpg" width="230" alt="流水">
+  <img src="docs/screenshots/reports.jpg" width="230" alt="报表">
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/entry.jpg" width="230" alt="随手记">
+  <img src="docs/screenshots/transfer.jpg" width="230" alt="转账">
+  <img src="docs/screenshots/settings.jpg" width="230" alt="设置">
 </p>
 
 ## 功能
