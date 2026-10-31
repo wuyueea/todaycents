@@ -1,0 +1,4215 @@
+/*
+ * Design tokens and the app shell's structural styles.
+ * Mobile first: one column, fixed bottom tabs, no horizontal scroll.
+ */
+:root {
+  /* ---- 设计 token：本文件顶部是唯一色值来源 ---- */
+
+  /* 纸 */
+  --paper: #f6f3ec;        /* 页面底色 */
+  --paper-card: #fcfaf3;   /* 卡片/弹层里的抬升面，比底色白一档 */
+  --board: #e7e2d6;        /* 只用于展示板，不进 App */
+
+  /* 墨 */
+  --ink: #191917;          /* 正文、标题、线条的基准色 */
+  --ink-2: #5c5a53;        /* 次级信息：时间、账户、说明 */
+  --ink-3: #8b897f;        /* 只做线与非文字装饰，不用于正文 */
+
+  /* 线 */
+  --rule: rgba(25, 25, 23, .13);        /* 行分隔、卡片描边 */
+  --rule-strong: rgba(25, 25, 23, .24); /* 需要更明确的分区、按钮描边 */
+
+  /* 方向色：只给带正负号的金额 */
+  --out: #2c4a3b;   /* 支出｜墨绿，也是品牌主色 */
+  --in: #8c5a2e;    /* 收入｜赭石 */
+
+  /* 语义色 */
+  --danger: #8a3a2c;                   /* 删除、覆盖整库：只做文字与描边 */
+  --uncat-line: rgba(25, 25, 23, .5);  /* 未分类的虚线下划线 */
+  --project-dead: #aba99f;             /* 已归档项目的名字 */
+
+  /* App 专用：原型用极浅的墨色填充做 chip 选中/hover，设计 token 无对应档位 */
+  --wash: rgba(25, 25, 23, .05);
+
+  /* 图表墨色明度阶——饼图与分类横条共用，取自原型的 .92/.62/.42/.26/.15/.11。
+     报表里没有任何彩色：扇区之间只靠这六档明度分开。 */
+  --slice-1: rgba(25, 25, 23, .92);
+  --slice-2: rgba(25, 25, 23, .62);
+  --slice-3: rgba(25, 25, 23, .42);
+  --slice-4: rgba(25, 25, 23, .26);
+  --slice-5: rgba(25, 25, 23, .15);
+  --slice-6: rgba(25, 25, 23, .11);
+
+  /* 字体：Manrope（数字/英文/符号）+ Noto Sans SC（中文），都本地打包；不联网。 */
+  --font-sans: "Manrope", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-num: "Manrope", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+
+  /* 尺寸 */
+  --pad: 20px;         /* 页面左右留白 */
+  --row-h: 56px;       /* 行最小高度 */
+  --tap: 44px;         /* 可点区域下限 */
+  --btn-h: 52px;
+  --radius: 3px;       /* 卡片与按钮：接近直角 */
+  --radius-chip: 2px;
+  --stroke: 1px;
+
+  /* 字号（dp） */
+  --fs-display: 27px;    /* 页面大标题：今天 */
+  --fs-hero: 42px;       /* 项目总额 */
+  --fs-stat: 46px;       /* 报表主数 */
+  --fs-nav: 14px;        /* 页内标题 */
+  --fs-row: 14px;        /* 行标题 */
+  --fs-amount: 15.5px;   /* 行金额 */
+  --fs-card-amt: 17.5px; /* 今天卡片金额 */
+  --fs-meta: 11.5px;     /* 行副文 */
+  --fs-label: 10.5px;    /* 全大写式的字段标签、章节名 */
+  --fs-btn: 13.5px;
+
+  /* App 外壳尺寸：设计文件没有对应项，保留现状 */
+  --tab-bar-height: 56px;
+  --fab-size: 56px;
+  /* viewport-fit=cover in index.html exposes the notch/home-indicator inset. */
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  /* Android 15 forces edge-to-edge at targetSdk 35, so content also runs under
+     the status bar; without this the first row of every screen is clipped. */
+  --safe-area-top: env(safe-area-inset-top, 0px);
+
+  /* ---- 语义别名（永久保留）：纸/墨 token 之上的一层语义名 ----
+     App 用 --color-* 表达背景、表面、文字、边框与方向，
+     再把含义映射到 --paper/--ink/--out/--in。换皮时只动这一层，
+     组件与测试的类名/语义都不用跟着改。 */
+  --color-bg: var(--paper);
+  --color-surface: var(--paper-card);
+  --color-surface-muted: var(--wash);
+  --color-text: var(--ink);
+  --color-text-muted: var(--ink-2);
+  --color-border: var(--rule);
+  --color-accent: var(--out);
+  --color-accent-soft: var(--wash);
+  --color-expense: var(--out);
+  --color-income: var(--in);
+  --color-warning-bg: var(--paper-card);
+  --color-warning-text: var(--danger);
+
+  /* 旧的间距/字号/圆角名（兼容别名：既有样式仍在使用；
+     新代码优先用 --fs-* / --radius / --pad 这些设计档位） */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --font-size-xs: var(--fs-label);
+  --font-size-sm: var(--fs-meta);
+  --font-size-md: var(--fs-row);
+  --font-size-lg: var(--fs-card-amt);
+  --font-size-xl: var(--fs-display);
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 600;
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+}
+
+/* ---------- 数字工具类（来自设计 token） ---------- */
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.012em;
+}
+
+.num--out {
+  color: var(--out);
+}
+
+.num--in {
+  color: var(--in);
+}
+
+/* 汇总类数字（本月合计、项目总额、额度、笔数）保持墨色，不做方向色 */
+.num--total {
+  color: var(--ink);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-row);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-display);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .06em;
+}
+
+/* Sits over the page, under the OS status bar: content that scrolls up is
+   washed out instead of colliding with the clock and icons. */
+.status-veil {
+  position: fixed;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 30;
+  height: var(--safe-area-top);
+  background: rgba(246, 243, 236, 0.82);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  /* Keep the last row of content above the fixed tab bar. */
+  padding-bottom: calc(var(--tab-bar-height) + var(--safe-area-bottom));
+  /* …and keep the first row below the status bar. */
+  padding-top: var(--safe-area-top);
+}
+
+.app-main {
+  flex: 1;
+  width: 100%;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: var(--pad);
+}
+
+.app-db-status {
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--color-warning-bg);
+  color: var(--color-warning-text);
+  font-size: var(--fs-meta);
+}
+
+.tab-bar {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: var(--stroke) solid var(--rule);
+  background: var(--paper);
+  /* The nav background must reach the bottom edge, so the inset is padding
+     on the bar itself rather than margin below it. */
+  padding-bottom: var(--safe-area-bottom);
+}
+
+.tab-bar__link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--tab-bar-height);
+  color: var(--ink-2);
+  font-size: var(--fs-nav);
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tab-bar__link.is-active {
+  color: var(--ink);
+  font-weight: var(--font-weight-medium);
+}
+
+.tab-bar__link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+/* ---------- 今天 screen ---------- */
+
+.today-screen {
+  /* Room to scroll the last card clear of the floating +. */
+  padding-bottom: calc(var(--fab-size) + var(--space-4));
+}
+
+.today-header {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 9px;
+  margin-bottom: var(--space-4);
+}
+
+.today-header h1 {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
+.today-date {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .06em;
+}
+
+/* One card per movement, with real space between the cards. */
+.today-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.today-list > li {
+  list-style: none;
+}
+
+/* 1px hairline, paper-card fill, 3px radius, no shadow. */
+.today-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 15px 13px;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+a.today-card:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+/* A transfer leg has no editor of its own; it is shown, never invited. */
+.today-card--readonly {
+  cursor: default;
+}
+
+.today-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.today-card__category {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .05em;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.today-card__meta {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .05em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.today-card .amount-text {
+  flex: 0 0 auto;
+  font-size: var(--fs-card-amt);
+  line-height: 1;
+  text-align: right;
+}
+
+.today-empty {
+  margin: 56px 0;
+  color: var(--ink-2);
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+  text-align: center;
+}
+
+.today-note {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+.today-note--error {
+  color: var(--danger);
+}
+
+/* ---------- Floating + ---------- */
+
+.fab {
+  position: fixed;
+  /* The tab bar owns its own safe-area padding; the + starts above all of it. */
+  right: calc(var(--space-4) + env(safe-area-inset-right, 0px));
+  bottom: calc(var(--tab-bar-height) + var(--safe-area-bottom) + var(--space-4));
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--fab-size);
+  height: var(--fab-size);
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--paper);
+  font-family: var(--font-num);
+  font-size: 24px;
+  line-height: 1;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fab:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 3px;
+}
+
+/* ---------- Shared form fields ---------- */
+
+.money-input {
+  width: 100%;
+  min-height: var(--row-h);
+  padding: var(--space-2) var(--space-3);
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--font-num);
+  font-size: var(--fs-card-amt);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.012em;
+  text-align: right;
+}
+
+.money-input:focus-visible {
+  border-color: var(--rule-strong);
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 1px;
+}
+
+.money-input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+/* ---------- 随手记 screen ---------- */
+
+/* /add, /accounts and /txn/:id replace the tab bar, so the shell must not reserve room for one. */
+.app-shell--full {
+  padding-bottom: var(--safe-area-bottom);
+}
+
+.add-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Pushed page: a 56px nav, then a form of ruled rows. */
+.add-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  margin-bottom: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.add-header h1 {
+  margin: 0;
+  font-size: var(--fs-nav);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .1em;
+}
+
+.add-back {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 22px;
+  line-height: 1;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.add-back:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* 支出 / 收入 / 转账: three choices, framed like a field row. */
+.add-direction {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+}
+
+.add-direction__choice {
+  min-height: var(--btn-h);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-btn);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .08em;
+}
+
+.add-direction__choice.is-active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.add-direction__choice:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* One field = one ruled row, as in the prototype's 记一笔. */
+.add-field {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.add-label {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .14em;
+  line-height: 1.45;
+}
+
+/* 金额 is the one hero field: big number, no box. */
+.add-field--amount {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-height: 0;
+  padding: 22px 0 14px;
+}
+
+.add-field--amount .money-input {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--fs-hero);
+  line-height: 1;
+  text-align: left;
+}
+
+.add-field--amount .money-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+/* The box is gone, so invalid still needs a visible mark. */
+.add-field--amount .money-input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+/* 分类 / 标签 are value rows whose right side is a button that opens a sheet. */
+.add-value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  letter-spacing: .05em;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-value:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.add-value[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+/* ---------- 选分类 sheet ---------- */
+
+.category-sheet__cats {
+  margin-top: 6px;
+  border-top: var(--stroke) solid var(--ink);
+}
+
+.category-sheet__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-align: left;
+}
+
+.category-sheet__row[data-depth='1'] {
+  padding-left: 22px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.category-sheet__row.is-selected {
+  color: var(--ink);
+}
+
+.category-sheet__row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.category-sheet__row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.category-sheet__count {
+  flex: none;
+  color: var(--ink-2);
+  font-size: 10px;
+  letter-spacing: .1em;
+}
+
+.category-sheet__note {
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  line-height: 1.9;
+  letter-spacing: .04em;
+}
+
+.category-sheet__empty {
+  margin: 16px 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+/* ---------- 选标签 sheet ---------- */
+
+.tag-sheet__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  padding: 9px 13px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  letter-spacing: .05em;
+}
+
+.tag-chip[aria-pressed='true'] {
+  border-color: var(--ink);
+  background: var(--wash);
+  color: var(--ink);
+}
+
+/* A retired tag still attached to this row: readable, removable, visibly old. */
+.tag-chip__retired {
+  margin-left: 4px;
+  color: var(--ink-3);
+  font-size: var(--fs-label);
+}
+
+.tag-chip:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.tag-sheet__empty {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+.tag-sheet__create {
+  margin-top: 18px;
+  padding: 10px 14px 12px;
+  border: var(--stroke) dashed var(--rule-strong);
+  border-radius: var(--radius);
+}
+
+.tag-sheet__create-label {
+  display: block;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .16em;
+}
+
+.tag-sheet__create-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tag-sheet__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+}
+
+.tag-sheet__input::placeholder {
+  color: var(--ink-2);
+  opacity: 1;
+}
+
+.tag-sheet__input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 2px;
+}
+
+.tag-sheet__input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.tag-sheet__create-button {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .08em;
+}
+
+.tag-sheet__create-button:disabled {
+  opacity: .55;
+}
+
+.tag-sheet__create-button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.tag-sheet__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.tag-sheet__done {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 16px;
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.tag-sheet__done:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.add-account {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+  text-align-last: right;
+}
+
+.add-account:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.add-account[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.add-submit {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: var(--space-5);
+  padding: 0 var(--pad);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--fs-btn);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .14em;
+}
+
+.add-submit:disabled {
+  opacity: 0.6;
+}
+
+.add-submit:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.add-note {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+.add-note--error {
+  color: var(--danger);
+}
+
+.add-date,
+.add-note-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.add-note-input::placeholder {
+  color: var(--ink-2);
+  opacity: 1;
+}
+
+.add-date:focus-visible,
+.add-note-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+/* A back-filled date keeps its 补记 hint under the row, never in it. */
+.add-field--date {
+  flex-wrap: wrap;
+  padding: 14px 0;
+}
+
+.add-date-hint {
+  flex: 0 0 100%;
+  margin: 7px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  text-align: right;
+}
+
+.add-ledger-link {
+  display: block;
+  margin-top: var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  text-align: center;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.add-ledger-link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- 流水 screen ---------- */
+
+/* Money display: the sign comes from the cents, the colour from the direction.
+   Typography only here — AmountText renders the leading hyphen as U+2212. */
+.amount-text {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.012em;
+  font-weight: var(--font-weight-regular);
+}
+
+.amount-text--expense {
+  color: var(--out);
+}
+
+.amount-text--income {
+  color: var(--in);
+}
+
+.amount-text--transfer,
+.amount-text--adjust {
+  color: var(--ink);
+}
+
+/* The month bar is ink, not green: green belongs to signed amounts only.
+   It is full-bleed — the negative margins cancel .app-main's padding so the
+   bar reaches both edges and sits flush under the status bar, as in the
+   prototype (docs/prototypes/shots/a/ledger.png). */
+.ledger-hero {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  margin: calc(var(--pad) * -1) calc(var(--pad) * -1) 12px;
+  /* Side padding leaves room for the arrows, which sit at the block's vertical
+     centre rather than on the month's line. */
+  padding: 12px calc(var(--pad) + 34px) 14px;
+  border-radius: 0;
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* One arrow per side, centred on the whole ink block. */
+.ledger-hero__arrow {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  width: var(--tap);
+  height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--paper);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.92;
+}
+
+.ledger-hero__arrow--prev {
+  left: 4px;
+}
+
+.ledger-hero__arrow--next {
+  right: 4px;
+}
+
+.ledger-hero__arrow:disabled {
+  opacity: 0.35;
+}
+
+.ledger-hero__arrow:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 1px;
+}
+
+.ledger-hero .month-nav--label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+}
+
+.ledger-hero .month-nav__field {
+  width: 100%;
+}
+
+/* The label/input pair: the field is the positioned box the transparent input
+   stretches over, so arrows placed next to it stay clickable. */
+.month-nav__field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+}
+
+/* Painted by us so it can be centred; the native control cannot. */
+.month-nav__label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--fs-nav);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0;
+  color: inherit;
+  pointer-events: none;
+}
+
+.ledger-hero .month-nav__label {
+  color: var(--paper);
+}
+
+/* Transparent, stretched over the label: the whole line is the picker. */
+.month-nav__input--overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Inline variant: bold chevrons either side of the painted month. */
+.month-nav__arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.month-nav__arrow:disabled {
+  opacity: 0.35;
+}
+
+.ledger-hero .month-nav__button,
+.ledger-hero .month-nav__input {
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--paper);
+}
+
+.ledger-hero .month-nav__button {
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.82;
+}
+
+/* Centred like the prototype: ‹  2026年10月  › */
+.ledger-hero .month-nav__input {
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-nav);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0;
+}
+
+.ledger-hero .month-nav__input {
+  width: 100%;
+  max-width: none;
+  /* The whole text is the picker: the native arrow is gone, the label itself
+     opens the month chooser. */
+  color-scheme: dark;
+}
+
+/* With the input transparent the native arrow cannot show, but hide it
+   anyway for safety on engines that ignore opacity on the indicator. */
+.month-nav__input--overlay::-webkit-calendar-picker-indicator {
+  display: none;
+  opacity: 0;
+}
+
+
+.ledger-hero .month-nav__button:disabled {
+  color: var(--paper);
+  opacity: 0.45;
+}
+
+.ledger-hero .month-nav__button:focus-visible,
+.ledger-hero .month-nav__input:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 1px;
+}
+
+/* On the ink bar the totals are paper (the inverse of ink), never a direction colour. */
+.ledger-hero__totals {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 26px;
+  margin: 0;
+  color: var(--paper);
+}
+
+.ledger-hero__total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ledger-hero__label {
+  font-size: var(--fs-meta);
+  opacity: 0.62;
+}
+
+.ledger-hero__total .num {
+  font-size: 15px;
+  font-weight: var(--font-weight-regular);
+}
+
+.ledger-hero__totals strong {
+  color: var(--paper);
+  font-family: var(--font-num);
+  font-size: var(--fs-meta);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.ledger-hero__dot {
+  opacity: 0.5;
+}
+
+/* Shared by 流水 and 统计: the month is selectable, not pinned to today. */
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.month-nav__button {
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-label);
+}
+
+/* A month control never needs the full width of a phone header. */
+.month-nav__input {
+  min-width: 0;
+  max-width: 8.5em;
+  padding: var(--space-1);
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.month-nav__button:disabled {
+  opacity: 0.5;
+}
+
+.month-nav__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.month-nav__input:focus-visible {
+  border-color: var(--rule-strong);
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 1px;
+}
+
+.ledger-days {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One day is one paper card: a meta header, then hairline-separated rows. */
+.ledger-day {
+  overflow: hidden;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+}
+
+.ledger-day__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 13px 8px;
+  border-bottom: var(--stroke) solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .06em;
+}
+
+.ledger-day__date {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-day__totals {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+}
+
+.ledger-day__total {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+/* 合计是结果，不是方向：卡头保持墨色。 */
+.ledger-day__total--expense,
+.ledger-day__total--income {
+  color: var(--ink);
+}
+
+.ledger-day__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ledger-day__rows > li + li {
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 13px;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+a.ledger-row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.ledger-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ledger-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ledger-row__category {
+  overflow: hidden;
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row__meta {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.ledger-row__account {
+  flex: 0 0 auto;
+}
+
+.ledger-row__note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .amount-text {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+  line-height: 1.2;
+}
+
+.ledger-row--readonly {
+  cursor: default;
+}
+
+/* Whole-group transfer deletion: a small destructive action, never an edit. */
+.ledger-row__delete {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: var(--stroke) solid var(--danger);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--fs-label);
+}
+
+.ledger-row__delete:disabled {
+  opacity: 0.6;
+}
+
+.ledger-row__delete:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.ledger-note {
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.ledger-note--error {
+  color: var(--danger);
+}
+
+/* 成功提示不是方向色，保持墨色。 */
+.ledger-note--success {
+  color: var(--ink);
+}
+
+/* ---------- 编辑流水 screen ---------- */
+
+.txn-edit-kind {
+  margin-left: 0;
+  padding: 2px 6px;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .08em;
+}
+
+.txn-edit-date {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+}
+
+/* 删除是页内次级动作：危险色文字 + 44px 点击区，不是一块实心红。
+   原型把它放在 nav 右端；这里也从表单末尾移到页头。 */
+.txn-edit-delete {
+  margin-left: auto;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .14em;
+}
+
+.txn-edit-delete:disabled {
+  opacity: 0.6;
+}
+
+.txn-edit-delete:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+/* 转账腿只读：与表单同一张纸，不加卡片框。 */
+.txn-edit-readonly {
+  margin-top: 20px;
+  padding: 18px 0 20px;
+  border-top: var(--stroke) solid var(--ink);
+  border-bottom: var(--stroke) solid var(--rule);
+  background: transparent;
+}
+
+.txn-edit-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 var(--space-3);
+}
+
+.txn-edit-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--tap);
+  padding: 8px 0;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.txn-edit-facts dt {
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .14em;
+}
+
+.txn-edit-facts dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+/* ---------- 占比横条（项目详情与报表共用） ---------- */
+
+/* 分类占比：墨色明度阶（与报表饼图同一组），行与行之间只留 1.5px 纸缝。 */
+.share-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  list-style: none;
+}
+
+.share-bars > li {
+  min-width: 0;
+  list-style: none;
+}
+
+/* 六档墨色，与报表饼图同一组 token。 */
+.share-bars > li:nth-child(6n+1) { --bar-ink: var(--slice-1); }
+.share-bars > li:nth-child(6n+2) { --bar-ink: var(--slice-2); }
+.share-bars > li:nth-child(6n+3) { --bar-ink: var(--slice-3); }
+.share-bars > li:nth-child(6n+4) { --bar-ink: var(--slice-4); }
+.share-bars > li:nth-child(6n+5) { --bar-ink: var(--slice-5); }
+.share-bars > li:nth-child(6n+6) { --bar-ink: var(--slice-6); }
+
+.category-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 0 9px;
+}
+
+.category-bar__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.category-bar__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-bar__amount {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.category-bar__percent {
+  flex: 0 0 4em;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: right;
+}
+
+.category-bar__track {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--wash);
+}
+
+/* 图表是结构，不是方向：只走墨色明度阶，不占方向色。 */
+.category-bar__fill {
+  height: 100%;
+  border-radius: 0;
+  background: var(--bar-ink, var(--ink));
+}
+
+/* ---------- 账户 screen ---------- */
+
+/* Pushed pages under 设置 (账户 today, 标签/项目 later) share one header:
+   a back chevron then the title. */
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 4px;
+}
+
+.settings-header h1 {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
+.accounts-note {
+  margin: 10px 0 12px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.accounts-note--error {
+  color: var(--danger);
+}
+
+/* 成功提示不是方向色，保持墨色。 */
+.accounts-note--success {
+  color: var(--ink);
+}
+
+.accounts-note--info {
+  color: var(--ink-2);
+}
+
+.accounts-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  margin: 0 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.accounts-toggle input {
+  accent-color: var(--ink);
+}
+
+.accounts-empty {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+/* 账户是一行一行，不是一张一张卡：56px 行高 + 1px 行线。 */
+.accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.accounts-item {
+  padding: 0;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  list-style: none;
+}
+
+.accounts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--row-h);
+  padding: 8px 0;
+}
+
+.accounts-row__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.accounts-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accounts-row__type {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.accounts-row__archived {
+  align-self: flex-start;
+  padding: 1px 5px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 9.5px;
+  letter-spacing: .12em;
+}
+
+.accounts-row__balance {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  text-align: right;
+}
+
+.accounts-row__budget {
+  margin: -2px 0 8px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  text-align: right;
+}
+
+.accounts-actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.accounts-action {
+  min-height: var(--tap);
+  padding: 0 14px;
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .08em;
+}
+
+.accounts-action:disabled {
+  opacity: 0.6;
+}
+
+.accounts-action:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.accounts-action--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.accounts-edit,
+.accounts-reconcile {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 0 14px;
+}
+
+.accounts-edit .add-field,
+.accounts-reconcile .add-field {
+  flex-wrap: wrap;
+  align-content: center;
+  min-height: var(--row-h);
+  padding: 10px 0;
+}
+
+.accounts-edit__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.accounts-edit__actions .add-submit {
+  width: auto;
+  min-width: 0;
+  min-height: var(--btn-h);
+  margin: 0;
+  padding: 0 22px;
+}
+
+/* 表单里的一对按钮：主 = 墨底，次 = 墨描边；都 52px。 */
+.accounts-edit__actions .accounts-action {
+  min-height: var(--btn-h);
+  padding: 0 20px;
+  font-size: var(--fs-btn);
+  letter-spacing: .12em;
+}
+
+.accounts-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 24px 0 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: var(--stroke) solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+}
+
+.accounts-form__title {
+  margin: 0 0 2px;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .1em;
+}
+
+.accounts-form .add-field {
+  flex-wrap: wrap;
+  align-content: center;
+  min-height: var(--row-h);
+  padding: 10px 0;
+}
+
+.accounts-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.accounts-form .accounts-input,
+.accounts-edit .accounts-input,
+.accounts-reconcile .accounts-input,
+.accounts-form .money-input,
+.accounts-edit .money-input,
+.accounts-reconcile .money-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.accounts-form .money-input,
+.accounts-edit .money-input,
+.accounts-reconcile .money-input {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.accounts-input:focus-visible,
+.accounts-form .money-input:focus-visible,
+.accounts-edit .money-input:focus-visible,
+.accounts-reconcile .money-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.accounts-input[aria-invalid='true'],
+.accounts-form .money-input[aria-invalid='true'],
+.accounts-edit .money-input[aria-invalid='true'],
+.accounts-reconcile .money-input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.accounts-form .money-input:disabled,
+.accounts-edit .money-input:disabled,
+.accounts-reconcile .money-input:disabled {
+  color: var(--ink-2);
+  opacity: 0.6;
+}
+
+.accounts-hint {
+  flex: 0 0 100%;
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  letter-spacing: .02em;
+  text-align: right;
+}
+
+/* 对账/编辑时字段内的错误提示也占满一行。 */
+.accounts-form .add-field .accounts-note,
+.accounts-edit .add-field .accounts-note,
+.accounts-reconcile .add-field .accounts-note {
+  flex: 0 0 100%;
+  margin: 6px 0 0;
+  text-align: right;
+}
+
+/* ---------- 设置 screen ---------- */
+
+.settings-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 分组标题像原型的 账本 / 结构 / 分析：小字、宽字距、墨-2。 */
+.settings-group {
+  margin-top: 8px;
+}
+
+.settings-group__title {
+  margin: 20px 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+/* 一行 = 标题 + 现状 + 右箭头，下边一条 1px 线。 */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: 11px 0 10px;
+  border-bottom: var(--stroke) solid var(--rule);
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.settings-row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.settings-row__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-row__title {
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+}
+
+.settings-row__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+}
+
+.settings-row__chev {
+  flex: none;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 16px;
+  line-height: 1;
+}
+
+/*
+ * 存储 is the one row with a state line: the chosen folder's name, or the
+ * app-cache default. Its own class keeps the old rows name-only.
+ */
+.settings-row__value {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 重置组唯一的一行：danger 只做文字，没有填充红底，也没有右箭头。
+ * 它是个 button（就地弹确认层，不跳页），所以要把浏览器的默认按钮外观
+ * 全部归零，只留下和其他设置行一样的 1px 底线与行高。
+ */
+.settings-row--danger {
+  width: 100%;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.settings-row--danger:disabled {
+  opacity: .6;
+}
+
+.settings-note {
+  margin: 22px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.settings-note + .settings-note {
+  margin-top: 8px;
+}
+
+/* 清除失败的说明：danger 文字，和其他 danger 一样没有底色。 */
+.settings-note--error {
+  color: var(--danger);
+}
+
+/* 设置下钻页的右端现状（标签数 / 分类数）。 */
+.settings-header__meta {
+  margin-left: auto;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+/* ---------- 标签 screen ---------- */
+
+.tags-screen,
+.categories-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+.tags-lead,
+.categories-lead {
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.9;
+  letter-spacing: .02em;
+}
+
+/* 新建标签是一只虚线框：在列表之前，先给「还没有」一个动作。 */
+.tags-create {
+  margin: 16px 0 4px;
+  padding: 12px 14px 13px;
+  border: var(--stroke) dashed var(--rule-strong);
+  border-radius: var(--radius);
+}
+
+.tags-create__label {
+  display: block;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .16em;
+}
+
+.tags-create__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.tags-create__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+}
+
+.tags-create__input::placeholder {
+  color: var(--ink-3);
+}
+
+.tags-create__input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 2px;
+}
+
+.tags-create__input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.tags-create__count {
+  flex: none;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+}
+
+.tags-create__button {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 14px;
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .1em;
+}
+
+.tags-create__button:disabled {
+  opacity: .55;
+}
+
+.tags-create__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.tags-create__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.tags-section,
+.categories-section {
+  margin: 22px 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+.tags-list,
+.category-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 标签行：名字、次数、最近使用，行尾一个 44px 的 ⋯。 */
+.tag-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--row-h);
+  padding: 8px 0;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.tag-row__main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.tag-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-row__archived {
+  flex: none;
+  padding: 1px 5px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius-chip);
+  color: var(--ink-2);
+  font-size: 9.5px;
+  letter-spacing: .12em;
+}
+
+.tag-row__numbers {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.tag-row__count {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+.tag-row__last {
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .02em;
+  white-space: nowrap;
+}
+
+.tag-row__menu,
+.category-row__menu {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.tag-row__menu:disabled,
+.category-row__menu:disabled {
+  opacity: .45;
+}
+
+.tag-row__menu:focus-visible,
+.category-row__menu:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.tags-empty {
+  margin: 22px 0 0;
+  padding: 20px 0 0;
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.tags-empty__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: 15px;
+  letter-spacing: .12em;
+}
+
+.tags-empty__copy {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 2;
+  letter-spacing: .02em;
+}
+
+.tags-note,
+.categories-note {
+  margin: 20px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.tags-note--error,
+.categories-note--error {
+  color: var(--danger);
+}
+
+.tag-rename,
+.category-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 8px 0;
+}
+
+.tag-rename__label,
+.category-rename__label {
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .14em;
+}
+
+.tag-rename__input,
+.category-rename__input {
+  flex: 1 1 120px;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule-strong);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+}
+
+.tag-rename__input:focus-visible,
+.category-rename__input:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.tag-rename__save,
+.tag-rename__cancel,
+.category-rename__save,
+.category-rename__cancel {
+  min-height: var(--tap);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .08em;
+}
+
+.tag-rename__save,
+.category-rename__save {
+  border: var(--stroke) solid var(--ink);
+}
+
+.tag-rename__error,
+.category-rename__error {
+  flex: 0 0 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+}
+
+/* ---------- 分类 screen ---------- */
+
+.category-create {
+  margin: 18px 0 4px;
+  padding: 14px 0 16px;
+  border-top: var(--stroke) solid var(--ink);
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.category-create__title {
+  margin: 0 0 4px;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .1em;
+}
+
+.category-create__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--row-h);
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.category-create__label {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .14em;
+}
+
+.category-create__input,
+.category-create__select {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.category-create__input::placeholder {
+  color: var(--ink-3);
+}
+
+.category-create__input:focus-visible,
+.category-create__select:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 2px;
+}
+
+.category-create__input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.category-create__hint {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.category-create__error {
+  margin: 10px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.category-create__button {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 14px;
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.category-create__button:disabled {
+  opacity: .55;
+}
+
+.category-create__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.category-list {
+  border-top: var(--stroke) solid var(--ink);
+}
+
+.category-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: var(--row-h);
+  padding: 8px 0;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.category-row--child {
+  position: relative;
+  padding-left: 26px;
+}
+
+/* 二级分类左侧那条细线：和原型一样，用 1px 墨线说明层级。 */
+.category-row--child::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 7px;
+  width: var(--stroke);
+  background: var(--rule);
+}
+
+.category-row__main {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.category-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-row--child .category-row__name {
+  font-size: 13px;
+}
+
+.category-row__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.category-row__restore {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .08em;
+}
+
+.category-row__restore:disabled {
+  opacity: .55;
+}
+
+.category-row__restore:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.category-row__system {
+  flex: none;
+  padding: 1px 5px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius-chip);
+  color: var(--ink-2);
+  font-size: 9.5px;
+  letter-spacing: .12em;
+}
+
+.category-row--system {
+  min-height: var(--row-h);
+  color: var(--ink);
+}
+
+/* 行菜单 / 标签菜单共用一个底升弹层里的列表。 */
+.action-menu {
+  display: flex;
+  flex-direction: column;
+  margin: 18px 0 0;
+}
+
+.action-menu__item {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 54px;
+  padding: 8px 0;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13.5px;
+  letter-spacing: .06em;
+  text-align: left;
+}
+
+.action-menu__item span {
+  flex: none;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .02em;
+}
+
+.action-menu__item:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.action-menu__item--danger,
+.action-menu__item--danger span {
+  color: var(--danger);
+}
+
+/* ---------- 备份与恢复 screen ---------- */
+
+.backup-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 上次备份：一个安静的数字块，下面一条线把它和动作分开。 */
+.backup-state {
+  padding: 26px 0 22px;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.backup-state__label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .24em;
+}
+
+.backup-state__value {
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 25px;
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .09em;
+  line-height: 1.2;
+}
+
+.backup-state__meta {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+/* 主 = 墨底，次 = 墨描边；都 52px。 */
+.backup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 0 6px;
+}
+
+.backup-button {
+  width: 100%;
+  min-height: var(--btn-h);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.backup-button--primary {
+  border: var(--stroke) solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.backup-button--secondary {
+  border: var(--stroke) solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+}
+
+.backup-button:disabled {
+  opacity: .6;
+}
+
+.backup-button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* The input is invisible but must stay in the accessibility tree. */
+.backup-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.backup-note {
+  margin: 18px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.backup-note--error {
+  color: var(--danger);
+}
+
+/* 目录浏览：路径可以很长，按字符换行，不撑破页面。 */
+.storage-path {
+  word-break: break-all;
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  letter-spacing: .02em;
+}
+
+.storage-dirs {
+  margin: 10px 0 0;
+  padding: 0;
+  border-top: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.storage-dir {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 11px 0 10px;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  letter-spacing: .045em;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.storage-dir:disabled {
+  opacity: .6;
+}
+
+.storage-dir:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.storage-dir__chev {
+  flex: none;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* ---------- 导入弹层（确认 / 失败） ---------- */
+
+/* 底部升起：顶边 1px 墨线，纸底，最高屏幕 − 118px，内部滚动。 */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(25, 25, 23, .24);
+}
+
+.sheet__panel {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 640px;
+  max-height: calc(100% - 118px);
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 22px var(--pad) calc(30px + var(--safe-area-bottom));
+  border-top: var(--stroke) solid var(--ink);
+  background: var(--paper);
+}
+
+.sheet__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sheet__title {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+.sheet__version {
+  flex: none;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .12em;
+}
+
+.sheet__file {
+  margin-top: 18px;
+  padding: 13px 14px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+}
+
+.sheet__file-name {
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  letter-spacing: .03em;
+}
+
+.sheet__file-meta {
+  margin-top: 7px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.sheet__text {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.9;
+  letter-spacing: .02em;
+}
+
+.sheet__note {
+  margin: 14px 0 0;
+  padding-left: 11px;
+  border-left: var(--stroke) solid var(--rule-strong);
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+}
+
+.sheet__danger,
+.sheet__secondary {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 12px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.sheet__danger {
+  border: var(--stroke) solid var(--danger);
+  color: var(--danger);
+}
+
+.sheet__secondary {
+  border: var(--stroke) solid var(--ink);
+  color: var(--ink);
+}
+
+.sheet__note + .sheet__danger {
+  margin-top: 22px;
+}
+
+.sheet__danger:disabled,
+.sheet__secondary:disabled {
+  opacity: .6;
+}
+
+.sheet__danger:focus-visible,
+.sheet__secondary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- Toast ---------- */
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: calc(26px + var(--safe-area-bottom));
+  left: 18px;
+  z-index: 50;
+  max-width: 604px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 12.5px;
+  line-height: 1.6;
+  letter-spacing: .03em;
+  text-align: center;
+}
+
+/* 带撤销的 toast：文字在左，动作在右；两个都是纸色，动作靠下划线显出可点。 */
+.toast--action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 8px 16px;
+  text-align: left;
+}
+
+.toast__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toast__action {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 4px;
+  border: 0;
+  border-bottom: var(--stroke) solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: var(--paper);
+  font: inherit;
+  font-size: 12.5px;
+  letter-spacing: .12em;
+}
+
+.toast__action:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 2px;
+}
+
+/* ---------- 项目 screens ---------- */
+
+.projects-screen,
+.project-detail-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+.projects-lead {
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.9;
+  letter-spacing: .02em;
+}
+
+/* 新建项目：和标签页同一只虚线框，先给「还没有」一个动作。 */
+.projects-create {
+  margin: 16px 0 6px;
+  padding: 12px 14px 14px;
+  border: var(--stroke) dashed var(--rule-strong);
+  border-radius: var(--radius);
+}
+
+.projects-create__title {
+  margin: 0 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .16em;
+}
+
+.projects-create__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--tap);
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.projects-create__label {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .14em;
+}
+
+.projects-create__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.projects-create__input::placeholder {
+  color: var(--ink-3);
+}
+
+.projects-create__input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 2px;
+}
+
+.projects-create__input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+}
+
+/* The budget is one value row, not a second hero: same size as the name field. */
+.projects-create .money-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--font-num);
+  font-size: var(--fs-row);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: right;
+}
+
+.projects-create .money-input::placeholder {
+  color: var(--ink-3);
+}
+
+.projects-create__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.projects-create__button {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 14px;
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.projects-create__button:disabled {
+  opacity: .55;
+}
+
+.projects-create__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 进行中的项目是一张卡；已归档是一条灰行。 */
+.project-card {
+  margin-top: 10px;
+  padding: 15px 16px 12px;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  list-style: none;
+}
+
+.project-row {
+  border-bottom: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.project-row__link {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: var(--row-h);
+  padding: 12px 0;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.project-card .project-row__link {
+  padding: 0;
+}
+
+.project-row__link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.project-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 15.5px;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .09em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 归档后名字只是变浅：那趟的钱还在，归属也还在。 */
+.project-row--archived .project-row__name {
+  color: var(--project-dead);
+}
+
+.project-row__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.project-row__budget {
+  color: var(--ink);
+  font-size: var(--fs-card-amt);
+  letter-spacing: -.01em;
+}
+
+/* 预算条：2px 墨线，超了只加危险色描边，不把整条填红。 */
+.project-progress {
+  display: block;
+  width: 100%;
+  height: 2px;
+  margin: 10px 0 2px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--rule);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.project-progress::-webkit-progress-bar {
+  background: var(--rule);
+}
+
+.project-progress::-webkit-progress-value {
+  background: var(--ink);
+}
+
+.project-progress::-moz-progress-bar {
+  background: var(--ink);
+}
+
+.project-progress--over {
+  height: 4px;
+  border: var(--stroke) solid var(--danger);
+}
+
+.projects-section {
+  margin: 26px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+.projects-note {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.projects-note--error {
+  color: var(--danger);
+}
+
+/* ---------- 项目详情 ---------- */
+
+.project-detail-note {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.project-detail-note--error {
+  color: var(--danger);
+}
+
+/* 项目总额是这一页唯一的主数：46px、墨色、没有正负号。 */
+.project-hero {
+  padding: 22px 0 20px;
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+.project-hero__label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .24em;
+}
+
+.project-hero__value {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: var(--fs-hero);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: -.01em;
+  line-height: 1;
+}
+
+.project-hero__meta {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.project-section-block {
+  margin-top: 22px;
+}
+
+.project-section {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+/* 最近几笔：一行一笔，标题在上、日期与分类在下。 */
+.project-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border-top: var(--stroke) solid var(--ink);
+  list-style: none;
+}
+
+.project-recent > li {
+  list-style: none;
+}
+
+.project-recent > li + li {
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.project-txn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--row-h);
+  padding: 10px 0;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.project-txn--readonly {
+  cursor: default;
+}
+
+.project-txn__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-txn__title {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-txn__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+}
+
+.project-txn .amount-text {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+}
+
+a.project-txn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.project-actions {
+  margin-top: 26px;
+}
+
+.project-archive {
+  width: 100%;
+  min-height: var(--btn-h);
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.project-archive:disabled {
+  opacity: .6;
+}
+
+.project-archive:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 改名与预算：同一张纸上的字段行，不另起一张卡。 */
+.project-edit {
+  margin-top: 30px;
+  padding-top: 16px;
+  border-top: var(--stroke) solid var(--ink);
+}
+
+.project-edit__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.project-edit .add-field {
+  min-height: var(--row-h);
+  padding: 10px 0;
+}
+
+.project-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.project-edit .money-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-family: var(--font-num);
+  font-size: var(--fs-row);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: right;
+}
+
+.project-input:focus-visible,
+.project-edit .money-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.project-input[aria-invalid='true'],
+.project-edit .money-input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.project-edit__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.project-edit .add-submit {
+  margin-top: 18px;
+}
+
+/* 归档不是破坏性动作：墨底主按钮，取消才是次按钮。 */
+.sheet__primary {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 22px;
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.sheet__primary:disabled {
+  opacity: .6;
+}
+
+.sheet__primary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- 流水/今天行上的两种痕迹 ---------- */
+
+/* 未分类：需要被重新归类，所以不是错误色，而是一条虚线下划线。 */
+.uncat {
+  border-bottom: 1px dashed var(--uncat-line);
+  padding-bottom: 1px;
+}
+
+/* 项目名接在副文最后：「· 国庆去成都」；归档后只是变浅，不消失。 */
+.project-mark {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.project-mark--archived {
+  color: var(--project-dead);
+}
+
+/* ---------- 选项目 sheet ---------- */
+
+.project-sheet__list {
+  margin-top: 6px;
+  border-top: var(--stroke) solid var(--ink);
+}
+
+.project-sheet__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 42px;
+  padding: 0;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: .06em;
+  text-align: left;
+}
+
+.project-sheet__row.is-selected::before {
+  content: '';
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--ink);
+}
+
+.project-sheet__row--none {
+  color: var(--ink-2);
+}
+
+.project-sheet__row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.project-sheet__note {
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  line-height: 1.9;
+  letter-spacing: .04em;
+}
+
+.project-sheet__empty {
+  margin: 16px 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+/* ---------- 固定支出 screen ---------- */
+
+.fixed-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 本月合计是一页唯一的主数：金额墨色、无正负号，和项目总额同一档。 */
+.fixed-total {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 16px;
+  padding: 18px 0 16px;
+  border-top: var(--stroke) solid var(--ink);
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+.fixed-total__label {
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .18em;
+}
+
+.fixed-total__value {
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: 28px;
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  line-height: 1;
+}
+
+.fixed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.fixed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--row-h);
+  padding: 10px 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.fixed-row__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fixed-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fixed-row__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.fixed-row__numbers {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.fixed-row__amount {
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+.fixed-row__next {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+  white-space: nowrap;
+}
+
+/* 候选是一张虚线框，提醒它还不是清单的一部分。 */
+.fixed-prompt {
+  margin: 18px 0 4px;
+  padding: 13px 14px 14px;
+  border: var(--stroke) dashed var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+}
+
+.fixed-prompt__kicker {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .16em;
+}
+
+.fixed-prompt__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+}
+
+.fixed-prompt__body {
+  margin: 7px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.fixed-prompt__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 13px;
+}
+
+.fixed-prompt__button {
+  min-height: var(--tap);
+  padding: 0 12px;
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .06em;
+}
+
+.fixed-prompt__button--primary {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.fixed-prompt__button:disabled {
+  opacity: .55;
+}
+
+.fixed-prompt__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 确认之后：提示条原地变成一行结论，撤销就在它右边。 */
+.fixed-flash {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 4px;
+  padding: 12px 14px;
+  border-left: 2px solid var(--ink);
+  background: var(--wash);
+}
+
+.fixed-flash__text {
+  color: var(--ink);
+  font-size: var(--fs-meta);
+  line-height: 1.7;
+  letter-spacing: .03em;
+}
+
+.fixed-flash__undo {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 2px;
+  border: 0;
+  border-bottom: var(--stroke) solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .12em;
+}
+
+.fixed-flash__undo:disabled {
+  opacity: .55;
+}
+
+.fixed-flash__undo:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 固定支出一屏两块：建议标记 / 手动标记，各一行说明。 */
+.fixed-section {
+  margin-top: 22px;
+}
+
+.fixed-section:first-of-type {
+  margin-top: 10px;
+}
+
+.fixed-section__heading {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .2em;
+}
+
+.fixed-section__copy {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+/* 空态沿用同一套标题/说明的排版。 */
+.fixed-empty {
+  margin-top: 10px;
+}
+
+.fixed-empty__block {
+  margin-top: 22px;
+}
+
+.fixed-empty__heading {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .2em;
+}
+
+.fixed-empty__copy {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+/* ---------- 编辑一笔：固定支出按钮 ---------- */
+
+.fixed-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fixed-toggle__track {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 22px;
+  flex: none;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: 11px;
+  background: transparent;
+  transition: background .15s ease, border-color .15s ease;
+}
+
+.fixed-toggle__track.is-on {
+  border-color: var(--ink);
+  background: var(--ink);
+}
+
+.fixed-toggle__thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink-2);
+  transition: transform .15s ease, background .15s ease;
+}
+
+.fixed-toggle__track.is-on .fixed-toggle__thumb {
+  transform: translateX(16px);
+  background: var(--paper);
+}
+
+.fixed-toggle:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.fixed-toggle:disabled {
+  opacity: .55;
+}
+
+
+/* ---------- 报表 screen ---------- */
+
+.reports-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 月/年 是两个字的开关：字号只差一档，选中靠一条墨色下划线，不靠底色块。
+   控件本体 44dp 高（可点），下划线用伪元素贴在字下面。 */
+.reports-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 10px 0 0;
+}
+
+.reports-seg {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.reports-seg__item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .16em;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reports-seg__item.is-on {
+  color: var(--ink);
+}
+
+.reports-seg__item.is-on::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  left: 0;
+  height: var(--stroke);
+  background: var(--ink);
+}
+
+.reports-seg__item:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 右侧的月份/年份控件是次级信息：小字、墨-2，箭头比页面里的小一档。 */
+.reports-switch .month-nav,
+.reports-switch .year-nav {
+  margin-left: auto;
+}
+
+.reports-switch .month-nav__arrow {
+  color: var(--ink-2);
+  font-size: 18px;
+}
+
+.reports-switch .month-nav__label {
+  font-size: var(--fs-meta);
+  letter-spacing: .02em;
+}
+
+.year-nav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.year-nav__label {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+/* 主数：一个期间的支出。汇总数字不上方向色，它是结果。 */
+.reports-summary {
+  margin: 22px 0 0;
+  padding: 0 0 18px;
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+.reports-summary__label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .24em;
+}
+
+.reports-summary__value {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-stat);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.038em;
+  line-height: 1;
+}
+
+.reports-summary__extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .04em;
+}
+
+.reports-summary__extra .amount-text {
+  font-size: var(--fs-meta);
+}
+
+.reports-section {
+  margin: 26px 0 0;
+}
+
+.reports-section__title {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+/* ---- 钱去哪了：饼 + 引出线 ---- */
+
+/* 320×178 是饼图的坐标系：360dp 宽减两侧 20dp 留白。窄屏等比缩小。 */
+.reports-pie {
+  width: 100%;
+  max-width: 320px;
+  margin: 2px auto 0;
+}
+
+/* 标签从图的两侧伸出，允许压出版心，但不产生横向滚动。 */
+.reports-pie__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* 扇区之间是 1.5 纸色间隙，不是白线：纸动过，间隙就跟着纸。 */
+.reports-pie__slice {
+  stroke: var(--paper);
+  stroke-width: 1.5;
+}
+
+.reports-pie__slice--1 { fill: var(--slice-1); }
+.reports-pie__slice--2 { fill: var(--slice-2); }
+.reports-pie__slice--3 { fill: var(--slice-3); }
+.reports-pie__slice--4 { fill: var(--slice-4); }
+.reports-pie__slice--5 { fill: var(--slice-5); }
+.reports-pie__slice--6 { fill: var(--slice-6); }
+
+/* 引出线是非文字装饰线，走 --ink-3，与原型 50% 墨同明度。 */
+.reports-pie__leader {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+
+.reports-pie__name {
+  fill: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  letter-spacing: .06em;
+}
+
+.reports-pie__percent {
+  fill: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.reports-pie__amount {
+  fill: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.015em;
+}
+
+/* 饼下面的那一行：其他 X / 通讯 Y / 订阅 Z，最多三格。 */
+.reports-rest {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 10px 0 0;
+  padding-top: 12px;
+  border-top: var(--stroke) solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .04em;
+}
+
+.reports-rest__item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.reports-rest__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-rest__amount {
+  flex: 0 0 auto;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* ---- 十二个月柱 ---- */
+
+.reports-bars {
+  margin-top: 12px;
+}
+
+.reports-bars__plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 104px;
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+/* 发生过的月份是墨色的一档；本月实心；没有支出只留一根发丝。 */
+.reports-bars__col {
+  flex: 1 1 0;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: var(--slice-5);
+}
+
+.reports-bars__col--current {
+  background: var(--ink);
+}
+
+.reports-bars__col--zero {
+  height: 1px;
+  background: var(--rule-strong);
+}
+
+/* 未来月份留空：一根虚线，不是一根 0。 */
+.reports-bars__col--future {
+  height: 1px;
+  background: transparent;
+  border-top: var(--stroke) dashed var(--rule-strong);
+  border-radius: 0;
+}
+
+.reports-bars__axis {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.reports-bars__tick {
+  flex: 1 1 0;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* ---- 预算对实际 ---- */
+
+.reports-budgets {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reports-budget {
+  padding: 9px 0 11px;
+}
+
+.reports-budget__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.reports-budget__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-budget__value {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+.reports-budget__track {
+  position: relative;
+  height: 2px;
+  margin-top: 9px;
+  background: var(--rule);
+}
+
+.reports-budget__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ink);
+}
+
+/* 全屏只有这里可以用 danger：超额。 */
+.reports-budget__fill--over {
+  background: var(--danger);
+}
+
+/* ---- 两头（年视图） ---- */
+
+.reports-extremes {
+  margin: 0;
+  padding: 0;
+  border-top: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.reports-extreme {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 11px 0 12px;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.reports-extreme__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reports-extreme__title {
+  color: var(--ink);
+  font-size: var(--fs-row);
+  letter-spacing: .06em;
+}
+
+.reports-extreme__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.reports-extreme__value {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+/* ---- 导出入口（xlsx 是下一件事，先画出来、先不可点） ---- */
+
+.reports-export {
+  min-height: var(--btn-h);
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+  border-top: var(--stroke) solid var(--rule);
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  letter-spacing: .06em;
+  text-align: left;
+  opacity: .55;
+}
+
+.reports-export:disabled {
+  cursor: default;
+}
+
+/* ---- 说明与空态 ---- */
+
+.reports-note {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.reports-note--error {
+  color: var(--danger);
+}
+
+.reports-empty {
+  padding: 16px 0 18px;
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.reports-empty__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  letter-spacing: .08em;
+}
+
+.reports-empty__note {
+  margin: 8px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}

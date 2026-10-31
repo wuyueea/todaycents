@@ -1,0 +1,10 @@
+# pnpm 11 reads project settings from here (it no longer reads .npmrc).
+
+# Flat node_modules: Node's ESM resolver on this machine does not follow the
+# junctions pnpm creates for its isolated layout, which breaks transitive
+# imports inside vite/vitest.
+nodeLinker: hoisted
+
+# Keep the content-addressable store inside the project, so installs work
+# even when the global store location is not writable.
+storeDir: .pnpm-store

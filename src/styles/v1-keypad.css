@@ -1,0 +1,45 @@
+/* One money button that opens the shared keypad instead of a text field. */
+.amount-keypad-field {
+  display: block;
+  min-width: 0;
+  flex: 1;
+  min-height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--v1-s2);
+  color: var(--v1-ink);
+  font: inherit;
+  font-family: var(--font-num);
+  font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.amount-keypad-field.is-empty {
+  color: var(--v1-t3);
+}
+
+.amount-keypad-field[aria-invalid='true'] {
+  color: var(--v1-err);
+}
+
+.amount-keypad-field:disabled {
+  opacity: 0.5;
+}
+
+.amount-keypad-field:focus-visible {
+  outline: 2px solid var(--v1-key);
+  outline-offset: 2px;
+}
+
+.accounts-screen--v1 .add-field .amount-keypad-field,
+.projects-screen--v1 .projects-create__row .amount-keypad-field,
+.project-detail-screen--v1 .project-edit .add-field .amount-keypad-field {
+  flex: 1;
+  min-height: 34px;
+}
+/* The old sheet drew a 1px ink line across the top; v1 sheets are flat. */
+.sheet__panel {
+  border-top: 0;
+}
