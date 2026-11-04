@@ -131,14 +131,79 @@ export function backupFileMeta(rows: number, bytes: number): string {
   return `${rows} 笔 · ${fileSizeText(bytes)}`;
 }
 
-/** Export success toast; it names the file and its size, never a fake location. */
-export function exportToast(result: { fileName: string; bytes: number }): string {
-  return `已导出「${result.fileName}」 · ${fileSizeText(result.bytes)}`;
+/**
+ * Where the automatic before-copy is about to go, stated before the owner
+ * confirms. A null folder is not hidden: the cache is real, but the system may
+ * clear it, and saying so is the whole point of the second sentence.
+ */
+export function plannedCopyNote(folderName: string | null): string {
+  return folderName === null
+    ? '还没有可写的文件夹，这一份只会放进应用缓存，系统可能清理；要留住它，请先到「设置 › 存储」允许访问。'
+    : `这一份会存到「${folderName}」文件夹。`;
 }
 
-/** Import success toast, shown on 设置 after the sheet closes. */
-export function importDoneToast(result: { fileName: string; rows: number }): string {
-  return `已导入「${result.fileName}」 · ${result.rows} 笔`;
+/** The three places a before-copy can land, as the toast names them. */
+export type CopyLocation =
+  | { kind: 'folder'; folderName: string }
+  | { kind: 'cache' }
+  | { kind: 'none' };
+
+/** Where a before-copy actually went, after the fact. */
+export function copyLocationNote(location: CopyLocation): string {
+  switch (location.kind) {
+    case 'folder':
+      return `在「${location.folderName}」文件夹`;
+    case 'cache':
+      return '在应用缓存，系统可能清理';
+    default:
+      return '这次没有写备份文件';
+  }
+}
+
+/**
+ * Export success toast; it names the file and its size, never a fake location.
+ * A folder write can say 已保存到 because the file is really there; a share is
+ * only 已导出 until the owner confirms the other app kept it.
+ */
+export function exportToast(result: {
+  fileName: string;
+  bytes: number;
+  folderName?: string;
+  /** The owner confirmed the share was saved, so 上次备份 was just updated. */
+  recorded?: boolean;
+}): string {
+  const size = fileSizeText(result.bytes);
+  if (result.folderName !== undefined) {
+    return `已保存到「${result.folderName}」 · ${result.fileName} · ${size}`;
+  }
+  return result.recorded === true
+    ? `已记下这次备份 · 「${result.fileName}」 · ${size}`
+    : `已导出「${result.fileName}」 · ${size}`;
+}
+
+/**
+ * Import success toast, shown on 设置 after the sheet closes.
+ *
+ * The repaired project links ride along as a second clause: an import that
+ * dropped dead ids is still a success, but the owner deserves to know their
+ * rows changed shape on the way in.
+ */
+export function importDoneToast(result: {
+  fileName: string;
+  rows: number;
+  clearedProjectRefs?: number;
+  /**
+   * Where the automatic before-copy actually went. Only a cache or no copy is
+   * worth repeating: a folder was already promised in the confirmation sheet.
+   */
+  beforeDestination?: CopyLocation;
+}): string {
+  const line = `已导入「${result.fileName}」 · ${result.rows} 笔`;
+  const cleared = result.clearedProjectRefs ?? 0;
+  const imported = cleared > 0 ? `${line}；${cleared} 笔流水的项目在文件里找不到，已清空` : line;
+  const destination = result.beforeDestination;
+  if (destination === undefined || destination.kind === 'folder') return imported;
+  return `${imported} · 导入前的备份${copyLocationNote(destination)}`;
 }
 
 /**
@@ -195,8 +260,14 @@ export function resetSummary(counts: ResetCounts): string {
  * Reset success toast. It names the automatic before-copy, because that file
  * is the only way back — the reset itself is not undoable.
  */
-export function resetDoneToast(result: { beforeFileName: string }): string {
-  return `已清除所有数据 · 备份「${result.beforeFileName}」`;
+export function resetDoneToast(result: {
+  beforeFileName: string;
+  beforeDestination?: CopyLocation;
+}): string {
+  const line = `已清除所有数据 · 备份「${result.beforeFileName}」`;
+  return result.beforeDestination === undefined
+    ? line
+    : `${line} · ${copyLocationNote(result.beforeDestination)}`;
 }
 
 /**

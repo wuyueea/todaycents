@@ -273,7 +273,7 @@ function LedgerRowView({
 
   const meta = isTransfer
     ? `${row.amountCents < 0 ? '转出' : '转入'} · ${row.accountName}${
-        row.note !== '' ? ` · ${row.note}` : ''
+        row.note !== '' ? ` ${row.note}` : ''
       }`
     : row.direction === 'adjust'
       ? `${row.accountName} · 不算支出也不算收入`
@@ -300,8 +300,8 @@ function LedgerRowView({
             meta
           ) : (
             <>
-              {row.note !== '' && <span className="ledger-row__note">{row.note}</span>}
               <span className="ledger-row__account">{row.accountName}</span>
+              {row.note !== '' && <span className="ledger-row__note">{row.note}</span>}
               <ProjectMark row={row} />
             </>
           )}

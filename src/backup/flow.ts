@@ -24,14 +24,34 @@ import { readResetCounts, resetLedger } from '../db/reset';
 import type { ResetCounts } from '../db/reset';
 import { backupFileName, beforeBackupFileName, utf8ByteLength } from './format';
 import type { BackupMeta } from './format';
-import { countTxnRows, recordBackupMeta } from './meta';
+import { countTxnRows } from './meta';
+
+/**
+ * Where an export ended up. `share` only means the file was handed to the
+ * system share sheet; it does not prove that the app on the other end saved it.
+ * That is why the screen asks before recording a share as 上次备份.
+ */
+export type ExportDestination =
+  | { kind: 'folder'; folderName: string }
+  | { kind: 'share' }
+  | { kind: 'download' }
+  | { kind: 'canceled' };
+
+/**
+ * Where the automatic before-copy went. `none` is the browser preview, which
+ * has no native filesystem; the app itself always gets a folder or the cache.
+ */
+export type CopyDestination =
+  | { kind: 'folder'; folderName: string }
+  | { kind: 'cache'; uri: string }
+  | { kind: 'none' };
 
 /** Where the two exported files go. The device implementation lives in device.ts. */
 export interface BackupFileWriter {
-  /** The owner-facing export: cache file + system share sheet (or a browser download). */
-  writeForShare(fileName: string, text: string): Promise<void>;
+  /** The owner-facing export: folder, cache + share sheet, or browser download. */
+  writeForShare(fileName: string, text: string): Promise<ExportDestination>;
   /** The automatic pre-import copy: the folder when set, otherwise the cache; never a second share sheet. */
-  writeCopy(fileName: string, text: string): Promise<void>;
+  writeCopy(fileName: string, text: string): Promise<CopyDestination>;
 }
 
 export interface ExportResult {
@@ -40,13 +60,40 @@ export interface ExportResult {
   rows: number;
   bytes: number;
   meta: BackupMeta;
+  /** What actually happened at the device edge. */
+  destination: ExportDestination;
 }
 
 /**
- * Builds, serialises and hands the file to the writer, then records the meta.
- * Meta is written only after the writer succeeds, so a failed export never
- * claims that a backup exists. The caller stays on the backup screen; nothing
- * here navigates or shows UI.
+ * What the last-backup record should do after an export.
+ *
+ * A folder or browser download is a file that already exists. A share is only
+ * a hand-off, so the screen asks the owner first; only a confirmed save may
+ * become 上次备份. A cancelled share never does.
+ */
+export type ExportMetaAction = 'record' | 'ask' | 'none';
+
+export function exportMetaAction(
+  destination: ExportDestination,
+  ownerConfirmed = false
+): ExportMetaAction {
+  switch (destination.kind) {
+    case 'folder':
+    case 'download':
+      return 'record';
+    case 'share':
+      return ownerConfirmed ? 'record' : 'ask';
+    default:
+      return 'none';
+  }
+}
+
+/**
+ * Builds, serialises and hands the file to the writer. It deliberately records
+ * no app_meta: a folder or download is a file that exists, but a share is only
+ * a hand-off. The screen records 上次备份 once it knows which of those happened,
+ * and asks the owner after a share. The caller stays on the backup screen;
+ * nothing here navigates or shows UI.
  */
 export async function exportBackup(
   db: Db,
@@ -57,13 +104,12 @@ export async function exportBackup(
   const text = serializeBackup(file);
   const fileName = backupFileName(now);
 
-  await writer.writeForShare(fileName, text);
+  const destination = await writer.writeForShare(fileName, text);
 
   const bytes = utf8ByteLength(text);
   const meta: BackupMeta = { at: now.toISOString(), rows: file.counts.txn, bytes };
-  await recordBackupMeta(db, meta);
 
-  return { fileName, rows: meta.rows, bytes, meta };
+  return { fileName, rows: meta.rows, bytes, meta, destination };
 }
 
 /** Everything the confirmation sheet needs, read before it opens. */
@@ -115,6 +161,10 @@ export interface ImportResult {
   fileName: string;
   rows: number;
   beforeFileName: string;
+  /** Where the pre-import copy actually went. */
+  beforeDestination: CopyDestination;
+  /** txn rows whose project link the file itself could not resolve, cleared on import. */
+  clearedProjectRefs: number;
 }
 
 /**
@@ -132,20 +182,24 @@ export async function confirmImport(
 ): Promise<ImportResult> {
   const current = await buildBackup(db);
   const beforeFileName = beforeBackupFileName(now);
-  await writer.writeCopy(beforeFileName, serializeBackup(current));
+  const beforeDestination = await writer.writeCopy(beforeFileName, serializeBackup(current));
 
-  await restoreBackup(db, prepared.file);
+  const restored = await restoreBackup(db, prepared.file);
 
   return {
     fileName: prepared.fileName,
     rows: prepared.file.counts.txn,
     beforeFileName,
+    beforeDestination,
+    clearedProjectRefs: restored.clearedProjectRefs,
   };
 }
 
 export interface ResetResult {
   /** The automatic pre-reset copy, already written. */
   beforeFileName: string;
+  /** Where that copy actually went. */
+  beforeDestination: CopyDestination;
   /** Rows the wipe removed, read from the ledger just before it ran. */
   counts: ResetCounts;
 }
@@ -170,10 +224,10 @@ export async function resetWithBackup(
 ): Promise<ResetResult> {
   const current = await buildBackup(db);
   const beforeFileName = beforeBackupFileName(now);
-  await writer.writeCopy(beforeFileName, serializeBackup(current));
+  const beforeDestination = await writer.writeCopy(beforeFileName, serializeBackup(current));
 
   const counts = await readResetCounts(db);
   await resetLedger(db);
 
-  return { beforeFileName, counts };
+  return { beforeFileName, beforeDestination, counts };
 }

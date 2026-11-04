@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { UNCATEGORIZED_CATEGORY_ID } from '../db/schema';
 import type { Category } from '../db/repos/categories';
+import { useDialogFocus } from './useDialogFocus';
 
 /**
  * The app's category chooser: a two-level tree in the same bottom sheet as
@@ -97,6 +98,7 @@ export interface CategorySheetProps {
 export function CategorySheet({ categories, value, onChange, onClose }: CategorySheetProps) {
   const rows = buildCategoryTree(categories);
   const current = categories.find(category => category.id === value) ?? null;
+  const panelRef = useDialogFocus({ onClose });
 
   return (
     <div
@@ -106,7 +108,7 @@ export function CategorySheet({ categories, value, onChange, onClose }: Category
       aria-labelledby="category-sheet-title"
     >
       <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
-      <div className="sheet__panel">
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
         <div className="sheet__head">
           <h2 className="sheet__title" id="category-sheet-title">
             选分类

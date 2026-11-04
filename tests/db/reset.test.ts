@@ -4,15 +4,16 @@ import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
 import { readResetCounts, resetLedger } from '../../src/db/reset';
 import { archiveAccount, createAccount } from '../../src/db/repos/accounts';
-import { createCategory, listCategories } from '../../src/db/repos/categories';
+import { archiveCategory, createCategory, listCategories, purgeCategory } from '../../src/db/repos/categories';
 import { createExpense, createIncome, softDeleteTxn } from '../../src/db/repos/txns';
 import { createTransfer } from '../../src/db/repos/transfers';
 import { archiveProject, createProject, setTxnProject } from '../../src/db/repos/projects';
 import { archiveTag, createTag, setTxnTags } from '../../src/db/repos/tags';
 import { UNCATEGORIZED_CATEGORY_ID } from '../../src/db/schema';
 
-/** The nine ledger tables, in foreign-key order. schema_migrations is separate. */
+/** The ten ledger tables, in foreign-key order. schema_migrations is separate. */
 const TABLES = [
+  'purge_undo',
   'account',
   'category',
   'tag',
@@ -147,6 +148,7 @@ describe('resetLedger', () => {
     expect(await tableCounts(db)).toEqual({
       // The starter set, exactly: three accounts, twelve categories and no
       // templates. Everything the fixture added is gone.
+      purge_undo: 0,
       account: 3,
       category: 13,
       tag: 0,
@@ -186,7 +188,7 @@ describe('resetLedger', () => {
       'SELECT version FROM schema_migrations ORDER BY version'
     );
     expect(after).toEqual(before);
-    expect(after.map(row => row.version)).toEqual([1, 2, 3, 4]);
+    expect(after.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it('keeps the system 未分类 category, still last among the expense rows', async () => {
@@ -227,6 +229,7 @@ describe('resetLedger', () => {
     await resetLedger(db);
 
     expect(await tableCounts(db)).toEqual({
+      purge_undo: 0,
       account: 3,
       category: 13,
       tag: 0,
@@ -237,6 +240,19 @@ describe('resetLedger', () => {
       txn_tag: 0,
       app_meta: 0,
     });
+  });
+
+  it('clears a pending purge undo', async () => {
+    const db = await createTestDb();
+    await seedRichLedger(db);
+    const spare = await createCategory(db, { name: '临时分类', kind: 'expense' });
+    await archiveCategory(db, spare);
+    await purgeCategory(db, spare);
+    expect(await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM purge_undo')).toEqual({ n: 1 });
+
+    await resetLedger(db);
+
+    expect(await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM purge_undo')).toEqual({ n: 0 });
   });
 
   it('rolls every table back when the seeds cannot finish', async () => {

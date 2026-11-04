@@ -17,6 +17,15 @@ export const UNCATEGORIZED_CATEGORY_ID = 'uncategorized';
 export const UNCATEGORIZED_CATEGORY_NAME = '未分类';
 export const UNCATEGORIZED_CATEGORY_SORT = 9999;
 
+/**
+ * The migration that introduced the project table.
+ *
+ * txn.project_id has existed since v1, so a file written before this version
+ * can legitimately name project ids it was never able to carry rows for; a file
+ * written at or after it cannot, which is what the import repair keys off.
+ */
+export const PROJECT_SCHEMA_VERSION = 3;
+
 export const MIGRATIONS: Array<{ version: number; sql: string }> = [
   {
     version: 1,
@@ -121,6 +130,50 @@ CREATE TABLE recurring_hint (
   status TEXT NOT NULL CHECK (status IN ('candidate','confirmed','dismissed')),
   monthly_cents INTEGER NOT NULL, last_date TEXT NOT NULL, next_date TEXT NOT NULL,
   occurrences INTEGER NOT NULL, detected_at TEXT NOT NULL
+);
+`,
+  },
+  {
+    // The ten-second category-delete undo, persisted so an app restart does not
+    // silently turn the only reversible action into an irreversible one.
+    //
+    // One row only: the screen shows one toast, and a second delete inside the
+    // window replaces the first exactly as it does in memory. The log is not
+    // part of a backup: it points at rows the file replaces, and an imported
+    // ledger must never offer to undo a delete from the database it replaced.
+    // resetLedger clears it for the same reason.
+    version: 5,
+    sql: `
+CREATE TABLE category_undo (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  category_id TEXT NOT NULL,
+  category_name TEXT NOT NULL,
+  moves_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  archived_at TEXT NOT NULL
+);
+`,
+  },
+  {
+    // v6 retires category_undo with the old "delete a category" action. A live
+    // category is now only archived, while an archived one with no history can
+    // be purged. Both the category and the tag purge share this one row: the
+    // app shows one undo bar, so a second purge replaces the first.
+    //
+    // The payload is the exact deleted rows, not a reference to them. It is
+    // deliberately absent from backups, and resetLedger clears it: an imported
+    // or wiped ledger must never offer to restore rows from the old database.
+    version: 6,
+    sql: `
+DROP TABLE IF EXISTS category_undo;
+CREATE TABLE purge_undo (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  kind TEXT NOT NULL CHECK (kind IN ('category','tag')),
+  target_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  created_at TEXT NOT NULL
 );
 `,
   },

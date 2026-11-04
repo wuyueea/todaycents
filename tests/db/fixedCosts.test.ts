@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import type { Db } from '../../src/db/driver';
 import { createAccount } from '../../src/db/repos/accounts';
-import { archiveCategory, createCategory, deleteCategory } from '../../src/db/repos/categories';
+import { archiveCategory, createCategory } from '../../src/db/repos/categories';
 import {
   createExpense,
   createIncome,
@@ -246,6 +246,24 @@ describe('detectCandidates', () => {
       lastDate: '2026-04-01',
       nextDate: '2026-05-01',
     });
+  });
+
+  // 设置页打开时就会检测，用户紧接着进入固定支出页会让两次检测重叠。两次都先读
+  // 一遍 hints、再写，交错时可能给同一个身份插入两条候选；这里钉住它们共享一次检测。
+  it('shares one detection between overlapping callers', async () => {
+    const { db, card, phone } = await fixture();
+    await phoneRun(db, card, phone);
+
+    const [fromSettings, fromFixedCosts] = await Promise.all([
+      detectCandidates(db, { now: '2026-10-24T00:00:00.000Z' }),
+      detectCandidates(db, { now: '2026-10-24T00:00:00.000Z' }),
+    ]);
+
+    expect(fromSettings).toHaveLength(1);
+    expect(fromFixedCosts.map(candidate => candidate.id)).toEqual([
+      fromSettings[0].id,
+    ]);
+    expect(await hintRows(db)).toHaveLength(1);
   });
 
   it('drops a candidate once its bills no longer support it', async () => {
@@ -574,7 +592,7 @@ describe('listFixedCosts and monthlyTotalCents', () => {
     expect(leapCandidate).toMatchObject({ lastDate: '2028-01-31', nextDate: '2028-02-29' });
   });
 
-  it('keeps a confirmed item after its category is archived or deleted', async () => {
+  it('keeps a confirmed item after its category is archived', async () => {
     const { db, card, phone, subs } = await fixture();
     for (const date of ['2026-01-15', '2026-02-15', '2026-03-15']) {
       await bill(db, { date, cents: 2500, categoryId: subs, accountId: card, payee: '视频会员' });
@@ -586,12 +604,9 @@ describe('listFixedCosts and monthlyTotalCents', () => {
     expect(await listFixedCosts(db)).toMatchObject([{ name: '视频会员', categoryName: '订阅' }]);
     expect(await monthlyTotalCents(db)).toBe(2500);
     expect(await detectCandidates(db)).toEqual([]);
-
-    await deleteCategory(db, subs);
     expect(await listFixedCosts(db)).toMatchObject([
       { name: '视频会员', monthlyCents: 2500, lastDate: '2026-03-15' },
     ]);
-    expect(await monthlyTotalCents(db)).toBe(2500);
     // phone is untouched by all of this.
     expect(await db.all('SELECT id FROM category WHERE id = ?', [phone])).toHaveLength(1);
   });

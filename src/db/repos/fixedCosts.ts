@@ -276,10 +276,44 @@ function toFixedCost(run: RecurringRun, categoryName: string | null): FixedCost 
   };
 }
 
+/**
+ * Detections in flight, one per database.
+ *
+ * 设置页 runs detection for its badge and 固定支出 runs it again on mount; going
+ * from one to the other can overlap the two. Two outer transactions on one
+ * connection cannot both BEGIN (SQLite rejects the second), and even without
+ * that they would both read the same hints before either writes, so one
+ * identity could be inserted twice. Sharing the promise keeps detection's
+ * read-then-write picture single; the next call after it settles starts fresh.
+ */
+const detectionsInFlight = new WeakMap<Db, Promise<FixedCostCandidate[]>>();
+
 /** Runs detection, persists what it found and answers with the open prompts. */
-export async function detectCandidates(
+export function detectCandidates(
   db: Db,
   opts: DetectOptions = {}
+): Promise<FixedCostCandidate[]> {
+  const running = detectionsInFlight.get(db);
+  if (running !== undefined) return running;
+
+  const task = runDetection(db, opts);
+  detectionsInFlight.set(db, task);
+  // Handle both outcomes so a failed detection neither stays in the map nor
+  // leaves an unhandled rejection behind; callers still get the original task.
+  task.then(
+    () => {
+      if (detectionsInFlight.get(db) === task) detectionsInFlight.delete(db);
+    },
+    () => {
+      if (detectionsInFlight.get(db) === task) detectionsInFlight.delete(db);
+    }
+  );
+  return task;
+}
+
+async function runDetection(
+  db: Db,
+  opts: DetectOptions
 ): Promise<FixedCostCandidate[]> {
   const detectedAt = opts.now ?? new Date().toISOString();
 
@@ -289,8 +323,8 @@ export async function detectCandidates(
   });
 
   // One transaction: a detection either records the whole picture or nothing,
-  // so two devices can never leave half a prompt behind. The driver's
-  // transactions are not re-entrant, so callers must not wrap this call.
+  // so two devices can never leave half a prompt behind. A caller that wraps
+  // this call is fine: the nested call joins the outer transaction.
   return db.transaction(async tx => {
     const hints = await tx.all<HintRow>(`SELECT ${HINT_COLUMNS} FROM recurring_hint`);
     const byKey = new Map(

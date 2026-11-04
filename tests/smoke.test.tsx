@@ -1,11 +1,25 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import App from '../src/App';
 
+// The real component reads SQLite through useQuery, which has no effect during
+// server rendering. A marker keeps this shell test about placement only.
+vi.mock('../src/components/GlobalPurgeUndo', () => ({
+  default: () => <div data-testid="global-purge-undo" />,
+}));
+
 function renderAt(path: string): string {
   return renderToString(
     <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>
+  );
+}
+
+function renderAtState(path: string, state: unknown): string {
+  return renderToString(
+    <MemoryRouter initialEntries={[{ pathname: path, state }]}>
       <App />
     </MemoryRouter>
   );
@@ -71,6 +85,43 @@ describe('app shell', () => {
     expect(html).toContain('data-entry-close');
     expect(html).toContain('<h1>今天</h1>');
     expect(html).not.toContain('class="dock"');
+  });
+
+  it('keeps 随手记 mounted and hidden under 账户 when its empty-account link sent the user there', () => {
+    const html = renderAtState('/accounts', { quickEntryOpen: true });
+
+    // The sheet is still in the tree (so its draft survives), but hidden from
+    // sight and from assistive technology until 账户 steps back.
+    expect(html).toMatch(/<div hidden(?:="")?>\s*<div class="entry-layer"/);
+    expect(html).toContain('class="entry-sheet"');
+    expect(html).toContain('aria-label="返回记账"');
+    expect(html).toContain('href="/add"');
+    // The sheet sits outside the routed <main>, so 账户 swapping the page
+    // underneath cannot remount it and reset the draft.
+    expect(html.indexOf('class="entry-layer"')).toBeGreaterThan(html.indexOf('</main>'));
+  });
+
+  it('does not keep 随手记 under an 账户 page opened from 设置', () => {
+    const html = renderAt('/accounts');
+
+    expect(html).not.toContain('class="entry-layer"');
+    expect(html).toContain('aria-label="返回设置"');
+  });
+
+  it('shows the stored category undo only on the four tabs', () => {
+    for (const path of ['/', '/ledger', '/reports', '/settings']) {
+      expect(renderAt(path)).toContain('data-testid="global-purge-undo"');
+    }
+    for (const path of [
+      '/add',
+      '/accounts',
+      '/txn/txn-a',
+      '/settings/categories',
+      '/settings/backup',
+      '/settings/storage',
+    ]) {
+      expect(renderAt(path)).not.toContain('data-testid="global-purge-undo"');
+    }
   });
 
   it('keeps 设置 as the fourth tab and pushes everything under it', () => {

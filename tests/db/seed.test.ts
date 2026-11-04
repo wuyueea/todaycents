@@ -47,19 +47,23 @@ describe('seedInto', () => {
     expect(await viaDefaults.all('SELECT id FROM template')).toEqual([]);
   });
 
-  it("runs inside the caller's transaction instead of opening its own", async () => {
+  it("writes into the caller's transaction instead of committing on its own", async () => {
     const db = await createTestDb();
 
-    // seedDefaults wraps this body in its own transaction; the driver refuses a
-    // nested BEGIN, so a seedInto that opened one would throw here.
-    await db.transaction(async tx => {
-      await seedInto(tx);
-    });
+    // seedInto opens no transaction of its own, so every starter row belongs to
+    // the caller's unit of work: rolling that back takes the whole set with it.
+    // Both a first launch and 清除所有数据 depend on this.
+    await expect(
+      db.transaction(async tx => {
+        await seedInto(tx);
+        throw new Error('seed rolled back');
+      })
+    ).rejects.toThrow('seed rolled back');
 
-    expect((await listAccounts(db)).map(account => account.name)).toEqual([
-      '微信',
-      '支付宝',
-      '银行卡',
-    ]);
+    expect(await db.all('SELECT id FROM account')).toEqual([]);
+    // 未分类 is written by the migration, not by the seed: it is still there.
+    expect(
+      await db.all('SELECT id FROM category WHERE id <> ?', [UNCATEGORIZED_CATEGORY_ID])
+    ).toEqual([]);
   });
 });

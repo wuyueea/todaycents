@@ -1,14 +1,23 @@
 import { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { importDoneToast, resetDoneToast, resetFailureText, resetSummary } from '../backup/format';
+import {
+  importDoneToast,
+  plannedCopyNote,
+  resetDoneToast,
+  resetFailureText,
+  resetSummary,
+} from '../backup/format';
+import type { CopyLocation } from '../backup/format';
 import { resetWithBackup } from '../backup/flow';
 import { deviceFileWriter } from '../backup/device';
+import { deviceFolder } from '../storage/folder';
 import { readResetCounts } from '../db/reset';
 import type { ResetCounts } from '../db/reset';
+import { detectCandidates } from '../db/repos/fixedCosts';
 import { Toast, useToast } from '../components/Toast';
 import { useDialogFocus } from '../components/useDialogFocus';
 
-import { useDb } from '../store/useDb';
+import { useDb, useQuery } from '../store/useDb';
 
 /**
  * 设置: the fourth tab, and the home of everything that is not a daily view.
@@ -26,21 +35,53 @@ import { useDb } from '../store/useDb';
  * rather than a page: tapping it opens the confirmation sheet in place, so the
  * owner never lands on a second screen that only exists to be cancelled.
  */
+/** Reads the before-copy location without trusting the shape of router state. */
+function copyLocationFromState(value: unknown): CopyLocation | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const { kind, folderName } = value as { kind?: unknown; folderName?: unknown };
+  if (kind === 'cache') return { kind: 'cache' };
+  if (kind === 'none') return { kind: 'none' };
+  if (kind === 'folder' && typeof folderName === 'string' && folderName.trim() !== '') {
+    return { kind: 'folder', folderName: folderName.trim() };
+  }
+  return undefined;
+}
+
 /** The router state /settings/backup hands over after a successful import. */
 export function importNoticeFromState(state: unknown): string | null {
   if (typeof state !== 'object' || state === null) return null;
   const imported = (state as { imported?: unknown }).imported;
   if (typeof imported !== 'object' || imported === null) return null;
 
-  const { fileName, rows } = imported as { fileName?: unknown; rows?: unknown };
+  const { fileName, rows, clearedProjectRefs, beforeDestination } = imported as {
+    fileName?: unknown;
+    rows?: unknown;
+    clearedProjectRefs?: unknown;
+    beforeDestination?: unknown;
+  };
   if (typeof fileName !== 'string' || fileName.trim() === '') return null;
   if (typeof rows !== 'number' || !Number.isSafeInteger(rows) || rows < 0) return null;
 
-  return importDoneToast({ fileName, rows });
+  // Anything but a sane positive count is simply "nothing was repaired".
+  const cleared =
+    typeof clearedProjectRefs === 'number' &&
+    Number.isSafeInteger(clearedProjectRefs) &&
+    clearedProjectRefs > 0
+      ? clearedProjectRefs
+      : 0;
+
+  return importDoneToast({
+    fileName,
+    rows,
+    clearedProjectRefs: cleared,
+    beforeDestination: copyLocationFromState(beforeDestination),
+  });
 }
 
 export interface ResetConfirmSheetProps {
   counts: ResetCounts;
+  /** The folder the automatic before-copy will use; null means the app cache. */
+  folderName: string | null;
   busy: boolean;
   onConfirm(): void;
   onCancel(): void;
@@ -58,6 +99,7 @@ export interface ResetConfirmSheetProps {
  */
 export function ResetConfirmSheet({
   counts,
+  folderName,
   busy,
   onConfirm,
   onCancel,
@@ -88,7 +130,7 @@ export function ResetConfirmSheet({
           清除后只留下 3 个账户和 12 个分类，其余记录都不保留，也不能撤销。
         </p>
         <p className="sheet__note">
-          按下按钮之后，会先把现在的账本写成一份备份文件，再清除。这一份放在「设置 › 存储」的位置。
+          按下按钮之后，会先把现在的账本写成一份备份文件，再清除。{plannedCopyNote(folderName)}
         </p>
 
         <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
@@ -122,8 +164,19 @@ export default function SettingsScreen() {
   const { db, bump } = useDb();
   const notice = importNoticeFromState(location.state);
   const { toast, showToast } = useToast(notice);
+  /**
+   * Detection runs here rather than only behind 设置 › 固定支出, so opening
+   * 设置 is enough to learn that something is waiting. A failure leaves the
+   * row plain: a background scan must never turn the settings page into an
+   * error screen.
+   */
+  const pendingFixedCosts = useQuery(
+    database => detectCandidates(database).then(candidates => candidates.length),
+    []
+  );
   const [busy, setBusy] = useState(false);
   const [resetCounts, setResetCounts] = useState<ResetCounts | null>(null);
+  const [resetFolderName, setResetFolderName] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
 
   /**
@@ -139,7 +192,12 @@ export default function SettingsScreen() {
     }
     setBusy(true);
     try {
-      setResetCounts(await readResetCounts(db));
+      const [folder, counts] = await Promise.all([
+        deviceFolder.current(),
+        readResetCounts(db),
+      ]);
+      setResetFolderName(folder?.name ?? null);
+      setResetCounts(counts);
     } catch (reason) {
       setResetError(resetFailureText(reason));
     } finally {
@@ -150,6 +208,7 @@ export default function SettingsScreen() {
   const closeReset = () => {
     if (busy) return;
     setResetCounts(null);
+    setResetFolderName(null);
   };
 
   /**
@@ -219,6 +278,11 @@ export default function SettingsScreen() {
           </Link>
           <Link className="settings-row" to="/settings/fixed">
             <span className="settings-row__title">固定支出</span>
+            {pendingFixedCosts.data !== null && pendingFixedCosts.data > 0 && (
+              <span className="settings-row__badge">
+                {pendingFixedCosts.data} 条待确认
+              </span>
+            )}
             <span className="settings-row__chev" aria-hidden="true">
               ›
             </span>
@@ -262,6 +326,7 @@ export default function SettingsScreen() {
       {resetCounts !== null && (
         <ResetConfirmSheet
           counts={resetCounts}
+          folderName={resetFolderName}
           busy={busy}
           onConfirm={confirmReset}
           onCancel={closeReset}

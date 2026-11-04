@@ -250,7 +250,7 @@ export async function deleteProject(db: Db, id: string): Promise<void> {
  * The transaction must exist and be live: a soft-deleted row is history, and
  * editing its project would rewrite what the trip cost. The project is checked
  * here because txn.project_id has no foreign key. No transaction is opened:
- * the driver's transactions are not re-entrant and this is one UPDATE.
+ * this is one UPDATE, and it joins a caller's transaction when there is one.
  */
 export async function setTxnProject(
   db: Db,

@@ -1,13 +1,32 @@
 import { DatabaseSync } from 'node:sqlite';
 import type { Db, DbParam } from '../../src/db/driver';
+import { TransactionRunner } from '../../src/db/transaction';
 import { migrate } from '../../src/db/migrate';
 
 /**
  * Node-side Db driver. Test-only: product code must never import
- * node:sqlite. The on-device driver arrives in a later task.
+ * node:sqlite.
+ *
+ * Transactions come from the same TransactionRunner the device driver uses, so
+ * the tests exercise the code that actually runs on the phone instead of a
+ * second, hand-copied bracketing rule.
  */
 class NodeDb implements Db {
-  constructor(private readonly raw: DatabaseSync) {}
+  private readonly transactions: TransactionRunner;
+
+  constructor(private readonly raw: DatabaseSync) {
+    this.transactions = new TransactionRunner({
+      begin: async () => {
+        this.raw.exec('BEGIN');
+      },
+      commit: async () => {
+        this.raw.exec('COMMIT');
+      },
+      rollback: async () => {
+        this.raw.exec('ROLLBACK');
+      },
+    });
+  }
 
   async exec(sql: string): Promise<void> {
     this.raw.exec(sql);
@@ -26,19 +45,7 @@ class NodeDb implements Db {
   }
 
   async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
-    this.raw.exec('BEGIN');
-    try {
-      const result = await fn(this);
-      this.raw.exec('COMMIT');
-      return result;
-    } catch (error) {
-      try {
-        this.raw.exec('ROLLBACK');
-      } catch {
-        // Keep the callback's error; a failed ROLLBACK must not mask it.
-      }
-      throw error;
-    }
+    return this.transactions.run(this, fn);
   }
 }
 

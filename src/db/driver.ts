@@ -28,8 +28,20 @@ export interface Db {
   get<T>(sql: string, params?: readonly DbParam[]): Promise<T | undefined>;
 
   /**
-   * Runs `fn` inside BEGIN / COMMIT. If `fn` rejects, issues ROLLBACK and
-   * rethrows the original error. Nested transactions are not supported.
+   * Runs `fn` inside a transaction. The outermost call owns BEGIN / COMMIT.
+   *
+   * A call made while a transaction is already open joins that transaction
+   * instead of beginning a second one, so a save that writes several tables
+   * can be composed from helpers that each open their own transaction. If any
+   * call in the chain rejects, the whole transaction is rolled back and the
+   * original error is rethrown: either all of it lands, or none of it does.
+   *
+   * Two limits worth knowing. There are no savepoints, so a nested call whose
+   * error its caller catches does not undo itself — the outer transaction then
+   * commits what that call had already written. And "already open" is tracked
+   * per connection, not per call chain: this exists for nesting inside one
+   * logical save, not for two saves running at once, which would end up
+   * sharing a transaction.
    *
    * The callback receives the same Db so a transaction body can be written
    * explicitly against its scope; `() => ...` callbacks are equally valid.

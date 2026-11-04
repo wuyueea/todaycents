@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
+import { registerBackHandler } from './backButton';
 
 interface DialogFocusOptions {
   /** Whether the dialog is currently mounted; false keeps the effect idle. */
@@ -15,8 +16,8 @@ interface DialogFocusOptions {
  * Focus management for the app's bottom sheets.
  *
  * Remembers the trigger, moves focus inside, keeps Tab inside while open,
- * closes on Escape, and returns focus to the trigger on unmount. The dialog
- * panel needs the returned ref and tabIndex={-1}.
+ * closes on Escape and the Android back key, and returns focus to the trigger
+ * on unmount. The dialog panel needs the returned ref and tabIndex={-1}.
  */
 export function useDialogFocus({
   open = true,
@@ -32,8 +33,18 @@ export function useDialogFocus({
 
   useEffect(() => {
     if (!open) return;
+    // Register before the panel check: an open sheet owns the back key even
+    // if its panel ref has not landed yet, so the press can never fall past
+    // it to the route.
+    const releaseBack = registerBackHandler(() => {
+      // A dialog that is mid-write (a destructive request or an import)
+      // swallows the press instead of closing: falling through would navigate
+      // the page out from under the request that the dialog is waiting for.
+      if (canCloseRef.current === undefined || canCloseRef.current()) closeRef.current();
+      return true;
+    });
     const panel = panelRef.current;
-    if (panel === null) return;
+    if (panel === null) return releaseBack;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const focusable = Array.from(
       panel.querySelectorAll<HTMLElement>(
@@ -62,6 +73,7 @@ export function useDialogFocus({
 
     document.addEventListener('keydown', onKeyDown);
     return () => {
+      releaseBack();
       document.removeEventListener('keydown', onKeyDown);
       previous?.focus();
     };

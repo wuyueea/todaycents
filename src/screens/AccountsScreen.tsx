@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { formatCentsDisplay } from '../components/AmountText';
 import { AmountKeypadField } from '../components/AmountKeypadField';
 import { useDb, useQuery } from '../store/useDb';
@@ -352,6 +352,14 @@ interface StatusNote {
 
 export default function AccountsScreen() {
   const { db, bump } = useDb();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // 随手记's empty-account link steps here without unmounting its sheet. This
+  // page then has to step back — not jump to 设置 — so the draft is revealed
+  // again instead of being replaced by an unrelated page.
+  const fromQuickEntry = (
+    location.state as { quickEntryOpen?: boolean } | null
+  )?.quickEntryOpen === true;
   const [showArchived, setShowArchived] = useState(false);
   const query = useQuery<AccountsData>(
     database => loadAccountsData(database, { includeArchived: showArchived }),
@@ -589,7 +597,19 @@ export default function AccountsScreen() {
   return (
     <div className="accounts-screen accounts-screen--v1">
       <header className="settings-header">
-        <Link className="add-back" to="/settings" aria-label="返回设置">
+        <Link
+          className="add-back"
+          to={fromQuickEntry ? '/add' : '/settings'}
+          aria-label={fromQuickEntry ? '返回记账' : '返回设置'}
+          onClick={
+            fromQuickEntry
+              ? event => {
+                  event.preventDefault();
+                  navigate(-1);
+                }
+              : undefined
+          }
+        >
           ‹
         </Link>
         <h1>账户</h1>

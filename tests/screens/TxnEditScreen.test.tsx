@@ -386,6 +386,56 @@ describe('loading and editing through the repository', () => {
     expect((await getTxnTags(db, id)).map(tag => tag.name)).toEqual(['和室友', '夜宵']);
   });
 
+  // The row update, the tags and the project are one save. A failure in the tag
+  // write used to leave the new amount committed and the old tag detached.
+  it('keeps the old amount and tags when the tag write fails', async () => {
+    const { db, card, food, sport } = await seeded();
+    const night = await createTag(db, '夜宵');
+    const roommate = await createTag(db, '和室友');
+    const id = await createExpense(db, {
+      date: '2026-10-20',
+      accountId: card.id,
+      amountCents: 1230,
+      categoryId: food.id,
+      note: '午饭',
+    });
+    await setTxnTags(db, id, [night]);
+    const row = (await loadTxnEditData(db, id)).row!;
+
+    const originalRun = db.run.bind(db);
+    let injected = false;
+    db.run = async (sql, params = []) => {
+      if (injected && sql.includes('INSERT INTO txn_tag')) {
+        injected = false;
+        throw new Error('injected failure');
+      }
+      return originalRun(sql, params);
+    };
+
+    try {
+      injected = true;
+      await expect(
+        commitTxnEdit(
+          db,
+          row,
+          validDraft({
+            amount: '20',
+            categoryId: sport.id,
+            accountId: card.id,
+            note: '改过',
+            tagIds: [roommate],
+          })
+        )
+      ).rejects.toThrow('injected failure');
+
+      const stored = (await getTxnById(db, id))!;
+      expect(stored).toMatchObject({ amountCents: -1230, categoryId: food.id, note: '午饭' });
+      expect((await getTxnTags(db, id)).map(tag => tag.name)).toEqual(['夜宵']);
+    } finally {
+      db.run = originalRun;
+    }
+  });
+
   it('keeps the old tags when the edit is refused', async () => {
     const { db, card, food } = await seeded();
     const night = await createTag(db, '夜宵');

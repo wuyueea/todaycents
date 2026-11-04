@@ -3,19 +3,26 @@ import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useDialogFocus } from '../components/useDialogFocus';
 import type { Db } from '../db/driver';
-import type { Category, CategoryKind, CategoryMove } from '../db/repos/categories';
+import type {
+  Category,
+  CategoryKind,
+  CategoryPurgeInspection,
+} from '../db/repos/categories';
 import {
   archiveCategory,
-  countCategoryTxns,
+  archiveCategoryWithUnlink,
   createCategory,
-  deleteCategory,
+  inspectCategoryPurge,
   listCategories,
+  purgeCategory,
   renameCategory,
   unarchiveCategory,
-  undoDeleteCategory,
 } from '../db/repos/categories';
+import type { PurgeUndoRecord } from '../db/repos/purge';
+import { readPurgeUndo, undoPurge } from '../db/repos/purge';
 import { UNCATEGORIZED_CATEGORY_ID } from '../db/schema';
 import { Toast, useToast } from '../components/Toast';
+import { PurgeUndoToast, purgeUndoKey, selectPurgeUndo } from '../components/PurgeUndoToast';
 import { useDb, useQuery } from '../store/useDb';
 
 /**
@@ -23,22 +30,28 @@ import { useDb, useQuery } from '../store/useDb';
  *
  * Parents and children are one flat table in the database; this screen is the
  * only place that edits it. The system 未分类 category is rendered last, with a
- * 系统 mark and no menu, because renameCategory / archiveCategory /
- * deleteCategory all refuse it. Archived user rows stay on the page so 恢复 is
- * one tap away.
+ * 系统 mark and no menu, because every write refuses it. Archived user rows
+ * stay on the page so 恢复 and 彻底删除 are one tap away.
  *
- * Delete is the one irreversible action. It asks countCategoryTxns for the same
- * subtree count deleteCategory will move, states it in §7's sentence, and
- * keeps a ten-second 撤销 in the toast. The undo's txn ids are the ones the
- * delete actually reported, never a guess from the screen's snapshot.
+ * A live category can be archived two ways: 归档 keeps its history, while
+ * 断联并归档 moves live transactions to 未分类 first. Neither is undoable. An
+ * archived category can be physically purged only when it has no history at
+ * all; that purge keeps a ten-second undo in purge_undo so a restart cannot
+ * turn it into an irreversible mistake.
  */
 export interface CategoriesData {
   /** Archived user rows included; the system row is in here too. */
   categories: Category[];
+  /** A category purge whose ten-second window has not closed, or null. */
+  undo: PurgeUndoRecord | null;
 }
 
 export async function loadCategoriesData(db: Db): Promise<CategoriesData> {
-  return { categories: await listCategories(db, undefined, { includeArchived: true }) };
+  const [categories, undo] = await Promise.all([
+    listCategories(db, undefined, { includeArchived: true }),
+    readPurgeUndo(db),
+  ]);
+  return { categories, undo: undo?.kind === 'category' ? undo : null };
 }
 
 /** One rendered line of the live two-level tree. */
@@ -51,9 +64,6 @@ const KIND_LABELS: Record<CategoryKind, string> = {
   expense: '支出',
   income: '收入',
 };
-
-/** 10 seconds, from §9's 撤销删除 decision. */
-export const CATEGORY_UNDO_MS = 10_000;
 
 function bySort(a: Category, b: Category): number {
   return a.sort - b.sort || a.name.localeCompare(b.name, 'zh-Hans-CN');
@@ -89,30 +99,35 @@ export function buildCategoryRows(
 export interface CategoryMenuSheetProps {
   category: Category;
   /**
-   * Live transactions delete would move, including the children's rows. null
-   * while the screen is still reading the count for a just-opened sheet.
+   * Counts for the row the menu was opened on. null while the screen is still
+   * reading them for a just-opened sheet.
    */
-  txnCount: number | null;
+  inspection: CategoryPurgeInspection | null;
   onRename(): void;
   onAddChild?(): void;
   onArchive?(): void;
   onUnarchive?(): void;
-  onDelete(): void;
+  /** 断联并归档: live only. */
+  onRetire(): void;
+  /** 彻底删除: archived only; never disabled, so the refusal can explain itself. */
+  onPurge(): void;
   onCancel(): void;
 }
 
 /** 分类 · 行菜单: the one ⋯ sheet, mirroring the prototype's cat-menu. */
 export function CategoryMenuSheet({
   category,
-  txnCount,
+  inspection,
   onRename,
   onAddChild,
   onArchive,
   onUnarchive,
-  onDelete,
+  onRetire,
+  onPurge,
   onCancel,
 }: CategoryMenuSheetProps) {
   const panelRef = useDialogFocus({ onClose: onCancel });
+  const busy = inspection === null;
 
   return (
     <div
@@ -128,7 +143,11 @@ export function CategoryMenuSheet({
             {category.name}
           </h2>
           <span className="sheet__version num">
-            {txnCount === null ? '正在数…' : `${txnCount} 笔`}
+            {category.archivedAt !== null
+              ? '已归档'
+              : inspection === null
+                ? '正在数…'
+                : `${inspection.liveTxnCount} 笔`}
           </span>
         </div>
 
@@ -144,26 +163,43 @@ export function CategoryMenuSheet({
             </button>
           )}
           {category.archivedAt === null ? (
-            <button className="action-menu__item" type="button" onClick={onArchive}>
-              归档
-              <span>从记账选择里收起</span>
-            </button>
+            <>
+              <button className="action-menu__item" type="button" onClick={onArchive}>
+                归档
+                <span>从记账选择里收起</span>
+              </button>
+              <button
+                className="action-menu__item action-menu__item--danger category-menu__danger"
+                type="button"
+                onClick={onRetire}
+                disabled={busy}
+              >
+                断联并归档
+                <span>
+                  {inspection === null
+                    ? '正在数流水…'
+                    : inspection.liveTxnCount > 0
+                      ? `${inspection.liveTxnCount} 笔移到「未分类」，分类收进已归档`
+                      : '没有在用的流水，分类收进已归档'}
+                </span>
+              </button>
+            </>
           ) : (
-            <button className="action-menu__item" type="button" onClick={onUnarchive}>
-              恢复
-              <span>回到记账选择</span>
-            </button>
+            <>
+              <button className="action-menu__item" type="button" onClick={onUnarchive}>
+                恢复
+                <span>回到记账选择</span>
+              </button>
+              <button
+                className="action-menu__item action-menu__item--danger category-menu__danger"
+                type="button"
+                onClick={onPurge}
+              >
+                彻底删除
+                <span>只对没有历史的归档分类可用</span>
+              </button>
+            </>
           )}
-          <button
-            className="action-menu__item action-menu__item--danger category-menu__danger"
-            type="button"
-            onClick={onDelete}
-          >
-            删除
-            <span>
-              {txnCount === null ? '正在数流水…' : `${txnCount} 笔移到「未分类」`}
-            </span>
-          </button>
         </div>
 
         <button className="sheet__secondary" type="button" onClick={onCancel}>
@@ -174,56 +210,62 @@ export function CategoryMenuSheet({
   );
 }
 
-export interface CategoryDeleteSheetProps {
+export interface CategoryRetireSheetProps {
   categoryName: string;
-  txnCount: number;
+  inspection: CategoryPurgeInspection;
   busy: boolean;
   onConfirm(): void;
   onCancel(): void;
 }
 
 /**
- * 删除分类: §7's sentence with the real count, then a danger-outline 删除.
- * The note states the undo window without promising that it lasts forever.
+ * 断联并归档: move the live rows out, then archive the category. The copy is
+ * deliberately explicit that 恢复 does not bring those rows back.
  */
-export function CategoryDeleteSheet({
+export function CategoryRetireSheet({
   categoryName,
-  txnCount,
+  inspection,
   busy,
   onConfirm,
   onCancel,
-}: CategoryDeleteSheetProps) {
+}: CategoryRetireSheetProps) {
   const panelRef = useDialogFocus({
     onClose: onCancel,
     initial: 'last',
     canClose: () => !busy,
   });
+  const childPart =
+    inspection.childCount > 0 ? `及 ${inspection.childCount} 个二级分类` : '';
+  const body = `「${categoryName}」下的 ${inspection.liveTxnCount} 笔流水会移到「未分类」，金额和日期都不变；「${categoryName}」${childPart}会收进「已归档」。`;
 
   return (
     <div
       className="sheet"
       role="dialog"
       aria-modal="true"
-      aria-labelledby="category-delete-title"
+      aria-labelledby="category-retire-title"
     >
       <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
       <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
         <div className="sheet__head">
-          <h2 className="sheet__title" id="category-delete-title">
-            删除分类
+          <h2 className="sheet__title" id="category-retire-title">
+            断联并归档
           </h2>
-          <span className="sheet__version num">{txnCount} 笔</span>
+          <span className="sheet__version num">{inspection.liveTxnCount} 笔</span>
         </div>
 
-        <p className="sheet__text">
-          「{categoryName}」下的 {txnCount} 笔流水会移到 未分类，金额和日期都不变；分类本身从选择里消失。
-        </p>
+        <p className="sheet__text">{body}</p>
+        {inspection.deletedTxnCount > 0 && (
+          <p className="sheet__note">
+            已删除的 {inspection.deletedTxnCount} 笔流水仍保留原分类，仍算历史，之后可能挡住彻底删除。
+          </p>
+        )}
         <p className="sheet__note">
-          删除后 10 秒内可以撤销；窗口期过后，这些流水会留在「未分类」，分类也不会自己回来。
+          这个操作不能撤销。之后可以在「已归档」里恢复分类，但移到「未分类」的流水不会跟着回来。
         </p>
 
         <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          删除
+          断联并归档
         </button>
         <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
           取消
@@ -233,43 +275,146 @@ export function CategoryDeleteSheet({
   );
 }
 
-export interface CategoryUndoToastProps {
+export interface CategoryPurgeBlockedSheetProps {
   categoryName: string;
-  movedTxns: number;
-  onUndo(): void;
+  inspection: CategoryPurgeInspection;
+  onClose(): void;
 }
 
-/**
- * The only irreversible action's escape hatch. It is deliberately the same
- * quiet toast, with one action: the window is ten seconds, and the copy says
- * so rather than implying the undo lasts forever.
- */
-export function CategoryUndoToast({
+/** A refusal that names every reason, instead of hiding the menu item. */
+export function CategoryPurgeBlockedSheet({
   categoryName,
-  movedTxns,
-  onUndo,
-}: CategoryUndoToastProps) {
+  inspection,
+  onClose,
+}: CategoryPurgeBlockedSheetProps) {
+  const panelRef = useDialogFocus({ onClose });
+
   return (
-    <Toast
-      text={`「${categoryName}」已删除 · ${movedTxns} 笔移到「未分类」 · 10 秒内可撤销`}
-      actionLabel="撤销"
-      onAction={onUndo}
-    />
+    <div
+      className="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="category-purge-blocked-title"
+    >
+      <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
+        <div className="sheet__head">
+          <h2 className="sheet__title" id="category-purge-blocked-title">
+            不能彻底删除
+          </h2>
+        </div>
+
+        <p className="sheet__text">「{categoryName}」还有历史，不能从数据库里删除。</p>
+        <ul className="sheet__reasons">
+          {inspection.txnCount > 0 && (
+            <li>
+              还有 {inspection.txnCount} 笔流水用过它（其中 {inspection.deletedTxnCount} 笔已删除）。
+            </li>
+          )}
+          {inspection.templateCount > 0 && <li>还有 {inspection.templateCount} 个模板在用它。</li>}
+          {inspection.liveChildCount > 0 && (
+            <li>下面还有 {inspection.liveChildCount} 个未归档的二级分类。</li>
+          )}
+        </ul>
+        <p className="sheet__note">
+          有历史的分类只能保持归档，历史流水的分类显示不会丢。
+        </p>
+
+        <button className="sheet__secondary" type="button" onClick={onClose}>
+          知道了
+        </button>
+      </div>
+    </div>
   );
 }
 
-interface DeleteSheetState {
-  category: Category;
-  txnCount: number;
+export interface CategoryPurgeSheetProps {
+  categoryName: string;
+  inspection: CategoryPurgeInspection;
+  busy: boolean;
+  onConfirm(): void;
+  onCancel(): void;
 }
 
-interface UndoState {
-  categoryId: string;
-  categoryName: string;
-  /** Where each moved transaction came from, so undo restores it exactly. */
-  moves: CategoryMove[];
-  movedTxns: number;
-  expiresAt: number;
+/** 彻底删除: only reachable for an archived, history-free category. */
+export function CategoryPurgeSheet({
+  categoryName,
+  inspection,
+  busy,
+  onConfirm,
+  onCancel,
+}: CategoryPurgeSheetProps) {
+  const panelRef = useDialogFocus({
+    onClose: onCancel,
+    initial: 'last',
+    canClose: () => !busy,
+  });
+  const childPart =
+    inspection.childCount > 0 ? `及 ${inspection.childCount} 个二级分类` : '';
+  const body = `「${categoryName}」${childPart}会从数据库里删除。这个分类没有任何流水或模板，删除不会影响一笔账。`;
+
+  return (
+    <div
+      className="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="category-purge-title"
+    >
+      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
+        <div className="sheet__head">
+          <h2 className="sheet__title" id="category-purge-title">
+            彻底删除
+          </h2>
+          <span className="sheet__version">已归档</span>
+        </div>
+
+        <p className="sheet__text">{body}</p>
+        {inspection.hintCount > 0 && (
+          <p className="sheet__note">同时会清掉 {inspection.hintCount} 条固定支出候选。</p>
+        )}
+        <p className="sheet__note">
+          10 秒内可以撤销；撤销会把分类恢复成现在的归档状态。同时只保留最近一次彻底删除的撤销。
+        </p>
+
+        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+          彻底删除
+        </button>
+        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface RetireSheetState {
+  category: Category;
+  inspection: CategoryPurgeInspection;
+}
+
+interface PurgeDialogState {
+  category: Category;
+  inspection: CategoryPurgeInspection;
+  /** True when the archive still has history and the destructive action is refused. */
+  blocked: boolean;
+}
+
+/**
+ * What the screen should offer right now.
+ *
+ * The purge's own result wins while it is fresh. Once its timer fires the key
+ * is marked dismissed, which keeps a stale query snapshot (still holding the
+ * same row) from bringing the toast back. A newer row has a new expiresAt and
+ * therefore a new key, so it is not swallowed by the old dismissal.
+ */
+export function selectActiveUndo(
+  pending: PurgeUndoRecord | null,
+  stored: PurgeUndoRecord | null,
+  dismissedKey: string | null,
+  now: number = Date.now()
+): PurgeUndoRecord | null {
+  return selectPurgeUndo(pending, stored, dismissedKey, now);
 }
 
 interface RenameState {
@@ -289,11 +434,13 @@ export default function CategoriesScreen() {
   const [formError, setFormError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
-  const [menuCount, setMenuCount] = useState<number | null>(null);
-  const [deleteSheet, setDeleteSheet] = useState<DeleteSheetState | null>(null);
+  const [menuInspection, setMenuInspection] = useState<CategoryPurgeInspection | null>(null);
+  const [retireSheet, setRetireSheet] = useState<RetireSheetState | null>(null);
+  const [purgeDialog, setPurgeDialog] = useState<PurgeDialogState | null>(null);
   const [renaming, setRenaming] = useState<RenameState | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
-  const [undo, setUndo] = useState<UndoState | null>(null);
+  const [pendingUndo, setPendingUndo] = useState<PurgeUndoRecord | null>(null);
+  const [dismissedUndoKey, setDismissedUndoKey] = useState<string | null>(null);
 
   const data = query.data;
   const categories = data?.categories ?? [];
@@ -314,6 +461,12 @@ export default function CategoriesScreen() {
     category => category.id === UNCATEGORIZED_CATEGORY_ID
   );
 
+  // The purge's own result renders immediately; the copy loaded with the
+  // categories is what survives a restart. Once its timer fires, the key stays
+  // dismissed so a stale query snapshot cannot bring the toast back.
+  const storedUndo = data?.undo ?? null;
+  const activeUndo = selectActiveUndo(pendingUndo, storedUndo, dismissedUndoKey);
+
   const liveRoots = live.filter(
     category => category.parentId === null && category.kind === kind
   );
@@ -329,29 +482,32 @@ export default function CategoriesScreen() {
       : null;
 
   useEffect(() => {
-    if (undo === null) return;
-    const remaining = Math.max(0, undo.expiresAt - Date.now());
+    if (activeUndo === null) return;
+    const key = purgeUndoKey(activeUndo);
+    const remaining = Math.max(0, activeUndo.expiresAt - Date.now());
     const timer = window.setTimeout(() => {
-      setUndo(current => (current?.categoryId === undo.categoryId ? null : current));
+      setDismissedUndoKey(key);
+      setPendingUndo(current => (current !== null && purgeUndoKey(current) === key ? null : current));
     }, remaining);
     return () => window.clearTimeout(timer);
-  }, [undo]);
+  }, [activeUndo]);
 
-  // The ⋯ sheet's count is the number the delete will move. It is read on open
-  // so the sheet can name it before the destructive button is pressed.
+  // The ⋯ sheet names the count its destructive action would affect, before
+  // that action is pressed. 归档 and 断联并归档 share the live count; 彻底删除
+  // shows only 已归档, because a history-free row has no number worth showing.
   useEffect(() => {
     if (db === null || menuId === null) {
-      setMenuCount(null);
+      setMenuInspection(null);
       return;
     }
     let cancelled = false;
-    setMenuCount(null);
-    countCategoryTxns(db, menuId).then(
-      count => {
-        if (!cancelled) setMenuCount(count);
+    setMenuInspection(null);
+    inspectCategoryPurge(db, menuId).then(
+      inspection => {
+        if (!cancelled) setMenuInspection(inspection);
       },
       () => {
-        if (!cancelled) setMenuCount(null);
+        if (!cancelled) setMenuInspection(null);
       }
     );
     return () => {
@@ -446,60 +602,89 @@ export default function CategoriesScreen() {
     }
   };
 
-  const startDelete = async (category: Category) => {
-    if (db === null || busy) return;
-    setBusy(true);
+  const startRetire = (category: Category) => {
+    if (menuInspection === null) return;
     setMenuId(null);
+    setRetireSheet({ category, inspection: menuInspection });
+  };
+
+  const handleRetire = async () => {
+    if (db === null || retireSheet === null || busy) return;
+    const { category } = retireSheet;
+    setBusy(true);
     try {
-      const txnCount = await countCategoryTxns(db, category.id);
-      setDeleteSheet({ category, txnCount });
+      const result = await archiveCategoryWithUnlink(db, category.id);
+      setRetireSheet(null);
+      clearToast();
+      bump();
+      const childPart =
+        result.archivedChildCount > 0
+          ? `，${result.archivedChildCount} 个二级分类一起收进「已归档」`
+          : '';
+      showToast(
+        `已断联并归档「${category.name}」：${result.movedTxns} 笔流水移到「未分类」${childPart}。`
+      );
     } catch (reason) {
-      showToast(`读取笔数失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      showToast(`断联失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const handleDelete = async () => {
-    if (db === null || deleteSheet === null || busy) return;
-    const { category } = deleteSheet;
+  const startPurge = async (category: Category) => {
+    if (db === null || busy) return;
+    setBusy(true);
+    setMenuId(null);
+    try {
+      const inspection = await inspectCategoryPurge(db, category.id);
+      setPurgeDialog({ category, inspection, blocked: !inspection.purgeable });
+    } catch (reason) {
+      showToast(`读取分类信息失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePurge = async () => {
+    if (db === null || purgeDialog === null || purgeDialog.blocked || busy) return;
+    const { category } = purgeDialog;
     setBusy(true);
     try {
-      const result = await deleteCategory(db, category.id);
-      setDeleteSheet(null);
+      const result = await purgeCategory(db, category.id);
+      setPurgeDialog(null);
       clearToast();
       bump();
-      setUndo({
-        categoryId: category.id,
-        categoryName: category.name,
-        moves: result.moves,
-        movedTxns: result.movedTxns,
-        expiresAt: Date.now() + CATEGORY_UNDO_MS,
-      });
+      setPendingUndo(result.undo);
+      setDismissedUndoKey(null);
     } catch (reason) {
-      showToast(`删除失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      showToast(`彻底删除失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
     }
   };
 
   const handleUndo = async () => {
-    if (db === null || undo === null || busy) return;
-    if (Date.now() > undo.expiresAt) {
-      setUndo(null);
+    if (db === null || activeUndo === null || busy) return;
+    const restored = activeUndo;
+    const key = purgeUndoKey(restored);
+    if (Date.now() >= restored.expiresAt) {
+      setPendingUndo(current => (current !== null && purgeUndoKey(current) === key ? null : current));
+      setDismissedUndoKey(key);
       showToast('撤销窗口已过');
       return;
     }
 
     setBusy(true);
     try {
-      await undoDeleteCategory(db, undo.categoryId, undo.moves);
-      const restored = undo;
-      setUndo(null);
+      const result = await undoPurge(db, {
+        kind: restored.kind,
+        targetId: restored.targetId,
+        expiresAt: restored.expiresAt,
+      });
+      setPendingUndo(null);
+      setDismissedUndoKey(key);
       bump();
-      showToast(
-        `已撤销「${restored.categoryName}」，${restored.movedTxns} 笔流水回到「${restored.categoryName}」。`
-      );
+      showToast(`已恢复分类「${result.label}」，它回到「已归档」。`);
     } catch (reason) {
       showToast(`撤销失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
@@ -603,7 +788,7 @@ export default function CategoriesScreen() {
       <div className="category-row__main">
         <span className="category-row__name">{category.name}</span>
         <span className="category-row__meta">
-          {KIND_LABELS[category.kind]} · 已归档，历史流水还在
+          {KIND_LABELS[category.kind]} · 已归档
         </span>
       </div>
       <button
@@ -816,36 +1001,54 @@ export default function CategoriesScreen() {
       {menuCategory !== null && (
         <CategoryMenuSheet
           category={menuCategory}
-          txnCount={menuCount}
+          inspection={menuInspection}
           onRename={() => startRename(menuCategory)}
           onAddChild={() => startAddChild(menuCategory)}
           onArchive={() => handleArchive(menuCategory)}
           onUnarchive={() => handleUnarchive(menuCategory)}
-          onDelete={() => startDelete(menuCategory)}
+          onRetire={() => startRetire(menuCategory)}
+          onPurge={() => startPurge(menuCategory)}
           onCancel={() => setMenuId(null)}
         />
       )}
 
-      {deleteSheet !== null && (
-        <CategoryDeleteSheet
-          categoryName={deleteSheet.category.name}
-          txnCount={deleteSheet.txnCount}
+      {retireSheet !== null && (
+        <CategoryRetireSheet
+          categoryName={retireSheet.category.name}
+          inspection={retireSheet.inspection}
           busy={busy}
-          onConfirm={handleDelete}
+          onConfirm={handleRetire}
           onCancel={() => {
-            if (!busy) setDeleteSheet(null);
+            if (!busy) setRetireSheet(null);
           }}
         />
       )}
 
-      {undo !== null ? (
-        <CategoryUndoToast
-          categoryName={undo.categoryName}
-          movedTxns={undo.movedTxns}
-          onUndo={handleUndo}
+      {purgeDialog !== null &&
+        (purgeDialog.blocked ? (
+          <CategoryPurgeBlockedSheet
+            categoryName={purgeDialog.category.name}
+            inspection={purgeDialog.inspection}
+            onClose={() => setPurgeDialog(null)}
+          />
+        ) : (
+          <CategoryPurgeSheet
+            categoryName={purgeDialog.category.name}
+            inspection={purgeDialog.inspection}
+            busy={busy}
+            onConfirm={handlePurge}
+            onCancel={() => {
+              if (!busy) setPurgeDialog(null);
+            }}
+          />
+        ))}
+
+      {activeUndo !== null && <PurgeUndoToast undo={activeUndo} onUndo={handleUndo} />}
+      {toast !== null && (
+        <Toast
+          text={toast}
+          className={activeUndo !== null ? 'toast--stacked' : undefined}
         />
-      ) : (
-        toast !== null && <Toast text={toast} />
       )}
     </div>
   );

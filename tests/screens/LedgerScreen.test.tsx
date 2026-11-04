@@ -17,8 +17,13 @@ import { createTransfer, deleteTransfer } from '../../src/db/repos/transfers';
 import { accountBalance, createAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
 import { createTestDb } from '../helpers/nodeDb';
+import { freezeToday } from '../helpers/clock';
 import { seedDefaults } from '../../src/db/seed';
 import { monthKeyOf, todayLocalISO } from '../../src/domain/date';
+
+// The fixtures describe October 2026 and call the 21st "today"; the screen reads
+// the real clock for that, so the suite pins it instead of drifting with the run date.
+freezeToday(new Date(2026, 9, 21, 10, 30));
 
 /**
  * The screen is rendered with a fixed query result: SSR never runs effects, so
@@ -479,6 +484,11 @@ describe('LedgerScreen', () => {
     expect(day20).toContain('午饭');
     expect(day20).toContain('饭卡');
     expect(day20).toContain('银行卡');
+    const lunchRow = row(day20, 'txn-a');
+    expect(lunchRow).toContain(
+      '<span class="ledger-row__account">饭卡</span><span class="ledger-row__note">午饭</span>'
+    );
+    expect(lunchRow).not.toContain('午饭</span><span class="ledger-row__account">');
     expect(day19).toContain('未分类');
     expect(day19).toContain('微信');
 

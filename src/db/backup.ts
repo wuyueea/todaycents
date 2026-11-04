@@ -7,16 +7,18 @@
  * integer cents stay integer cents. The export format is the v1 format in
  * docs/superpowers/plans/2026-10-23-B-备份与导入.md.
  *
- * import_batch and recurring_hint are deliberately NOT dumped. They are
- * outside this slice and do not exist in the v1 schema. project IS dumped since
- * schema v3: txn.project_id has always been a column of txn, and a file that
- * carried the id but not the project table would restore a dangling pointer.
+ * project IS dumped since schema v3: txn.project_id has always been a column
+ * of txn, and a file that carried the id but not the project table would
+ * restore a dangling pointer. recurring_hint is dumped since schema v4: a
+ * dismissed candidate must survive a backup, or the detector would ask the
+ * same question again. import_batch never became part of the schema.
  *
  * The format version stays 1: a project key is an additive table, and a file
  * written before it must still import (see OPTIONAL_TABLES).
  */
 import type { Db, DbParam } from './driver';
 import {
+  PROJECT_SCHEMA_VERSION,
   UNCATEGORIZED_CATEGORY_ID,
   UNCATEGORIZED_CATEGORY_NAME,
   UNCATEGORIZED_CATEGORY_SORT,
@@ -450,8 +452,8 @@ function parseTables(value: unknown): Record<BackupTable, BackupRow[]> {
  * Parses and validates one backup file.
  *
  * Everything is checked before the caller can reach restoreBackup, so a bad
- * file cannot start a transaction. The check covers the format envelope, the
- * eight table arrays (project may be absent in a pre-v3 file), and each row's
+ * file cannot start a transaction. The check covers the format envelope, every
+ * table array (project may be absent only in a pre-v3 file), and each row's
  * shape and column kinds (TEXT columns hold
  * strings, INTEGER columns hold safe integers, and NULL is allowed). Values
  * are still subject to the schema's own constraints when restored, which is
@@ -489,13 +491,33 @@ export function parseBackup(text: string): BackupFile {
     throw new Error('备份文件缺少导出时间（exportedAt）。');
   }
 
+  const counts = parseCounts(raw.counts);
+  const tables = parseTables(raw.tables);
+
+  // A file at or after the project migration must describe the project table.
+  // Accepting one without it would leave the import unable to tell "this file
+  // predates projects" from "this file lost its project table", and the repair
+  // would then clear every project link instead of refusing a broken file.
+  if (raw.schemaVersion >= PROJECT_SCHEMA_VERSION) {
+    const described =
+      isRecord(raw.counts) &&
+      'project' in raw.counts &&
+      isRecord(raw.tables) &&
+      'project' in raw.tables;
+    if (!described) {
+      throw new Error(
+        `备份文件声明 schemaVersion ${raw.schemaVersion}，却没有 project 表；这份文件自相矛盾，导入已取消。`
+      );
+    }
+  }
+
   return {
     magic: 'ledger-backup',
     formatVersion: 1,
     schemaVersion: raw.schemaVersion,
     exportedAt: raw.exportedAt,
-    counts: parseCounts(raw.counts),
-    tables: parseTables(raw.tables),
+    counts,
+    tables,
   };
 }
 
@@ -542,10 +564,26 @@ async function insertRow(
 }
 
 /**
+ * What one restore had to repair.
+ *
+ * Zero means nothing needed repairing — either the file was consistent, or it
+ * predates the project migration and its ids are history rather than pointers.
+ */
+export interface RestoreResult {
+  /**
+   * txn rows whose project_id named a project the file itself did not carry.
+   * Always 0 for a file older than PROJECT_SCHEMA_VERSION: project_id predates
+   * the project table, so such a file can name ids it was never able to ship,
+   * and those ids are the only trace of it left.
+   */
+  clearedProjectRefs: number;
+}
+
+/**
  * Replaces the whole database with one file, atomically.
  *
- * One transaction deletes all eight tables in reverse foreign-key order and
- * then inserts them in forward order. After each table the actual row count is
+ * One transaction deletes every table in reverse foreign-key order and then
+ * inserts them in forward order. After each table the actual row count is
  * compared with counts; a disagreement throws, and the driver's transaction
  * wrapper rolls everything back so the local ledger is untouched.
  *
@@ -557,8 +595,14 @@ async function insertRow(
  * The caller must hand in a file produced by buildBackup or parseBackup; parse
  * has already checked the envelope and row shapes, so this function only deals
  * with database-level constraints and the counts agreement.
+ *
+ * One repair happens on the way in, inside the same transaction: a file at or
+ * after the project migration that names a project it does not carry has a
+ * dangling txn.project_id. That column has no foreign key, so the row would
+ * import happily and keep a dead id forever; it is cleared here and counted, so
+ * the caller can say so instead of rewriting the owner's data silently.
  */
-export async function restoreBackup(db: Db, file: BackupFile): Promise<void> {
+export async function restoreBackup(db: Db, file: BackupFile): Promise<RestoreResult> {
   const versionRow = await db.get<{ version: number | null }>(
     'SELECT MAX(version) AS version FROM schema_migrations'
   );
@@ -567,11 +611,16 @@ export async function restoreBackup(db: Db, file: BackupFile): Promise<void> {
     throw new BackupSchemaTooNewError(file.schemaVersion, databaseVersion);
   }
 
+  let clearedProjectRefs = 0;
   await db.transaction(async tx => {
     // Exact reverse of BACKUP_TABLES: children before their parents.
     for (const table of [...BACKUP_TABLES].reverse()) {
       await tx.run(`DELETE FROM ${table}`);
     }
+    // purge_undo is deliberately not in the backup: it points at rows this
+    // restore just replaced, and undoing a purge from the previous database
+    // would be both meaningless and destructive.
+    await tx.run('DELETE FROM purge_undo');
 
     for (const table of BACKUP_TABLES) {
       const { columns } = TABLE_SPECS[table];
@@ -614,5 +663,27 @@ export async function restoreBackup(db: Db, file: BackupFile): Promise<void> {
         );
       }
     }
+
+    // A file at or after the project migration carries its own project table, so
+    // a project_id it cannot resolve is a broken pointer rather than history:
+    // clear it instead of keeping a dead id forever. Older files are left alone —
+    // project_id predates the table, and those ids are the only trace of it.
+    if (file.schemaVersion >= PROJECT_SCHEMA_VERSION) {
+      const dangling = await tx.get<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM txn t
+          WHERE t.project_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = t.project_id)`
+      );
+      clearedProjectRefs = dangling?.n ?? 0;
+      if (clearedProjectRefs > 0) {
+        await tx.run(
+          `UPDATE txn SET project_id = NULL
+            WHERE project_id IS NOT NULL
+              AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = txn.project_id)`
+        );
+      }
+    }
   });
+
+  return { clearedProjectRefs };
 }

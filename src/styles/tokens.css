@@ -3,7 +3,7 @@
  * Mobile first: one column, fixed bottom tabs, no horizontal scroll.
  */
 :root {
-  /* ---- 设计 token：本文件顶部是唯一色值来源 ---- */
+  /* ---- 设计 token：docs/design-tokens.css 是唯一色值来源 ---- */
 
   /* 纸 */
   --paper: #f6f3ec;        /* 页面底色 */
@@ -112,7 +112,7 @@
   --radius-lg: var(--radius);
 }
 
-/* ---------- 数字工具类（来自设计 token） ---------- */
+/* ---------- 数字工具类（来自 docs/design-tokens.css） ---------- */
 .num {
   font-family: var(--font-num);
   font-variant-numeric: tabular-nums;
@@ -2783,6 +2783,18 @@ a.ledger-row:focus-visible {
   line-height: 1.8;
 }
 
+.sheet__reasons {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.9;
+}
+
+.sheet__reasons li + li {
+  margin-top: 4px;
+}
+
 .sheet__danger,
 .sheet__secondary {
   width: 100%;
@@ -2828,7 +2840,8 @@ a.ledger-row:focus-visible {
   right: 18px;
   bottom: calc(26px + var(--safe-area-bottom));
   left: 18px;
-  z-index: 50;
+  /* 浮层打开时 toast 必须让位：否则上一条状态会盖住确认页，甚至挡住按钮。 */
+  z-index: 35;
   max-width: 604px;
   margin: 0 auto;
   padding: 12px 16px;
@@ -2839,6 +2852,11 @@ a.ledger-row:focus-visible {
   line-height: 1.6;
   letter-spacing: .03em;
   text-align: center;
+}
+
+/* 普通状态与撤销条同时出现时，状态叠在撤销条上方，避免错误被遮住。 */
+.toast--stacked {
+  bottom: calc(96px + var(--safe-area-bottom));
 }
 
 /* 带撤销的 toast：文字在左，动作在右；两个都是纸色，动作靠下划线显出可点。 */

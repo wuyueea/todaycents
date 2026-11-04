@@ -4,6 +4,7 @@ import {
   applyAmountKey,
   formatAmountDraft,
 } from '../components/AmountKeypad';
+import { registerBackHandler } from '../components/backButton';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createTagForPicker } from '../components/TagPicker';
@@ -200,28 +201,31 @@ export async function submitQuickEntry(
     note: draft.note.trim(),
   };
 
-  let txnId: string;
-  if (draft.direction === 'expense') {
-    txnId = await createExpense(db, input);
-  } else if (draft.direction === 'income') {
-    txnId = await createIncome(db, input);
-  } else {
-    // Unreachable through the type, but refuse loudly rather than book income
-    // through the expense path if a plain object ever carries another value.
-    throw new RangeError(`unsupported direction: ${String(draft.direction)}`);
-  }
+  // One save is one unit of work. The row, its tags and its project are written
+  // inside a single transaction, so a failure in either follow-up write takes
+  // the row with it instead of leaving a live row the owner never finished
+  // writing — which a retry would then book a second time.
+  await db.transaction(async tx => {
+    let txnId: string;
+    if (draft.direction === 'expense') {
+      txnId = await createExpense(tx, input);
+    } else if (draft.direction === 'income') {
+      txnId = await createIncome(tx, input);
+    } else {
+      // Unreachable through the type, but refuse loudly rather than book income
+      // through the expense path if a plain object ever carries another value.
+      throw new RangeError(`unsupported direction: ${String(draft.direction)}`);
+    }
 
-  // Tag assignment is a second unit of work: createExpense/createIncome never
-  // open a transaction (submitDay already wraps one and nesting is rejected).
-  // Writing tags after the row exists is what keeps both paths usable.
-  await setTxnTags(db, txnId, draft.tagIds);
+    await setTxnTags(tx, txnId, draft.tagIds);
 
-  // A project can gather both sides of a bounded story (a trip's costs and its
-  // reimbursements). The transfer path returned above, so only expense/income
-  // can reach this write.
-  if (draft.projectId !== null) {
-    await setTxnProject(db, txnId, draft.projectId);
-  }
+    // A project can gather both sides of a bounded story (a trip's costs and its
+    // reimbursements). The transfer path returned above, so only expense/income
+    // can reach this write.
+    if (draft.projectId !== null) {
+      await setTxnProject(tx, txnId, draft.projectId);
+    }
+  });
 
   return { ...plan, transferGroupId: null, written: true };
 }
@@ -365,6 +369,12 @@ export interface QuickEntryScreenProps {
   initialDirection?: EntryDirection;
   /** Closes the sheet. Defaults to leaving for 今天 when rendered on its own. */
   onClose?: () => void;
+  /**
+   * False while 账户 covers the sheet (opened from its empty-account link).
+   * The component stays mounted so the draft survives, but it must not keep
+   * focus, the keyboard listener or the back handler while it cannot be seen.
+   */
+  active?: boolean;
 }
 
 /**
@@ -384,6 +394,7 @@ export interface QuickEntryScreenProps {
 export default function QuickEntryScreen({
   initialDirection = 'expense',
   onClose,
+  active = true,
 }: QuickEntryScreenProps = {}) {
   const { db, bump } = useDb();
   const navigate = useNavigate();
@@ -438,7 +449,14 @@ export default function QuickEntryScreen({
   const data = query.data;
   const isTransfer = direction === 'transfer';
 
+  // Re-runs when 账户 covers or reveals this sheet. A hidden sheet must not
+  // steal focus, hear Escape/Tab, or answer Android's back key; on reveal it
+  // takes focus again with the draft exactly as it was.
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
   useEffect(() => {
+    if (!active) return;
     const sheet = sheetRef.current;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     sheet?.focus();
@@ -468,12 +486,21 @@ export default function QuickEntryScreen({
       }
     };
 
+    // The back key leaves the form exactly like Escape and the ✕ button: the
+    // caller already knows whether that means step back or replace the entry.
+    const releaseBack = registerBackHandler(() => {
+      closeRef.current();
+      return true;
+    });
     document.addEventListener('keydown', onKeyDown);
     return () => {
+      releaseBack();
       document.removeEventListener('keydown', onKeyDown);
-      previous?.focus();
+      // Deactivation is not closing: leave focus to the screen that covered
+      // this one. Only removal from the tree returns it to the opener.
+      if (activeRef.current) previous?.focus();
     };
-  }, []);
+  }, [active]);
 
   useEffect(() => {
     if (tagOpen) newTagRef.current?.focus();
@@ -587,7 +614,7 @@ export default function QuickEntryScreen({
       element.removeEventListener('scroll', measure);
       observer?.disconnect();
     };
-  }, [data, direction, subCategories.length, tagOpen, projectId, categoryId, date, errorText, tagError, keypadActive]);
+  }, [active, data, direction, subCategories.length, tagOpen, projectId, categoryId, date, errorText, tagError, keypadActive]);
 
   const clearProblem = (field: keyof QuickEntryProblems) => {
     setProblems(previous => (previous[field] ? { ...previous, [field]: false } : previous));
@@ -784,7 +811,9 @@ export default function QuickEntryScreen({
             {data !== null && data.accounts.length === 0 && (
               <div className="entry-noacc">
                 <span>无可用账户</span>
-                <Link to="/accounts">还没有账户，先去添加一个</Link>
+                <Link to="/accounts" state={{ quickEntryOpen: true }}>
+                  还没有账户，先去添加一个
+                </Link>
               </div>
             )}
 

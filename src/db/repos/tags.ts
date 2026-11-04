@@ -7,14 +7,15 @@
  * transaction row is ever touched by either operation.
  *
  * Tag assignment lives here rather than in txns.ts because it owns a piece of
- * the tag model (which tags may be attached) and because it is deliberately a
- * separate unit of work. createExpense and submitDay must not open a
- * transaction of their own — submitDay already wraps one and the driver
- * rejects nesting — so the caller writes the transaction first, then calls
- * setTxnTags with its id.
+ * the tag model (which tags may be attached). It opens its own transaction so
+ * a replacement is all-or-nothing on its own; when the caller already holds
+ * one (quick entry, the edit screen) the nested call joins it, and the row,
+ * its tags and its project commit together.
  */
 import type { Db } from '../driver';
 import { newId } from '../id';
+import type { PurgeUndoRecord } from './purge';
+import { PURGE_UNDO_MS, writePurgeUndo } from './purge';
 
 /** A tag as every screen consumes it; no raw columns leak out. */
 export interface Tag {
@@ -152,23 +153,135 @@ export async function unarchiveTag(db: Db, id: string): Promise<void> {
   await db.run('UPDATE tag SET archived_at = NULL WHERE id = ?', [id]);
 }
 
+/** What the archived-tag menu needs to explain a refused purge. */
+export interface TagPurgeInspection {
+  purgeable: boolean;
+  archived: boolean;
+  /** Every link, including links on soft-deleted transactions. */
+  linkCount: number;
+  deletedLinkCount: number;
+}
+
+async function readTagLinkCounts(
+  db: Db,
+  id: string
+): Promise<{ linkCount: number; deletedLinkCount: number }> {
+  const row = await db.get<{ link_count: number; deleted_link_count: number }>(
+    `SELECT COUNT(*) AS link_count,
+            COALESCE(SUM(CASE WHEN tx.deleted_at IS NOT NULL THEN 1 ELSE 0 END), 0)
+              AS deleted_link_count
+     FROM txn_tag tt
+     JOIN txn tx ON tx.id = tt.txn_id
+     WHERE tt.tag_id = ?`,
+    [id]
+  );
+  return {
+    linkCount: row?.link_count ?? 0,
+    deletedLinkCount: row?.deleted_link_count ?? 0,
+  };
+}
+
 /**
- * Deletes a tag the way §4.2 defines it: remove its txn_tag rows, keep every
- * txn row, and soft-delete the tag row itself.
- *
- * Both writes are one transaction so a half-deleted tag cannot exist. The tag
- * is never physically removed: an old backup or a future "restore archived
- * tag" can still name it, and the id stays honest. Deleting an unknown or
- * already-deleted tag is a harmless no-op, matching archiveAccount.
+ * Everything the archived tag's 彻底删除 sheet needs. The count deliberately
+ * includes links on soft-deleted transactions: they are history even when the
+ * management list shows the tag as unused.
  */
-export async function deleteTag(db: Db, id: string): Promise<void> {
-  const deletedAt = new Date().toISOString();
-  await db.transaction(async tx => {
+export async function inspectTagPurge(db: Db, id: string): Promise<TagPurgeInspection> {
+  const tag = await db.get<{ archived_at: string | null }>(
+    'SELECT archived_at FROM tag WHERE id = ?',
+    [id]
+  );
+  if (tag === undefined) {
+    throw new Error(`标签不存在：${id}`);
+  }
+  const counts = await readTagLinkCounts(db, id);
+  const archived = tag.archived_at !== null;
+  return {
+    purgeable: archived && counts.linkCount === 0,
+    archived,
+    ...counts,
+  };
+}
+
+/**
+ * The live-tag retirement action: remove every txn_tag row, then archive the
+ * tag. Both writes share one transaction, so a half-unlinked tag cannot exist.
+ *
+ * Unlike the retired deleteTag, this counts and removes links on soft-deleted
+ * transactions too. Those links are historical references, and the point of
+ * this action is to make the tag's history genuinely empty. No txn row is
+ * touched and no undo is written: 恢复 brings the tag back, not the links.
+ */
+export async function archiveTagWithUnlink(
+  db: Db,
+  id: string
+): Promise<{ unlinked: number; unlinkedOnDeleted: number }> {
+  return db.transaction(async tx => {
+    const tag = await tx.get<{ id: string }>('SELECT id FROM tag WHERE id = ?', [id]);
+    if (tag === undefined) {
+      throw new Error(`标签不存在：${id}`);
+    }
+    const counts = await readTagLinkCounts(tx, id);
     await tx.run('DELETE FROM txn_tag WHERE tag_id = ?', [id]);
     await tx.run('UPDATE tag SET archived_at = COALESCE(archived_at, ?) WHERE id = ?', [
-      deletedAt,
+      new Date().toISOString(),
       id,
     ]);
+    return {
+      unlinked: counts.linkCount,
+      unlinkedOnDeleted: counts.deletedLinkCount,
+    };
+  });
+}
+
+/**
+ * Physically removes an archived tag with no links at all. The count is
+ * repeated inside the transaction because inspectTagPurge is only a snapshot.
+ * The exact row is stored in purge_undo in the same transaction.
+ */
+export async function purgeTag(
+  db: Db,
+  id: string
+): Promise<{ undo: PurgeUndoRecord }> {
+  return db.transaction(async tx => {
+    const tag = await tx.get<TagRow>(
+      `SELECT ${TAG_COLUMNS} FROM tag WHERE id = ?`,
+      [id]
+    );
+    if (tag === undefined) {
+      throw new Error(`标签不存在：${id}`);
+    }
+    if (tag.archived_at === null) {
+      throw new Error('只有已归档的标签才能彻底删除');
+    }
+    const counts = await readTagLinkCounts(tx, id);
+    if (counts.linkCount > 0) {
+      throw new Error('这个标签还有关联，不能彻底删除');
+    }
+
+    await tx.run('DELETE FROM tag WHERE id = ?', [id]);
+
+    const expiresAt = Date.now() + PURGE_UNDO_MS;
+    await writePurgeUndo(tx, {
+      kind: 'tag',
+      targetId: id,
+      label: tag.name,
+      expiresAt,
+      payload: {
+        tag: [
+          {
+            id: tag.id,
+            name: tag.name,
+            color: tag.color,
+            archived_at: tag.archived_at,
+          },
+        ],
+      },
+    });
+
+    return {
+      undo: { kind: 'tag' as const, targetId: id, label: tag.name, expiresAt },
+    };
   });
 }
 
@@ -222,9 +335,9 @@ export async function tagUsage(
  * - any currently attached tag missing from the new list is removed, archived
  *   or not — the call is a replacement, not an append.
  *
- * The transaction is opened here and only here: callers write the txn first
- * and call this afterwards. Writing tags from inside createExpense/submitDay
- * would nest transactions, which the driver rejects.
+ * The transaction is opened here, which makes a replacement all-or-nothing on
+ * its own. A caller that already holds one simply joins it, so a save that also
+ * writes the row and the project still commits as a single unit.
  */
 export async function setTxnTags(
   db: Db,

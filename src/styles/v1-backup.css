@@ -180,6 +180,7 @@
 }
 
 .backup-screen--v1 .sheet__danger,
+.backup-screen--v1 .sheet__primary,
 .backup-screen--v1 .sheet__secondary {
   min-height: 46px;
   border: 0;
@@ -193,9 +194,86 @@
   color: var(--v1-err);
 }
 
+.backup-screen--v1 .sheet__primary {
+  margin-top: 14px;
+  background: var(--v1-amb);
+  color: #2a1a05;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
 .backup-screen--v1 .sheet__secondary {
   background: var(--v1-s2);
   color: var(--v1-ink);
+}
+
+.backup-screen--v1 .backup-cache {
+  margin: 18px 4px 0;
+}
+
+.backup-screen--v1 .backup-cache__title {
+  margin: 0;
+  color: var(--v1-ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.backup-screen--v1 .backup-cache__note {
+  margin: 4px 0 8px;
+  color: var(--v1-t3);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.backup-screen--v1 .backup-cache__list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+  background: var(--v1-card);
+  list-style: none;
+}
+
+.backup-screen--v1 .backup-cache__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+}
+
+.backup-screen--v1 .backup-cache__row + .backup-cache__row {
+  box-shadow: inset 0 1px 0 var(--v1-line);
+}
+
+.backup-screen--v1 .backup-cache__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.backup-screen--v1 .backup-cache__name {
+  color: var(--v1-ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.backup-screen--v1 .backup-cache__meta {
+  margin-top: 2px;
+  color: var(--v1-t3);
+  font-size: 11.5px;
+}
+
+.backup-screen--v1 .backup-cache__share {
+  flex: none;
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 11px;
+  background: var(--v1-s2);
+  color: var(--v1-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
 }
 /* 存储 shares the backup card language. */
 .backup-screen--v1 .storage-path {

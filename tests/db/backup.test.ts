@@ -3,7 +3,7 @@ import type { Db } from '../../src/db/driver';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
 import { createAccount } from '../../src/db/repos/accounts';
-import { createCategory } from '../../src/db/repos/categories';
+import { archiveCategory, createCategory, purgeCategory } from '../../src/db/repos/categories';
 import { createExpense, createIncome, softDeleteTxn } from '../../src/db/repos/txns';
 import { createTransfer } from '../../src/db/repos/transfers';
 import { createProject, setTxnProject } from '../../src/db/repos/projects';
@@ -14,6 +14,7 @@ import {
   serializeBackup,
   type BackupFile,
 } from '../../src/db/backup';
+import { PROJECT_SCHEMA_VERSION } from '../../src/db/schema';
 
 /** The nine tables of this slice, in foreign-key order. */
 const TABLES = [
@@ -141,7 +142,7 @@ describe('backup codec', () => {
 
     expect(file.magic).toBe('ledger-backup');
     expect(file.formatVersion).toBe(1);
-    expect(file.schemaVersion).toBe(4);
+    expect(file.schemaVersion).toBe(6);
     expect(file.exportedAt).toMatch(
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/
     );
@@ -189,6 +190,21 @@ describe('backup codec', () => {
     expect((await target.all<{ name: string }>('SELECT name FROM account')).map(r => r.name)).toEqual([
       '只有B',
     ]);
+  });
+
+  it('drops a pending purge undo when a file is restored', async () => {
+    const db = await createTestDb();
+    await seedRichLedger(db);
+    const spare = await createCategory(db, { name: '临时分类', kind: 'expense' });
+    await archiveCategory(db, spare);
+    await purgeCategory(db, spare);
+    expect(await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM purge_undo')).toEqual({ n: 1 });
+
+    await restoreBackup(db, await buildBackup(db));
+
+    // The file carries the post-purge ledger, not the old undo: restoring the
+    // same state must not leave an offer to reverse something already applied.
+    expect(await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM purge_undo')).toEqual({ n: 0 });
   });
 
   it('rejects corrupt files and leaves the database untouched', async () => {
@@ -390,13 +406,13 @@ describe('backup codec', () => {
     expect(system?.id).toBe('uncategorized');
   });
 
-  it('allows a file whose schemaVersion is lower than the database', async () => {
+  it('allows a v1.0.0 (schemaVersion 4) file, whose tables are a subset of v5', async () => {
     const source = await createTestDb();
     await seedDefaults(source);
     const file = await buildBackup(source);
 
     const target = await createTestDb();
-    await restoreBackup(target, { ...file, schemaVersion: 0 });
+    await restoreBackup(target, { ...file, schemaVersion: 4 });
 
     expect(await tableCounts(target)).toEqual(file.counts);
   });
@@ -461,8 +477,12 @@ describe('backup compatibility: project', () => {
     expect(parsed.tables.project).toEqual([]);
 
     const target = await createTestDb();
-    await restoreBackup(target, parsed);
+    const result = await restoreBackup(target, parsed);
 
+    // Nothing was "repaired": for a pre-project file those ids are the only
+    // trace of the project table left, and the import toast must not claim a
+    // repair it did not make.
+    expect(result.clearedProjectRefs).toBe(0);
     expect(await target.get<{ n: number }>('SELECT COUNT(*) AS n FROM project')).toEqual({ n: 0 });
     // No foreign key means the old file's project_id is still restorable
     // verbatim; inventing a project row or dropping the id would both lie.
@@ -471,6 +491,129 @@ describe('backup compatibility: project', () => {
       [expenseId]
     );
     expect(restoredTxn?.project_id).toBe(projectId);
+  });
+
+  // A v3 file says it carries the project table, so an id it cannot resolve is
+  // a broken pointer rather than history: import repairs it instead of keeping
+  // a dead id around forever.
+  it('clears a project_id the file itself cannot resolve', async () => {
+    const source = await createTestDb();
+    const { expenseId } = await seedRichLedger(source);
+    const file = await buildBackup(source);
+
+    const ghosted: BackupFile = {
+      ...file,
+      // The boundary itself: a file that claims exactly the project migration
+      // must be repaired, so a gate of `> 3` would fail here.
+      schemaVersion: PROJECT_SCHEMA_VERSION,
+      tables: {
+        ...file.tables,
+        txn: file.tables.txn.map(row =>
+          row.id === expenseId ? { ...row, project_id: 'ghost-project' } : row
+        ),
+      },
+    };
+
+    const target = await createTestDb();
+    const result = await restoreBackup(target, ghosted);
+
+    expect(result.clearedProjectRefs).toBe(1);
+    const restoredTxn = await target.get<{ project_id: string | null }>(
+      'SELECT project_id FROM txn WHERE id = ?',
+      [expenseId]
+    );
+    expect(restoredTxn?.project_id).toBeNull();
+  });
+
+  // A file that claims the project migration and then omits the table is not
+  // "a file without projects" — it is a broken file. Refusing it is the only
+  // answer that cannot destroy every project link on the way in.
+  it('refuses a file that claims the project migration but has no project table', async () => {
+    const source = await createTestDb();
+    await seedRichLedger(source);
+    const file = await buildBackup(source);
+    const raw = JSON.parse(serializeBackup(file)) as {
+      counts: Record<string, unknown>;
+      tables: Record<string, unknown>;
+    };
+    delete raw.counts.project;
+    delete raw.tables.project;
+
+    expect(() => parseBackup(JSON.stringify(raw))).toThrow(/project 表/);
+    expect(() => parseBackup(JSON.stringify(raw))).toThrow(/导入已取消/);
+  });
+
+  // Soft-deleted rows travel through backups and keep their project_id, so the
+  // repair has to reach them too — and the count has to say it did.
+  it('clears a dangling project on a soft-deleted row as well', async () => {
+    const source = await createTestDb();
+    await seedRichLedger(source);
+    const file = await buildBackup(source);
+
+    const ghosted: BackupFile = {
+      ...file,
+      schemaVersion: PROJECT_SCHEMA_VERSION,
+      tables: {
+        ...file.tables,
+        txn: file.tables.txn.map(row =>
+          row.note === '早饭' || row.note === '已删' ? { ...row, project_id: 'ghost-project' } : row
+        ),
+      },
+    };
+
+    const target = await createTestDb();
+    const result = await restoreBackup(target, ghosted);
+
+    expect(result.clearedProjectRefs).toBe(2);
+    const rows = await target.all<{ project_id: string | null }>(
+      "SELECT project_id FROM txn WHERE note IN ('早饭', '已删')"
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.project_id === null)).toBe(true);
+  });
+
+  // The documented consequence of keeping pre-v3 ids: exporting that database
+  // stamps the current schema, so re-importing the very same file is now a
+  // contradiction and gets repaired. Pinned so it is not mistaken for a bug.
+  it('repairs a preserved pre-v3 id once the database is exported again', async () => {
+    const source = await createTestDb();
+    const { expenseId } = await seedRichLedger(source);
+    const file = await buildBackup(source);
+    const raw = JSON.parse(serializeBackup(file)) as {
+      schemaVersion: number;
+      counts: Record<string, unknown>;
+      tables: Record<string, unknown>;
+    };
+    delete raw.counts.project;
+    delete raw.tables.project;
+    raw.schemaVersion = 2;
+
+    const first = await createTestDb();
+    const firstResult = await restoreBackup(first, parseBackup(JSON.stringify(raw)));
+    expect(firstResult.clearedProjectRefs).toBe(0);
+    expect(
+      await first.get<{ project_id: string | null }>('SELECT project_id FROM txn WHERE id = ?', [
+        expenseId,
+      ])
+    ).toEqual({ project_id: file.tables.txn.find(row => row.id === expenseId)?.project_id });
+
+    const second = await createTestDb();
+    const secondResult = await restoreBackup(second, await buildBackup(first));
+    expect(secondResult.clearedProjectRefs).toBe(1);
+  });
+
+  it('reports nothing repaired when every project_id resolves', async () => {
+    const source = await createTestDb();
+    await seedRichLedger(source);
+    const file = await buildBackup(source);
+
+    const target = await createTestDb();
+    const result = await restoreBackup(target, file);
+
+    expect(result.clearedProjectRefs).toBe(0);
+    expect(
+      await target.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn WHERE project_id IS NOT NULL')
+    ).toEqual({ n: 1 });
   });
 });
 

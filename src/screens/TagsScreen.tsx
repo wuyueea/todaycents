@@ -1,21 +1,26 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useDialogFocus } from '../components/useDialogFocus';
 import type { Db } from '../db/driver';
-import type { Tag } from '../db/repos/tags';
+import type { Tag, TagPurgeInspection } from '../db/repos/tags';
 import {
   archiveTag,
+  archiveTagWithUnlink,
   createTag,
-  deleteTag,
+  inspectTagPurge,
   listTags,
+  purgeTag,
   renameTag,
   TAG_NAME_MAX_LENGTH,
   tagUsage,
   unarchiveTag,
 } from '../db/repos/tags';
+import type { PurgeUndoRecord } from '../db/repos/purge';
+import { readPurgeUndo, undoPurge } from '../db/repos/purge';
 import { formatMonthDay, todayLocalISO } from '../domain/date';
 import { Toast, useToast } from '../components/Toast';
+import { PurgeUndoToast, purgeUndoKey, selectPurgeUndo } from '../components/PurgeUndoToast';
 import { useDb, useQuery } from '../store/useDb';
 
 /**
@@ -38,11 +43,17 @@ export interface TagsData {
   /** Archived rows included; the live list filters them out. */
   tags: Tag[];
   usage: TagUsageRow[];
+  /** A tag purge whose ten-second window has not closed, or null. */
+  undo: PurgeUndoRecord | null;
 }
 
 export async function loadTagsData(db: Db): Promise<TagsData> {
-  const [tags, usage] = await Promise.all([listTags(db, { includeArchived: true }), tagUsage(db)]);
-  return { tags, usage };
+  const [tags, usage, undo] = await Promise.all([
+    listTags(db, { includeArchived: true }),
+    tagUsage(db),
+    readPurgeUndo(db),
+  ]);
+  return { tags, usage, undo: undo?.kind === 'tag' ? undo : null };
 }
 
 /** A trimmed create draft, or the sentence explaining why it cannot be used. */
@@ -82,21 +93,29 @@ function usageCount(usage: readonly TagUsageRow[], tagId: string): number {
 /** The per-row ⋯ sheet. Both archive states share one shape. */
 export interface TagMenuSheetProps {
   tag: Tag;
+  /** Live usage shown on the active sheet; archived rows say 已归档 instead. */
   count: number;
+  /** All links, read when the menu opens; null while it is being read. */
+  inspection: TagPurgeInspection | null;
   onRename(): void;
   onArchive?(): void;
   onUnarchive?(): void;
-  onDelete(): void;
+  /** 断联并归档: live only. */
+  onRetire(): void;
+  /** 彻底删除: archived only; never disabled, so the refusal can explain itself. */
+  onPurge(): void;
   onCancel(): void;
 }
 
 export function TagMenuSheet({
   tag,
   count,
+  inspection,
   onRename,
   onArchive,
   onUnarchive,
-  onDelete,
+  onRetire,
+  onPurge,
   onCancel,
 }: TagMenuSheetProps) {
   const panelRef = useDialogFocus({ onClose: onCancel });
@@ -109,7 +128,9 @@ export function TagMenuSheet({
           <h2 className="sheet__title" id="tag-menu-title">
             {tag.name}
           </h2>
-          <span className="sheet__version">{count} 次</span>
+          <span className="sheet__version">
+            {tag.archivedAt !== null ? '已归档' : `${count} 次`}
+          </span>
         </div>
 
         <div className="action-menu">
@@ -118,24 +139,37 @@ export function TagMenuSheet({
             <span>历史流水一起改</span>
           </button>
           {tag.archivedAt === null ? (
-            <button className="action-menu__item" type="button" onClick={onArchive}>
-              归档
-              <span>从选择里收起，历史保留</span>
-            </button>
+            <>
+              <button className="action-menu__item" type="button" onClick={onArchive}>
+                归档
+                <span>从选择里收起，历史保留</span>
+              </button>
+              <button
+                className="action-menu__item action-menu__item--danger"
+                type="button"
+                onClick={onRetire}
+                disabled={inspection === null}
+              >
+                断联并归档
+                <span>删掉全部关联，标签收进已归档</span>
+              </button>
+            </>
           ) : (
-            <button className="action-menu__item" type="button" onClick={onUnarchive}>
-              恢复
-              <span>重新出现在标签选择里</span>
-            </button>
+            <>
+              <button className="action-menu__item" type="button" onClick={onUnarchive}>
+                恢复
+                <span>重新出现在标签选择里</span>
+              </button>
+              <button
+                className="action-menu__item action-menu__item--danger"
+                type="button"
+                onClick={onPurge}
+              >
+                彻底删除
+                <span>只对没有关联的归档标签可用</span>
+              </button>
+            </>
           )}
-          <button
-            className="action-menu__item action-menu__item--danger"
-            type="button"
-            onClick={onDelete}
-          >
-            删除关联
-            <span>只删关联，不删流水</span>
-          </button>
         </div>
 
         <button className="sheet__secondary" type="button" onClick={onCancel}>
@@ -146,52 +180,54 @@ export function TagMenuSheet({
   );
 }
 
-export interface TagDeleteSheetProps {
-  tag: Tag;
-  /** The number of transaction links deleteTag will remove. */
-  linkCount: number;
+export interface TagRetireSheetProps {
+  tagName: string;
+  inspection: TagPurgeInspection;
   busy: boolean;
   onConfirm(): void;
   onCancel(): void;
 }
 
 /**
- * The confirmation for 删除关联. It says the one thing that matters: only the
- * tag links go away, never a transaction, an amount or a date.
+ * 断联并归档: delete every link, then archive the tag. The note is explicit
+ * that 恢复 will not bring the links back.
  */
-export function TagDeleteSheet({
-  tag,
-  linkCount,
+export function TagRetireSheet({
+  tagName,
+  inspection,
   busy,
   onConfirm,
   onCancel,
-}: TagDeleteSheetProps) {
+}: TagRetireSheetProps) {
   const panelRef = useDialogFocus({
     onClose: onCancel,
     initial: 'last',
     canClose: () => !busy,
   });
+  const deletedPart =
+    inspection.deletedLinkCount > 0
+      ? `（其中 ${inspection.deletedLinkCount} 条在已删除流水上）`
+      : '';
+  const body = `「${tagName}」的 ${inspection.linkCount} 条流水关联会被删除${deletedPart}；流水本身一笔都不会少，金额和日期都不变。标签会收进「已归档」。`;
 
   return (
-    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="tag-delete-title">
+    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="tag-retire-title">
       <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
       <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
         <div className="sheet__head">
-          <h2 className="sheet__title" id="tag-delete-title">
-            删除关联
+          <h2 className="sheet__title" id="tag-retire-title">
+            断联并归档
           </h2>
-          <span className="sheet__version">{linkCount} 笔</span>
+          <span className="sheet__version num">{inspection.linkCount} 条关联</span>
         </div>
 
-        <p className="sheet__text">
-          「{tag.name}」和 {linkCount} 笔流水的关联会被删除；流水本身一笔都不会少，金额和日期都不变。
-        </p>
+        <p className="sheet__text">{body}</p>
         <p className="sheet__note">
-          这个标签会从列表和记账选择里消失。只想先收起它，可以用「归档」——归档会留住历史。
+          这个操作不能撤销。之后恢复标签，也不会恢复这些关联。
         </p>
 
         <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          删除关联
+          断联并归档
         </button>
         <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
           取消
@@ -201,10 +237,113 @@ export function TagDeleteSheet({
   );
 }
 
+export interface TagPurgeBlockedSheetProps {
+  tagName: string;
+  inspection: TagPurgeInspection;
+  onClose(): void;
+}
+
+/** A refusal that names the remaining links, instead of hiding the menu item. */
+export function TagPurgeBlockedSheet({
+  tagName,
+  inspection,
+  onClose,
+}: TagPurgeBlockedSheetProps) {
+  const panelRef = useDialogFocus({ onClose });
+
+  return (
+    <div
+      className="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="tag-purge-blocked-title"
+    >
+      <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
+        <div className="sheet__head">
+          <h2 className="sheet__title" id="tag-purge-blocked-title">
+            不能彻底删除
+          </h2>
+        </div>
+
+        <p className="sheet__text">
+          「{tagName}」还关联着 {inspection.linkCount} 笔流水（其中 {inspection.deletedLinkCount} 笔已删除）。有历史的标签只能保持归档，不能从数据库里删除。
+        </p>
+        <p className="sheet__note">彻底删除只适用于没有任何关联的归档标签。</p>
+
+        <button className="sheet__secondary" type="button" onClick={onClose}>
+          知道了
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export interface TagPurgeSheetProps {
+  tagName: string;
+  busy: boolean;
+  onConfirm(): void;
+  onCancel(): void;
+}
+
+/** 彻底删除: only reachable for an archived, link-free tag. */
+export function TagPurgeSheet({
+  tagName,
+  busy,
+  onConfirm,
+  onCancel,
+}: TagPurgeSheetProps) {
+  const panelRef = useDialogFocus({
+    onClose: onCancel,
+    initial: 'last',
+    canClose: () => !busy,
+  });
+
+  return (
+    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="tag-purge-title">
+      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
+        <div className="sheet__head">
+          <h2 className="sheet__title" id="tag-purge-title">
+            彻底删除
+          </h2>
+          <span className="sheet__version">已归档</span>
+        </div>
+
+        <p className="sheet__text">
+          「{tagName}」没有任何流水关联，会从数据库里删除。删除不会影响任何一笔账。
+        </p>
+        <p className="sheet__note">
+          10 秒内可以撤销；撤销会把标签恢复成现在的归档状态。同时只保留最近一次彻底删除的撤销。
+        </p>
+
+        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+          彻底删除
+        </button>
+        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
+interface TagRetireSheetState {
+  tag: Tag;
+  inspection: TagPurgeInspection;
+}
+
+interface TagPurgeDialogState {
+  tag: Tag;
+  inspection: TagPurgeInspection;
+  /** True when the archive still has links and the destructive action is refused. */
+  blocked: boolean;
+}
+
 export default function TagsScreen() {
   const { db, bump } = useDb();
   const query = useQuery<TagsData>(loadTagsData, []);
-  const { toast, showToast } = useToast();
+  const { toast, showToast, clearToast } = useToast();
 
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -212,9 +351,13 @@ export default function TagsScreen() {
   const [createError, setCreateError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [menuId, setMenuId] = useState<string | null>(null);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [menuInspection, setMenuInspection] = useState<TagPurgeInspection | null>(null);
+  const [retireSheet, setRetireSheet] = useState<TagRetireSheetState | null>(null);
+  const [purgeDialog, setPurgeDialog] = useState<TagPurgeDialogState | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [pendingUndo, setPendingUndo] = useState<PurgeUndoRecord | null>(null);
+  const [dismissedUndoKey, setDismissedUndoKey] = useState<string | null>(null);
 
   const todayISO = todayLocalISO();
 
@@ -237,7 +380,42 @@ export default function TagsScreen() {
     tag.name.toLocaleLowerCase().includes(needle)
   );
   const menuTag = tags.find(tag => tag.id === menuId) ?? null;
-  const deletingTag = tags.find(tag => tag.id === deletingId) ?? null;
+
+  const storedUndo = data?.undo ?? null;
+  const activeUndo = selectPurgeUndo(pendingUndo, storedUndo, dismissedUndoKey, Date.now());
+
+  useEffect(() => {
+    if (activeUndo === null) return;
+    const key = purgeUndoKey(activeUndo);
+    const remaining = Math.max(0, activeUndo.expiresAt - Date.now());
+    const timer = window.setTimeout(() => {
+      setDismissedUndoKey(key);
+      setPendingUndo(current => (current !== null && purgeUndoKey(current) === key ? null : current));
+    }, remaining);
+    return () => window.clearTimeout(timer);
+  }, [activeUndo]);
+
+  // The menu reads every link, including links on deleted transactions, before
+  // it offers 断联并归档 or 彻底删除. 已归档 rows show a word, not a count.
+  useEffect(() => {
+    if (db === null || menuId === null) {
+      setMenuInspection(null);
+      return;
+    }
+    let cancelled = false;
+    setMenuInspection(null);
+    inspectTagPurge(db, menuId).then(
+      inspection => {
+        if (!cancelled) setMenuInspection(inspection);
+      },
+      () => {
+        if (!cancelled) setMenuInspection(null);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [db, menuId]);
 
   const handleCreate = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -326,17 +504,87 @@ export default function TagsScreen() {
     }
   };
 
-  const handleDelete = async () => {
-    if (db === null || deletingTag === null || busy) return;
-    const tag = deletingTag;
+  const startRetire = (tag: Tag) => {
+    if (menuInspection === null) return;
+    setMenuId(null);
+    setRetireSheet({ tag, inspection: menuInspection });
+  };
+
+  const handleRetire = async () => {
+    if (db === null || retireSheet === null || busy) return;
+    const { tag } = retireSheet;
     setBusy(true);
     try {
-      await deleteTag(db, tag.id);
-      setDeletingId(null);
+      const result = await archiveTagWithUnlink(db, tag.id);
+      setRetireSheet(null);
+      clearToast();
       bump();
-      showToast(`已删除「${tag.name}」的关联 · 流水都还在`);
+      showToast(
+        `已断联并归档「${tag.name}」：${result.unlinked} 条关联已删除，流水都还在。`
+      );
     } catch (reason) {
-      showToast(`删除失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      showToast(`断联失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startPurge = async (tag: Tag) => {
+    if (db === null || busy) return;
+    setBusy(true);
+    setMenuId(null);
+    try {
+      const inspection = await inspectTagPurge(db, tag.id);
+      setPurgeDialog({ tag, inspection, blocked: !inspection.purgeable });
+    } catch (reason) {
+      showToast(`读取标签信息失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handlePurge = async () => {
+    if (db === null || purgeDialog === null || purgeDialog.blocked || busy) return;
+    const { tag } = purgeDialog;
+    setBusy(true);
+    try {
+      const result = await purgeTag(db, tag.id);
+      setPurgeDialog(null);
+      clearToast();
+      bump();
+      setPendingUndo(result.undo);
+      setDismissedUndoKey(null);
+    } catch (reason) {
+      showToast(`彻底删除失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (db === null || activeUndo === null || busy) return;
+    const restored = activeUndo;
+    const key = purgeUndoKey(restored);
+    if (Date.now() >= restored.expiresAt) {
+      setPendingUndo(current => (current !== null && purgeUndoKey(current) === key ? null : current));
+      setDismissedUndoKey(key);
+      showToast('撤销窗口已过');
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const result = await undoPurge(db, {
+        kind: restored.kind,
+        targetId: restored.targetId,
+        expiresAt: restored.expiresAt,
+      });
+      setPendingUndo(null);
+      setDismissedUndoKey(key);
+      bump();
+      showToast(`已恢复标签「${result.label}」，它回到「已归档」。`);
+    } catch (reason) {
+      showToast(`撤销失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
     }
@@ -536,30 +784,51 @@ export default function TagsScreen() {
         <TagMenuSheet
           tag={menuTag}
           count={usageCount(data?.usage ?? [], menuTag.id)}
+          inspection={menuInspection}
           onRename={() => startRename(menuTag)}
           onArchive={() => handleArchive(menuTag)}
           onUnarchive={() => handleUnarchive(menuTag)}
-          onDelete={() => {
-            setMenuId(null);
-            setDeletingId(menuTag.id);
-          }}
+          onRetire={() => startRetire(menuTag)}
+          onPurge={() => startPurge(menuTag)}
           onCancel={() => setMenuId(null)}
         />
       )}
 
-      {deletingTag !== null && (
-        <TagDeleteSheet
-          tag={deletingTag}
-          linkCount={usageCount(data?.usage ?? [], deletingTag.id)}
+      {retireSheet !== null && (
+        <TagRetireSheet
+          tagName={retireSheet.tag.name}
+          inspection={retireSheet.inspection}
           busy={busy}
-          onConfirm={handleDelete}
+          onConfirm={handleRetire}
           onCancel={() => {
-            if (!busy) setDeletingId(null);
+            if (!busy) setRetireSheet(null);
           }}
         />
       )}
 
-      {toast !== null && <Toast text={toast} />}
+      {purgeDialog !== null &&
+        (purgeDialog.blocked ? (
+          <TagPurgeBlockedSheet
+            tagName={purgeDialog.tag.name}
+            inspection={purgeDialog.inspection}
+            onClose={() => setPurgeDialog(null)}
+          />
+        ) : (
+          <TagPurgeSheet
+            tagName={purgeDialog.tag.name}
+            busy={busy}
+            onConfirm={handlePurge}
+            onCancel={() => {
+              if (!busy) setPurgeDialog(null);
+            }}
+          />
+        ))}
+
+      {activeUndo !== null && <PurgeUndoToast undo={activeUndo} onUndo={handleUndo} />}
+
+      {toast !== null && (
+        <Toast text={toast} className={activeUndo !== null ? 'toast--stacked' : undefined} />
+      )}
     </div>
   );
 }

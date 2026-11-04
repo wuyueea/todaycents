@@ -13,7 +13,7 @@ import type {
   ReportCategory,
   YearReport,
 } from '../../src/db/repos/reports';
-import { monthKeyOf, todayLocalISO } from '../../src/domain/date';
+import { freezeToday } from '../helpers/clock';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
 import { listAccounts } from '../../src/db/repos/accounts';
@@ -35,9 +35,12 @@ vi.mock('../../src/store/useDb', () => ({
   useQuery: () => ({ data: store.data, loading: store.data === null, error: store.error }),
 }));
 
-const TODAY = todayLocalISO();
-const CURRENT_MONTH = monthKeyOf(TODAY);
+// The fixtures below describe October 2026. The clock is frozen to the same day
+// so 报表 opens on that month however far the run date has travelled.
+const TODAY = new Date(2026, 9, 21, 10, 30);
+const CURRENT_MONTH = '2026-10';
 const YEAR = Number(CURRENT_MONTH.slice(0, 4));
+freezeToday(TODAY);
 
 const CATEGORIES: ReportCategory[] = [
   { categoryId: 'c-food', name: '饮食', cents: 48620, percent: 40 },

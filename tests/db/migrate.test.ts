@@ -19,7 +19,7 @@ describe('migrate', () => {
   it('records the latest schema version once', async () => {
     const db = await createTestDb();
     const row = await db.get<{ version: number }>('SELECT MAX(version) AS version FROM schema_migrations');
-    expect(row?.version).toBe(4);
+    expect(row?.version).toBe(6);
   });
   // Not in the brief's code block: the brief's DDL also requires these indexes.
   it('creates the v1 txn indexes', async () => {
@@ -33,6 +33,62 @@ describe('migrate', () => {
       'idx_txn_project',
       'idx_txn_transfer',
     ]);
+  });
+});
+
+describe('migration v6: purge_undo retires category_undo', () => {
+  it('creates the single-row purge undo table and drops the old category undo', async () => {
+    const db = await createTestDb();
+    const columns = await db.all<{ name: string }>('PRAGMA table_info(purge_undo)');
+    expect(columns.map(column => column.name)).toEqual([
+      'id',
+      'kind',
+      'target_id',
+      'label',
+      'payload_json',
+      'expires_at',
+      'created_at',
+    ]);
+    expect(await db.all('PRAGMA table_info(category_undo)')).toEqual([]);
+
+    await expect(
+      db.run(
+        `INSERT INTO purge_undo
+           (id, kind, target_id, label, payload_json, expires_at, created_at)
+         VALUES (2, 'tag', 't', '标签', '{}', 0, '2026-01-01T00:00:00.000Z')`
+      )
+    ).rejects.toThrow();
+    await expect(
+      db.run(
+        `INSERT INTO purge_undo
+           (id, kind, target_id, label, payload_json, expires_at, created_at)
+         VALUES (1, 'project', 'p', '项目', '{}', 0, '2026-01-01T00:00:00.000Z')`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('replays the v6 SQL over a v5 database shape', async () => {
+    const db = await createTestDb();
+    await db.run('DROP TABLE purge_undo');
+    await db.exec(
+      `CREATE TABLE category_undo (
+         id INTEGER PRIMARY KEY CHECK (id = 1),
+         category_id TEXT NOT NULL,
+         category_name TEXT NOT NULL,
+         moves_json TEXT NOT NULL,
+         expires_at INTEGER NOT NULL,
+         archived_at TEXT NOT NULL
+       )`
+    );
+
+    const v6 = MIGRATIONS.find(migration => migration.version === 6);
+    if (v6 === undefined) throw new Error('migration v6 is missing');
+    await db.exec(v6.sql);
+
+    expect(await db.all('PRAGMA table_info(category_undo)')).toEqual([]);
+    expect((await db.all<{ name: string }>('PRAGMA table_info(purge_undo)')).map(c => c.name)).toContain(
+      'payload_json'
+    );
   });
 });
 
@@ -53,7 +109,7 @@ describe('migrate idempotency', () => {
     const versions = await db.all<{ version: number }>(
       'SELECT version FROM schema_migrations ORDER BY version'
     );
-    expect(versions.map(r => r.version)).toEqual([1, 2, 3, 4]);
+    expect(versions.map(r => r.version)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 });
 
@@ -115,6 +171,7 @@ describe('migration v2: system 未分类 category', () => {
     // Every table a later migration creates has to go too, or re-applying the
     // chain would trip over its own CREATE TABLE.
     await db.run('DROP TABLE IF EXISTS recurring_hint');
+    await db.run('DROP TABLE IF EXISTS purge_undo');
     await db.run('DELETE FROM category WHERE id = ?', [SYSTEM_ID]);
     await db.run(
       "INSERT INTO category (id, parent_id, name, kind, sort, archived_at) VALUES ('legacy-category', NULL, '旧分类', 'expense', 0, NULL)"
@@ -172,6 +229,87 @@ describe('transaction', () => {
 
     const row = await db.get('SELECT * FROM app_meta WHERE key = ?', ['k']);
     expect(row).toBeUndefined();
+  });
+
+  // One save is one unit of work: a write helper that opens a transaction must
+  // be usable inside a caller's transaction instead of refusing to run at all.
+  it('joins an open transaction instead of beginning a second one', async () => {
+    const db = await createTestDb();
+
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['outer', '1']);
+      await tx.transaction(async inner => {
+        await inner.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['inner', '2']);
+      });
+    });
+
+    const rows = await db.all<{ key: string }>(
+      "SELECT key FROM app_meta WHERE key IN ('outer', 'inner') ORDER BY key"
+    );
+    expect(rows.map(row => row.key)).toEqual(['inner', 'outer']);
+  });
+
+  it('rolls the outer transaction back when a joined call fails', async () => {
+    const db = await createTestDb();
+    const boom = new Error('inner boom');
+
+    await expect(
+      db.transaction(async tx => {
+        await tx.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['outer', '1']);
+        await tx.transaction(async inner => {
+          await inner.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['inner', '2']);
+          throw boom;
+        });
+      })
+    ).rejects.toBe(boom);
+
+    // A joined call shares the outer transaction's fate: neither row survives.
+    const rows = await db.all<{ key: string }>(
+      "SELECT key FROM app_meta WHERE key IN ('outer', 'inner')"
+    );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('rolls a joined write back when the outer callback fails afterwards', async () => {
+    const db = await createTestDb();
+
+    await expect(
+      db.transaction(async tx => {
+        await tx.transaction(async inner => {
+          await inner.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['inner', '1']);
+        });
+        throw new Error('outer boom');
+      })
+    ).rejects.toThrow('outer boom');
+
+    const rows = await db.all<{ key: string }>("SELECT key FROM app_meta WHERE key = 'inner'");
+    expect(rows).toHaveLength(0);
+  });
+
+  it('still begins a real transaction after an earlier one rolled back', async () => {
+    const db = await createTestDb();
+
+    await expect(
+      db.transaction(async tx => {
+        await tx.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['doomed', '1']);
+        throw new Error('first rollback');
+      })
+    ).rejects.toThrow('first rollback');
+
+    // If the depth counter failed to return to zero, this call would silently
+    // join a transaction that is no longer open: the INSERT would autocommit
+    // and survive the throw. Nothing else in the suite would notice.
+    await expect(
+      db.transaction(async tx => {
+        await tx.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['also-doomed', '2']);
+        throw new Error('second rollback');
+      })
+    ).rejects.toThrow('second rollback');
+
+    const rows = await db.all<{ key: string }>(
+      "SELECT key FROM app_meta WHERE key IN ('doomed', 'also-doomed')"
+    );
+    expect(rows).toHaveLength(0);
   });
 });
 
@@ -251,6 +389,7 @@ describe('migration v3: project', () => {
     await db.run('DROP INDEX idx_txn_project');
     await db.run('DROP TABLE project');
     await db.run('DROP TABLE IF EXISTS recurring_hint');
+    await db.run('DROP TABLE IF EXISTS purge_undo');
     await db.run(
       "INSERT INTO category (id, parent_id, name, kind, sort, archived_at) VALUES ('legacy-category', NULL, '旧分类', 'expense', 0, NULL)"
     );
@@ -270,7 +409,7 @@ describe('migration v3: project', () => {
     );
     // The upgrade runs every pending migration, so v3 brings the database all
     // the way to the current head, not to 3.
-    expect(version?.version).toBe(4);
+    expect(version?.version).toBe(6);
   });
 });
 
@@ -365,9 +504,10 @@ describe('migration v4: recurring_hint', () => {
       `INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, note, created_at)
        VALUES ('t-legacy', '2026-09-01', 'a-legacy', -5900, 'expense', '', '2026-09-01T00:00:00.000Z')`
     );
-    // Rewind to v3: drop the v4 table and its migration record only.
-    await db.run('DELETE FROM schema_migrations WHERE version = 4');
+    // Rewind to v3: drop the v4 table, the v5 table and their migration records.
+    await db.run('DELETE FROM schema_migrations WHERE version >= 4');
     await db.run('DROP TABLE recurring_hint');
+    await db.run('DROP TABLE IF EXISTS purge_undo');
 
     await migrate(db);
 
@@ -386,6 +526,6 @@ describe('migration v4: recurring_hint', () => {
     const version = await db.get<{ version: number }>(
       'SELECT MAX(version) AS version FROM schema_migrations'
     );
-    expect(version?.version).toBe(4);
+    expect(version?.version).toBe(6);
   });
 });

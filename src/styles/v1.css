@@ -128,6 +128,19 @@ body {
     0 6px 14px rgba(201, 142, 62, 0.3);
 }
 
+/* The stored category-delete undo is shown on the four tabs. It must clear
+   the floating dock, unlike a full-screen page's toast at 26px. On 流水 the
+   month switch sits at 92px + safe and is 44px tall, so 48px above the dock
+   keeps the bar clear of those buttons too. */
+.toast--above-dock {
+  bottom: calc(var(--v1-dock) + var(--v1-dock-gap) * 2 + var(--safe-area-bottom) + 48px);
+}
+
+/* A failure line stacks above that undo bar instead of covering its action. */
+.toast--above-dock-stacked {
+  bottom: calc(var(--v1-dock) + var(--v1-dock-gap) * 2 + var(--safe-area-bottom) + 78px);
+}
+
 /* ---------- 今天 ---------- */
 
 .today-screen {
@@ -1768,6 +1781,20 @@ body {
   color: var(--v1-t3);
   font-family: var(--font-num);
   font-size: 18px;
+}
+
+/* A waiting candidate is a count, not a second title: quiet amber pill. */
+.settings-screen--v1 .settings-row__badge {
+  flex: none;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--v1-amb-soft);
+  color: var(--v1-amb-deep);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  line-height: 16px;
+  white-space: nowrap;
 }
 
 .settings-screen--v1 .settings-row--danger {

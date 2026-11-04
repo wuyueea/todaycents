@@ -3,9 +3,13 @@ import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import SettingsScreen, { ResetConfirmSheet, StorageRow } from '../../src/screens/SettingsScreen';
 
-// The screen no longer reads the database: every row is a name and a link.
+// Every row is a name and a link; the fixed-cost row is the one exception,
+// because a waiting candidate must not depend on the owner opening the page.
+const pendingFixedCosts = vi.hoisted(() => ({ count: 0 }));
+
 vi.mock('../../src/store/useDb', () => ({
   useDb: () => ({ db: { fake: true }, revision: 0, bump: () => {}, error: null }),
+  useQuery: () => ({ data: pendingFixedCosts.count, loading: false, error: null }),
 }));
 
 function renderSettings(state?: unknown): string {
@@ -39,6 +43,24 @@ describe('SettingsScreen', () => {
     expect(html).not.toContain('还没有备份');
     expect(html).not.toContain('个标签');
     expect(html).not.toContain('上次备份');
+  });
+
+  it('shows how many fixed-cost candidates are waiting', () => {
+    pendingFixedCosts.count = 2;
+
+    const html = renderSettings();
+    const row =
+      html.match(/<a[^>]*href="\/settings\/fixed"[^>]*>[\s\S]*?<\/a>/)?.[0] ?? '';
+
+    expect(row).toContain('固定支出');
+    expect(row).toContain('2 条待确认');
+    pendingFixedCosts.count = 0;
+  });
+
+  it('keeps the fixed-cost row plain when nothing is waiting', () => {
+    const html = renderSettings();
+
+    expect(html).not.toContain('条待确认');
   });
 
   it('keeps the three groups and their links, in order', () => {
@@ -92,6 +114,66 @@ describe('SettingsScreen', () => {
 
     expect(html).toContain('已导入「记账本-20261020-2214.ledger」 · 231 笔');
     expect(html).toMatch(/class="toast"[^>]*role="status"/);
+  });
+
+  it('warns when the automatic before-copy fell back to the app cache', () => {
+    const html = renderSettings({
+      imported: {
+        fileName: 'x.ledger',
+        rows: 231,
+        beforeDestination: { kind: 'cache' },
+      },
+    });
+
+    expect(html).toContain('导入前的备份在应用缓存，系统可能清理');
+  });
+
+  it('does not repeat a folder the confirmation already promised', () => {
+    const html = renderSettings({
+      imported: {
+        fileName: 'x.ledger',
+        rows: 231,
+        beforeDestination: { kind: 'folder', folderName: 'Books' },
+      },
+    });
+
+    expect(html).toContain('已导入「x.ledger」 · 231 笔');
+    expect(html).not.toContain('导入前的备份');
+  });
+
+  it('ignores an unreadable before-copy location', () => {
+    const html = renderSettings({
+      imported: {
+        fileName: 'x.ledger',
+        rows: 231,
+        beforeDestination: { kind: 'folder', folderName: 42 },
+      },
+    });
+
+    expect(html).toContain('已导入「x.ledger」 · 231 笔');
+    expect(html).not.toContain('导入前的备份');
+  });
+
+  it('names the repaired project links the backup screen handed over', () => {
+    const html = renderSettings({
+      imported: {
+        fileName: '记账本-20261020-2214.ledger',
+        rows: 231,
+        clearedProjectRefs: 2,
+      },
+    });
+
+    expect(html).toContain('231 笔；2 笔流水的项目在文件里找不到，已清空');
+  });
+
+  it('treats a nonsense repaired count as nothing repaired', () => {
+    for (const bad of ['2', -1, 2.5, Number.NaN]) {
+      const html = renderSettings({
+        imported: { fileName: 'x.ledger', rows: 231, clearedProjectRefs: bad },
+      });
+      expect(html).toContain('已导入「x.ledger」 · 231 笔');
+      expect(html).not.toContain('项目在文件里找不到');
+    }
   });
 
   it('ignores a malformed router state instead of printing it', () => {
@@ -152,9 +234,15 @@ describe('数据 group', () => {
 });
 
 describe('ResetConfirmSheet', () => {
-  it('states the real counts, what survives and the automatic backup', () => {
+  it('states the real counts, what survives and where the automatic backup goes', () => {
     const html = render(
-      <ResetConfirmSheet counts={RESET_COUNTS} busy={false} onConfirm={() => {}} onCancel={() => {}} />
+      <ResetConfirmSheet
+        counts={RESET_COUNTS}
+        folderName="Books"
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
     );
 
     expect(html).toContain('清除所有数据');
@@ -162,8 +250,9 @@ describe('ResetConfirmSheet', () => {
     // The starter set survives, exactly as a first launch writes it.
     expect(html).toContain('只留下 3 个账户和 12 个分类');
     expect(html).toContain('不能撤销');
-    // And a backup is written before anything is deleted.
+    // And a backup is written before anything is deleted, into the chosen folder.
     expect(html).toContain('会先把现在的账本写成一份备份文件，再清除');
+    expect(html).toContain('这一份会存到「Books」文件夹。');
 
     expect(html).toContain('确认清除');
     expect(html).toContain('取消');
@@ -173,9 +262,30 @@ describe('ResetConfirmSheet', () => {
     expect(html).toMatch(/aria-modal="true"/);
   });
 
+  it('warns when the automatic backup can only go to the app cache', () => {
+    const html = render(
+      <ResetConfirmSheet
+        counts={RESET_COUNTS}
+        folderName={null}
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('只会放进应用缓存，系统可能清理');
+    expect(html).not.toContain('这一份会存到');
+  });
+
   it('makes the scrim a cancel, so only the danger button can go forward', () => {
     const html = render(
-      <ResetConfirmSheet counts={RESET_COUNTS} busy={false} onConfirm={() => {}} onCancel={() => {}} />
+      <ResetConfirmSheet
+        counts={RESET_COUNTS}
+        folderName="Books"
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
     );
 
     // A plain div: tapping it can only reach onCancel, never onConfirm.
@@ -187,7 +297,13 @@ describe('ResetConfirmSheet', () => {
 
   it('disables both buttons while the wipe is running', () => {
     const html = render(
-      <ResetConfirmSheet counts={RESET_COUNTS} busy onConfirm={() => {}} onCancel={() => {}} />
+      <ResetConfirmSheet
+        counts={RESET_COUNTS}
+        folderName="Books"
+        busy
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
     );
 
     expect(html.match(/<button[^>]*disabled/g)).toHaveLength(2);

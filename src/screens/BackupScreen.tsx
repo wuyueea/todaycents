@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { Db } from '../db/driver';
@@ -12,11 +12,14 @@ import {
   importFailureCopy,
   importSummary,
   lastBackupTitle,
+  plannedCopyNote,
 } from '../backup/format';
-import { confirmImport, exportBackup, prepareImport } from '../backup/flow';
-import type { PreparedImport } from '../backup/flow';
-import { countTxnRows, readBackupMeta } from '../backup/meta';
-import { deviceFileWriter } from '../backup/device';
+import { confirmImport, exportBackup, exportMetaAction, prepareImport } from '../backup/flow';
+import type { ExportResult, PreparedImport } from '../backup/flow';
+import { countTxnRows, readBackupMeta, recordBackupMeta } from '../backup/meta';
+import { cachedBackups, deviceFileWriter } from '../backup/device';
+import type { CachedBackup } from '../backup/device';
+import { deviceFolder } from '../storage/folder';
 import { Toast, useToast } from '../components/Toast';
 import { useDialogFocus } from '../components/useDialogFocus';
 import { useDb, useQuery } from '../store/useDb';
@@ -24,11 +27,14 @@ import { useDb, useQuery } from '../store/useDb';
 /**
  * 备份与恢复: one primary action (export) and one secondary action (import).
  *
- * Export writes a cache file and opens the system share sheet; on success it
- * records app_meta and shows a toast, but stays on this screen. Import goes
- * through the file picker, validates before anything is written, and opens a
- * confirmation sheet with both row counts. The before-copy and the atomic
- * replace live in flow.ts; this file owns only the UI states.
+ * Export writes a folder file when one is available; otherwise it hands a
+ * cache file to the system share sheet and asks whether the other app saved
+ * it. Only a file that really exists — or a share the owner confirms — updates
+ * app_meta, because 上次备份 is a promise, not a button press. The cache list
+ * below keeps every unconfirmed share reachable. Import goes through the file
+ * picker, validates before anything is written, and opens a confirmation sheet
+ * with both row counts. The before-copy and the atomic replace live in flow.ts;
+ * this file owns only the UI states.
  *
  * Plugins are never named here. device.ts imports them dynamically, so this
  * screen renders in Node exactly as it does on a phone.
@@ -43,9 +49,10 @@ export async function loadBackupScreenData(db: Db): Promise<BackupScreenData> {
   return { meta: await readBackupMeta(db), localRows: await countTxnRows(db) };
 }
 
-/** The two bottom sheets this screen can show. */
+/** The three bottom sheets this screen can show. */
 type SheetState =
   | { kind: 'confirm'; prepared: PreparedImport }
+  | { kind: 'export-confirm'; result: ExportResult }
   | { kind: 'failure'; copy: ImportFailureCopy; fileName: string; fileMeta: string };
 
 export interface ImportConfirmSheetProps {
@@ -56,6 +63,8 @@ export interface ImportConfirmSheetProps {
   localRows: number;
   exportedAt: string;
   now: Date;
+  /** The folder the before-copy will use; null means the app cache. */
+  folderName: string | null;
   busy: boolean;
   onConfirm(): void;
   onCancel(): void;
@@ -74,6 +83,7 @@ export function ImportConfirmSheet({
   localRows,
   exportedAt,
   now,
+  folderName,
   busy,
   onConfirm,
   onCancel,
@@ -109,8 +119,7 @@ export function ImportConfirmSheet({
 
         <p className="sheet__text">{importSummary({ fileRows, localRows })}</p>
         <p className="sheet__note">
-          按下按钮之后，会先把现在的账本导出成一份备份，再覆盖。这一份放在「设置 ›
-          存储」的位置。
+          按下按钮之后，会先把现在的账本导出成一份备份，再覆盖。{plannedCopyNote(folderName)}
         </p>
 
         <button
@@ -186,15 +195,188 @@ export function ImportFailureSheet({
   );
 }
 
+export interface ExportConfirmSheetProps {
+  fileName: string;
+  bytes: number;
+  busy: boolean;
+  onSaved(): void;
+  onNotSaved(): void;
+}
+
+/**
+ * The question the share sheet cannot answer. A resolved Share.share means
+ * "another app took the file", not "it was saved"; only the owner knows which
+ * happened. 没有保存 is the default — closing the sheet records nothing.
+ */
+export function ExportConfirmSheet({
+  fileName,
+  bytes,
+  busy,
+  onSaved,
+  onNotSaved,
+}: ExportConfirmSheetProps) {
+  const panelRef = useDialogFocus({
+    onClose: onNotSaved,
+    initial: 'last',
+    canClose: () => !busy,
+  });
+
+  return (
+    <div
+      className="sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="export-confirm-title"
+    >
+      <div
+        className="sheet__scrim"
+        aria-hidden="true"
+        onClick={busy ? undefined : onNotSaved}
+      />
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
+        <div className="sheet__head">
+          <h2 className="sheet__title" id="export-confirm-title">
+            备份文件已生成
+          </h2>
+        </div>
+
+        <div className="sheet__file">
+          <div className="sheet__file-name">{fileName}</div>
+          <div className="sheet__file-meta">{fileSizeText(bytes)}</div>
+        </div>
+
+        <p className="sheet__text">文件已经交给系统分享面板。它保存好了吗？</p>
+        <p className="sheet__note">
+          只有确认保存过，才会更新「上次备份」。没有保存的话，文件还在应用缓存里，可以在下面另存。
+        </p>
+
+        <button
+          className="sheet__primary"
+          type="button"
+          onClick={onSaved}
+          disabled={busy}
+        >
+          已保存
+        </button>
+        <button
+          className="sheet__secondary"
+          type="button"
+          onClick={onNotSaved}
+          disabled={busy}
+        >
+          没有保存
+        </button>
+      </div>
+    </div>
+  );
+}
+
+export interface CachedBackupListProps {
+  files: CachedBackup[];
+  now: Date;
+  busy: boolean;
+  onShare(file: CachedBackup): void;
+}
+
+/**
+ * The rescue list for shares that were cancelled or never confirmed. These
+ * files live in the app cache, which the system may clear at any time, so each
+ * row offers the only exit that matters: hand it to the share sheet again.
+ */
+export function CachedBackupList({
+  files,
+  now,
+  busy,
+  onShare,
+}: CachedBackupListProps) {
+  if (files.length === 0) return null;
+
+  return (
+    <section className="backup-cache" aria-labelledby="backup-cache-title">
+      <h2 className="backup-cache__title" id="backup-cache-title">
+        应用缓存中的备份
+      </h2>
+      <p className="backup-cache__note">
+        这些文件只在应用缓存里，系统可能清理。要留住，请点「另存」；另存只是把文件救出去，不会更新「上次备份」。
+      </p>
+      <ul className="backup-cache__list">
+        {files.map((file) => (
+          <li className="backup-cache__row" key={file.uri === '' ? file.name : file.uri}>
+            <div className="backup-cache__body">
+              <div className="backup-cache__name">{file.name}</div>
+              <div className="backup-cache__meta">
+                {fileSizeText(file.bytes)} ·{' '}
+                {formatBackupTime(new Date(file.modifiedAt).toISOString(), now)}
+              </div>
+            </div>
+            <button
+              className="backup-cache__share"
+              type="button"
+              onClick={() => onShare(file)}
+              disabled={busy}
+            >
+              另存
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export default function BackupScreen() {
   const { db, bump } = useDb();
   const navigate = useNavigate();
   const query = useQuery<BackupScreenData>(loadBackupScreenData, []);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [sheet, setSheet] = useState<SheetState | null>(null);
+  const [folderName, setFolderName] = useState<string | null>(null);
+  const [cached, setCached] = useState<CachedBackup[]>([]);
   const { toast, showToast } = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
+
+  // The import/reset sheets state where the automatic copy will go before the
+  // owner commits. An unavailable folder is not an error; it is the cache path.
+  useEffect(() => {
+    let alive = true;
+    deviceFolder.current().then(
+      (folder) => {
+        if (alive) setFolderName(folder?.name ?? null);
+      },
+      () => {
+        if (alive) setFolderName(null);
+      }
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Shares that were cancelled or never confirmed leave a real file in the
+  // cache; list them so the owner can still get it out.
+  useEffect(() => {
+    let alive = true;
+    cachedBackups.list().then(
+      (files) => {
+        if (alive) setCached(files);
+      },
+      () => {
+        if (alive) setCached([]);
+      }
+    );
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const refreshCache = () => {
+    cachedBackups.list().then(setCached, () => setCached([]));
+  };
+
+  const cacheNotice = (prefix: string): string =>
+    `${prefix}文件还在应用缓存里，系统可能清理；如果下面列出了它，可以点「另存」。`;
 
   const data = query.data;
   const now = new Date();
@@ -211,13 +393,101 @@ export default function BackupScreen() {
     if (db === null || busy) return;
     setBusy(true);
     setStatus(null);
+    setNotice(null);
     try {
       const result = await exportBackup(db, deviceFileWriter, new Date());
-      showToast(exportToast(result));
+      refreshCache();
+
+      const action = exportMetaAction(result.destination);
+      if (action === 'none') {
+        setNotice(cacheNotice('已取消导出，没有记录这次备份。'));
+        return;
+      }
+
+      // A share only handed the file to another app. Ask before promising
+      // that a backup exists; 没有保存 records nothing.
+      if (action === 'ask') {
+        setSheet({ kind: 'export-confirm', result });
+        return;
+      }
+
+      try {
+        await recordBackupMeta(db, result.meta);
+      } catch (reason) {
+        setStatus(
+          `文件已生成，但没能记下这次备份：${
+            reason instanceof Error ? reason.message : String(reason)
+          }`
+        );
+        return;
+      }
+
       // app_meta changed; refresh the last-backup block without leaving.
       bump();
+      showToast(
+        exportToast({
+          fileName: result.fileName,
+          bytes: result.bytes,
+          folderName:
+            result.destination.kind === 'folder'
+              ? result.destination.folderName
+              : undefined,
+        })
+      );
     } catch (reason) {
       setStatus(`导出失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleExportSaved = async () => {
+    if (db === null || sheet?.kind !== 'export-confirm' || busy) return;
+    const { result } = sheet;
+    // Belt and braces: the button is 已保存, but only a share that was really
+    // confirmed may become 上次备份.
+    if (exportMetaAction(result.destination, true) !== 'record') {
+      setSheet(null);
+      return;
+    }
+    setBusy(true);
+    try {
+      await recordBackupMeta(db, result.meta);
+      setSheet(null);
+      bump();
+      showToast(exportToast({ ...result, recorded: true }));
+    } catch (reason) {
+      setSheet(null);
+      setStatus(
+        `文件已生成，但没能记下这次备份：${
+          reason instanceof Error ? reason.message : String(reason)
+        }`
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleExportNotSaved = () => {
+    if (busy) return;
+    setSheet(null);
+    setNotice(cacheNotice('没有记录这次备份。'));
+  };
+
+  const handleShareCached = async (file: CachedBackup) => {
+    if (busy) return;
+    setBusy(true);
+    setStatus(null);
+    setNotice(null);
+    try {
+      const outcome = await cachedBackups.share(file);
+      if (outcome === 'canceled') {
+        setNotice('已取消分享，文件还在应用缓存里。');
+      } else {
+        showToast(`已把「${file.name}」交给分享面板`);
+      }
+    } catch (reason) {
+      setStatus(`分享失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
     }
@@ -268,7 +538,14 @@ export default function BackupScreen() {
       bump();
       navigate('/settings', {
         replace: true,
-        state: { imported: { fileName: result.fileName, rows: result.rows } },
+        state: {
+          imported: {
+            fileName: result.fileName,
+            rows: result.rows,
+            clearedProjectRefs: result.clearedProjectRefs,
+            beforeDestination: result.beforeDestination,
+          },
+        },
       });
     } catch (reason) {
       setSheet({
@@ -345,6 +622,19 @@ export default function BackupScreen() {
         </p>
       )}
 
+      {notice !== null && (
+        <p className="backup-note" role="status">
+          {notice}
+        </p>
+      )}
+
+      <CachedBackupList
+        files={cached}
+        now={now}
+        busy={busy}
+        onShare={handleShareCached}
+      />
+
       {sheet?.kind === 'confirm' && (
         <ImportConfirmSheet
           fileName={sheet.prepared.fileName}
@@ -354,9 +644,20 @@ export default function BackupScreen() {
           localRows={sheet.prepared.localRows}
           exportedAt={sheet.prepared.exportedAt}
           now={now}
+          folderName={folderName}
           busy={busy}
           onConfirm={handleConfirm}
           onCancel={closeSheet}
+        />
+      )}
+
+      {sheet?.kind === 'export-confirm' && (
+        <ExportConfirmSheet
+          fileName={sheet.result.fileName}
+          bytes={sheet.result.bytes}
+          busy={busy}
+          onSaved={handleExportSaved}
+          onNotSaved={handleExportNotSaved}
         />
       )}
 

@@ -72,19 +72,19 @@ function rowGlyph(row: TxnRow): string {
 /**
  * The muted second line.
  *
- * A normal row shows its note, or the account when there is no note, so the
- * line always carries a second fact. A transfer leg has no editor and no
- * category: it names its side and account instead, which is what tells the
- * two legs apart. An adjustment says why it is not spending.
+ * A normal row reads account then note, separated by a plain space. The ledger
+ * page uses the same order, so the two lists scan the same way. A transfer leg
+ * has no editor and no category: it names its side and account instead, which
+ * is what tells the two legs apart. An adjustment says why it is not spending.
  */
 function rowMeta(row: TxnRow): string {
   if (row.direction === 'transfer') {
     const leg = row.amountCents < 0 ? '转出' : '转入';
-    const note = row.note !== '' ? ` · ${row.note}` : '';
+    const note = row.note !== '' ? ` ${row.note}` : '';
     return `${leg} · ${row.accountName}${note}`;
   }
   if (row.direction === 'adjust') return `${row.accountName} · 不算支出也不算收入`;
-  return row.note !== '' ? `${row.accountName} · ${row.note}` : row.accountName;
+  return row.note !== '' ? `${row.accountName} ${row.note}` : row.accountName;
 }
 
 /**

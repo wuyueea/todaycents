@@ -4,10 +4,11 @@ import { MemoryRouter } from 'react-router-dom';
 import ProjectDetailScreen, {
   ProjectArchiveSheet,
   loadProjectDetailData,
+  writeProjectEdit,
 } from '../../src/screens/ProjectDetailScreen';
 import type { ProjectDetailData } from '../../src/screens/ProjectDetailScreen';
 import type { Project } from '../../src/db/repos/projects';
-import { createProject, setTxnProject } from '../../src/db/repos/projects';
+import { createProject, listProjects, setTxnProject } from '../../src/db/repos/projects';
 import { createExpense } from '../../src/db/repos/txns';
 import type { TxnRow } from '../../src/db/repos/txns';
 import { createAccount, listAccounts } from '../../src/db/repos/accounts';
@@ -159,6 +160,70 @@ describe('loadProjectDetailData', () => {
     expect(data.detail.recentTxns.map(row => row.id)).toEqual([train, hotpot]);
     // The unrelated row is not the project's, whatever its date.
     expect(data.detail.recentTxns.some(row => row.id === stray)).toBe(false);
+  });
+});
+
+describe('writeProjectEdit', () => {
+  async function fixture(budgetCents: number | null = null) {
+    const db = await createTestDb();
+    await seedDefaults(db);
+    const id = await createProject(db, { name: '国庆去成都', budgetCents });
+    const project = (await listProjects(db)).find(candidate => candidate.id === id)!;
+    return { db, project, id };
+  }
+
+  it('writes the name and the budget together', async () => {
+    const { db, project, id } = await fixture(null);
+
+    const written = await writeProjectEdit(db, project, {
+      name: '国庆去重庆',
+      budgetCents: 250000,
+    });
+
+    expect(written).toBe(true);
+    const stored = (await listProjects(db)).find(candidate => candidate.id === id)!;
+    expect(stored.name).toBe('国庆去重庆');
+    expect(stored.budgetCents).toBe(250000);
+  });
+
+  it('says nothing changed instead of rewriting identical values', async () => {
+    const { db, project } = await fixture(200000);
+
+    const written = await writeProjectEdit(db, project, {
+      name: project.name,
+      budgetCents: project.budgetCents,
+    });
+
+    expect(written).toBe(false);
+  });
+
+  // Two columns, one save: the old code renamed first and then set the budget,
+  // so a failed budget write left the new name stored under a 保存失败 message.
+  it('keeps the old name when the budget write fails', async () => {
+    const { db, project, id } = await fixture(null);
+
+    const originalRun = db.run.bind(db);
+    let injected = false;
+    db.run = async (sql, params = []) => {
+      if (injected && sql.includes('UPDATE project SET budget_cents')) {
+        injected = false;
+        throw new Error('injected failure');
+      }
+      return originalRun(sql, params);
+    };
+
+    try {
+      injected = true;
+      await expect(
+        writeProjectEdit(db, project, { name: '国庆去重庆', budgetCents: 250000 })
+      ).rejects.toThrow('injected failure');
+
+      const stored = (await listProjects(db)).find(candidate => candidate.id === id)!;
+      expect(stored.name).toBe('国庆去成都');
+      expect(stored.budgetCents).toBeNull();
+    } finally {
+      db.run = originalRun;
+    }
   });
 });
 

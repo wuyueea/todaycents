@@ -258,6 +258,8 @@ describe('TodayScreen', () => {
 
     expect(card(html, 'txn-newest')).toContain('饮食');
     expect(card(html, 'txn-newest')).toContain('饭卡');
+    expect(card(html, 'txn-newest')).toContain('饭卡 午饭');
+    expect(card(html, 'txn-newest')).not.toContain('饭卡 · 午饭');
     expect(card(html, 'txn-newest')).toContain('午饭');
     expect(card(html, 'txn-newest')).toContain('−12.30');
     expect(card(html, 'txn-middle')).toContain('未分类');
@@ -292,7 +294,7 @@ describe('TodayScreen', () => {
     ]);
     const html = renderScreen();
 
-    // The muted line is 「note/account · project」: the name is appended last.
+    // The muted line is 「account note · project」: the name is appended last.
     expect(card(html, 'txn-project')).toContain('高铁回程');
     expect(card(html, 'txn-project')).toContain('· 国庆去成都');
     expect(card(html, 'txn-dead')).toContain('微信');

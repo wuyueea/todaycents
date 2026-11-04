@@ -4,6 +4,7 @@ import {
   applyAmountKey,
   formatAmountDraft,
 } from './AmountKeypad';
+import { registerBackHandler } from './backButton';
 
 export interface AmountKeypadFieldProps {
   /** DOM id so the visible label still points at the control. */
@@ -67,8 +68,14 @@ export function AmountKeypadField({
         first.focus();
       }
     };
+    // The Android back key closes the keypad instead of the screen behind it.
+    const releaseBack = registerBackHandler(() => {
+      setOpen(false);
+      return true;
+    });
     document.addEventListener('keydown', onKeyDown);
     return () => {
+      releaseBack();
       document.removeEventListener('keydown', onKeyDown);
       fieldRef.current?.focus();
     };

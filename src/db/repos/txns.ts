@@ -178,8 +178,8 @@ async function insertTxn(
 /**
  * Creates a spending row and returns its id.
  *
- * No transaction is opened: callers such as submitDay already run inside one,
- * and the driver's transactions are not re-entrant. Validation runs
+ * No transaction is opened: a caller that writes several tables wraps them in
+ * one transaction, and this INSERT simply runs inside it. Validation runs
  * before the INSERT, so a rejected amount or date writes nothing.
  */
 export async function createExpense(db: Db, input: CreateExpenseInput): Promise<string> {

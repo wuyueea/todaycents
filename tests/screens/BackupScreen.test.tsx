@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import BackupScreen, {
+  CachedBackupList,
+  ExportConfirmSheet,
   ImportConfirmSheet,
   ImportFailureSheet,
 } from '../../src/screens/BackupScreen';
@@ -58,6 +60,7 @@ const confirmProps = {
   // +08:00 string changes to 14:14 when CI runs in UTC.
   exportedAt: new Date(2026, 9, 20, 22, 14).toISOString(),
   now: NOW,
+  folderName: 'Books',
   busy: false,
   onConfirm: () => {},
   onCancel: () => {},
@@ -123,10 +126,75 @@ describe('ImportConfirmSheet', () => {
     expect(html).toContain('会整体替换');
     expect(html).toContain('当前的记录不保留，也不能撤销');
     expect(html).toContain('会先把现在的账本导出成一份备份');
+    expect(html).toContain('这一份会存到「Books」文件夹。');
     expect(html).toContain('覆盖并导入');
     expect(html).toContain('取消');
     expect(html).toContain('sheet__danger');
     expect(html).toMatch(/role="dialog"/);
+  });
+
+  it('warns that a cache-only copy may be cleared, instead of naming a folder', () => {
+    const html = render(<ImportConfirmSheet {...confirmProps} folderName={null} />);
+
+    expect(html).toContain('只会放进应用缓存，系统可能清理');
+    expect(html).toContain('请先到「设置 › 存储」允许访问');
+    expect(html).not.toContain('这一份会存到');
+  });
+});
+
+describe('ExportConfirmSheet', () => {
+  it('asks whether the share was saved and records nothing by default', () => {
+    const html = render(
+      <ExportConfirmSheet
+        fileName="记账本-20261020-2214.ledger"
+        bytes={46 * 1024}
+        busy={false}
+        onSaved={() => {}}
+        onNotSaved={() => {}}
+      />
+    );
+
+    expect(html).toContain('备份文件已生成');
+    expect(html).toContain('记账本-20261020-2214.ledger');
+    expect(html).toContain('46 KB');
+    expect(html).toContain('它保存好了吗？');
+    expect(html).toContain('只有确认保存过，才会更新「上次备份」');
+    expect(html).toContain('已保存');
+    expect(html).toContain('没有保存');
+    expect(html).toContain('sheet__primary');
+    expect(html).toContain('sheet__secondary');
+    expect(html).toMatch(/role="dialog"/);
+  });
+});
+
+describe('CachedBackupList', () => {
+  const files = [
+    {
+      name: '记账本-20261023-1255.ledger',
+      uri: 'file:///cache/a.ledger',
+      bytes: 46 * 1024,
+      modifiedAt: new Date(2026, 9, 23, 12, 55).getTime(),
+    },
+  ];
+
+  it('names each cache file, its size and time, with a way out', () => {
+    const html = render(
+      <CachedBackupList files={files} now={NOW} busy={false} onShare={() => {}} />
+    );
+
+    expect(html).toContain('应用缓存中的备份');
+    expect(html).toContain('系统可能清理');
+    expect(html).toContain('另存只是把文件救出去，不会更新「上次备份」');
+    expect(html).toContain('记账本-20261023-1255.ledger');
+    expect(html).toContain('46 KB');
+    expect(html).toContain('今天 12:55');
+    expect(html).toContain('另存');
+  });
+
+  it('draws nothing when the cache has no .ledger files', () => {
+    expect(
+      render(<CachedBackupList files={[]} now={NOW} busy={false} onShare={() => {}} />)
+    ).toBe('');
   });
 });
 

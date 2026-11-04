@@ -15,7 +15,7 @@ import {
   setProjectBudget,
   unarchiveProject,
 } from '../db/repos/projects';
-import type { ProjectDetail } from '../db/repos/projects';
+import type { Project, ProjectDetail } from '../db/repos/projects';
 import type { TxnRow } from '../db/repos/txns';
 import type { Db } from '../db/driver';
 import { formatMonthDay } from '../domain/date';
@@ -67,6 +67,33 @@ export async function loadProjectDetailData(
     throw new Error(`项目不存在：${id}`);
   }
   return { detail, txnCount: total.txnCount };
+}
+
+/**
+ * Writes one project's edited name and budget as a single unit of work.
+ *
+ * The two fields live in two columns, and the two writes must land together: if
+ * the budget write failed after the rename, the screen would say 保存失败 while
+ * the new name was already stored. renameProject and setProjectBudget stay
+ * separate functions, but their writes now share one transaction.
+ *
+ * Returns false when neither field differs, so the screen can say 没有改动
+ * instead of rewriting values the row already holds.
+ */
+export async function writeProjectEdit(
+  db: Db,
+  project: Pick<Project, 'id' | 'name' | 'budgetCents'>,
+  next: { name: string; budgetCents: number | null }
+): Promise<boolean> {
+  const nameChanged = next.name !== project.name;
+  const budgetChanged = next.budgetCents !== project.budgetCents;
+  if (!nameChanged && !budgetChanged) return false;
+
+  await db.transaction(async tx => {
+    if (nameChanged) await renameProject(tx, project.id, next.name);
+    if (budgetChanged) await setProjectBudget(tx, project.id, next.budgetCents);
+  });
+  return true;
 }
 
 export interface ProjectArchiveSheetProps {
@@ -202,19 +229,17 @@ export default function ProjectDetailScreen() {
       return;
     }
 
-    const nameChanged = plan.name !== project.name;
-    const budgetChanged = plan.budgetCents !== project.budgetCents;
-    if (!nameChanged && !budgetChanged) {
-      setEditError(null);
-      showToast('没有改动');
-      return;
-    }
-
     setBusy(true);
     setEditError(null);
     try {
-      if (nameChanged) await renameProject(db, project.id, plan.name);
-      if (budgetChanged) await setProjectBudget(db, project.id, plan.budgetCents);
+      const written = await writeProjectEdit(db, project, {
+        name: plan.name,
+        budgetCents: plan.budgetCents,
+      });
+      if (!written) {
+        showToast('没有改动');
+        return;
+      }
       setNameEdit(undefined);
       setBudgetEdit(undefined);
       bump();

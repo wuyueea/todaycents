@@ -206,7 +206,7 @@ export interface ReconcileAccountResult {
  * delta writes nothing and is reported so the screen can say the balance
  * already matches. Anything else becomes one dated 'adjust' row with the
  * standard 对账差额 note. No transaction is opened: recordAdjustment is a
- * single INSERT and the driver is not re-entrant.
+ * single INSERT, and a caller that needs more than that one row wraps this.
  */
 export async function reconcileAccountBalance(
   db: Db,

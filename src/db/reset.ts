@@ -37,6 +37,9 @@ import {
  * hint is a snapshot of a detector run over rows that are about to disappear.
  */
 const RESET_TABLES = [
+  // A purge undo points at rows the wipe is about to remove; keeping it would
+  // let 撤销 try to restore a category or tag from the old ledger.
+  'purge_undo',
   'txn_tag',
   'txn',
   'recurring_hint',

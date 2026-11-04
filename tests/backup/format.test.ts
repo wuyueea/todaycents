@@ -3,6 +3,7 @@ import {
   backupFileName,
   backupMetaLine,
   beforeBackupFileName,
+  copyLocationNote,
   exportToast,
   fileSizeText,
   formatBackupTime,
@@ -10,6 +11,7 @@ import {
   importFailureCopy,
   importSummary,
   lastBackupTitle,
+  plannedCopyNote,
   resetDoneToast,
   resetFailureText,
   resetSummary,
@@ -106,6 +108,75 @@ describe('backup copy', () => {
     );
   });
 
+  it('says 已保存到 only when a folder really holds the file', () => {
+    expect(
+      exportToast({
+        fileName: '记账本-20261023-1305.ledger',
+        bytes: 46 * 1024,
+        folderName: 'Books',
+      })
+    ).toBe('已保存到「Books」 · 记账本-20261023-1305.ledger · 46 KB');
+  });
+
+  it('says 已记下 only after the owner confirmed a share was saved', () => {
+    expect(
+      exportToast({
+        fileName: '记账本-20261023-1305.ledger',
+        bytes: 46 * 1024,
+        recorded: true,
+      })
+    ).toBe('已记下这次备份 · 「记账本-20261023-1305.ledger」 · 46 KB');
+  });
+
+  it('states where the automatic before-copy will go before the owner confirms', () => {
+    expect(plannedCopyNote('Books')).toBe('这一份会存到「Books」文件夹。');
+    expect(plannedCopyNote(null)).toBe(
+      '还没有可写的文件夹，这一份只会放进应用缓存，系统可能清理；要留住它，请先到「设置 › 存储」允许访问。'
+    );
+  });
+
+  it('says where the automatic copy actually went', () => {
+    expect(copyLocationNote({ kind: 'folder', folderName: 'Books' })).toBe(
+      '在「Books」文件夹'
+    );
+    expect(copyLocationNote({ kind: 'cache' })).toBe('在应用缓存，系统可能清理');
+    expect(copyLocationNote({ kind: 'none' })).toBe('这次没有写备份文件');
+  });
+
+  it('adds the repaired project links to the import line when there were any', () => {
+    expect(
+      importDoneToast({
+        fileName: '记账本-20261023-1305.ledger',
+        rows: 231,
+        clearedProjectRefs: 3,
+      })
+    ).toBe('已导入「记账本-20261023-1305.ledger」 · 231 笔；3 笔流水的项目在文件里找不到，已清空');
+  });
+
+  it('repeats only the before-copy locations the confirmation did not promise', () => {
+    expect(
+      importDoneToast({
+        fileName: 'x.ledger',
+        rows: 2,
+        beforeDestination: { kind: 'cache' },
+      })
+    ).toBe('已导入「x.ledger」 · 2 笔 · 导入前的备份在应用缓存，系统可能清理');
+    expect(
+      importDoneToast({
+        fileName: 'x.ledger',
+        rows: 2,
+        beforeDestination: { kind: 'none' },
+      })
+    ).toBe('已导入「x.ledger」 · 2 笔 · 导入前的备份这次没有写备份文件');
+    expect(
+      importDoneToast({
+        fileName: 'x.ledger',
+        rows: 2,
+        beforeDestination: { kind: 'folder', folderName: 'Books' },
+      })
+    ).toBe('已导入「x.ledger」 · 2 笔');
+  });
+
   it('states file rows, local rows and whole-ledger replacement', () => {
     const summary = importSummary({ fileRows: 231, localRows: 12 });
     expect(summary).toContain('本机现在有 12 笔');
@@ -160,6 +231,25 @@ describe('reset copy', () => {
   it('names the automatic backup file in the success toast', () => {
     expect(resetDoneToast({ beforeFileName: '记账本-20261023-1305-before.ledger' })).toBe(
       '已清除所有数据 · 备份「记账本-20261023-1305-before.ledger」'
+    );
+  });
+
+  it('adds the real location of the automatic copy to the success toast', () => {
+    expect(
+      resetDoneToast({
+        beforeFileName: '记账本-20261023-1305-before.ledger',
+        beforeDestination: { kind: 'folder', folderName: 'Books' },
+      })
+    ).toBe(
+      '已清除所有数据 · 备份「记账本-20261023-1305-before.ledger」 · 在「Books」文件夹'
+    );
+    expect(
+      resetDoneToast({
+        beforeFileName: '记账本-20261023-1305-before.ledger',
+        beforeDestination: { kind: 'cache' },
+      })
+    ).toBe(
+      '已清除所有数据 · 备份「记账本-20261023-1305-before.ledger」 · 在应用缓存，系统可能清理'
     );
   });
 

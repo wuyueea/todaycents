@@ -7,6 +7,7 @@ import {
   applyAmountKey,
   formatAmountDraft,
 } from '../components/AmountKeypad';
+import { registerBackHandler } from '../components/backButton';
 import { useDb, useQuery } from '../store/useDb';
 import { listAccounts } from '../db/repos/accounts';
 import { listCategories } from '../db/repos/categories';
@@ -33,9 +34,9 @@ import { formatCents, parseAmountToCents } from '../domain/money';
  *
  * What may change is amount, category, account, note and tags. The date is
  * display-only: updateTxn has no date field and refuses a patch that carries
- * one, so a correction can never move a transaction to another day. Tags are
- * written by setTxnTags after updateTxn, because neither repository nests a
- * transaction.
+ * one, so a correction can never move a transaction to another day. Tags and
+ * the project are written by setTxnTags and setTxnProject inside the same
+ * transaction as the row update, so an edit lands whole or not at all.
  *
  * Transfers are read-only here. A transfer leg is one half of a matched pair;
  * updateTxn and softDeleteTxn both throw on it, and deleting one leg would
@@ -67,7 +68,7 @@ export interface TxnEditDraft {
   categoryId: string | null;
   accountId: string;
   note: string;
-  /** 0..N tag ids; written after updateTxn, in setTxnTags' own transaction. */
+  /** 0..N tag ids; written in the same transaction as the row update. */
   tagIds: readonly string[];
   /**
    * The project the row should belong to, or null for none. Written only when
@@ -212,24 +213,30 @@ export async function commitTxnEdit(
   if (plan.blocked || plan.amountCents === null) {
     return { ...plan, saved: false };
   }
+  // Narrowed here, outside the callback: a property read inside the closure is
+  // not narrowed by the guard above.
+  const amountCents = plan.amountCents;
 
-  await updateTxn(db, row.id, {
-    amountCents: plan.amountCents,
-    categoryId: draft.categoryId,
-    accountId: draft.accountId,
-    note: draft.note,
+  // One edit is one unit of work: the row, its tags and its project are written
+  // inside a single transaction, so a failure in either follow-up write leaves
+  // the row exactly as it was rather than half-edited.
+  await db.transaction(async tx => {
+    await updateTxn(tx, row.id, {
+      amountCents,
+      categoryId: draft.categoryId,
+      accountId: draft.accountId,
+      note: draft.note,
+    });
+
+    await setTxnTags(tx, row.id, draft.tagIds);
+
+    // The project is written only on a real change. Re-saving the row's own
+    // archived project would otherwise be refused by setTxnProject, and an
+    // untouched assignment must survive an unrelated edit.
+    if (draft.projectId !== row.projectId) {
+      await setTxnProject(tx, row.id, draft.projectId);
+    }
   });
-
-  // A separate unit of work, exactly as on create: updateTxn never opens a
-  // transaction, and setTxnTags opens one after the row update has committed.
-  await setTxnTags(db, row.id, draft.tagIds);
-
-  // The project is a third unit of work, and only a real change is written.
-  // Re-saving the row's own archived project would otherwise be refused by
-  // setTxnProject, and an untouched assignment must survive an unrelated edit.
-  if (draft.projectId !== row.projectId) {
-    await setTxnProject(db, row.id, draft.projectId);
-  }
   return { ...plan, saved: true };
 }
 
@@ -301,6 +308,10 @@ export default function TxnEditScreen() {
   const [problems, setProblems] = useState<TxnEditProblems>(noProblems);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // The keydown/back handlers are installed once per dialog; a ref keeps them
+  // from reading the busy flag as it was when the dialog opened.
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [amountPristine, setAmountPristine] = useState(false);
@@ -372,8 +383,14 @@ export default function TxnEditScreen() {
         first.focus();
       }
     };
+    // The back key closes the keypad first, then the screen itself.
+    const releaseBack = registerBackHandler(() => {
+      setKeypadOpen(false);
+      return true;
+    });
     document.addEventListener('keydown', onKeyDown);
     return () => {
+      releaseBack();
       document.removeEventListener('keydown', onKeyDown);
       amountButtonRef.current?.focus();
     };
@@ -390,7 +407,7 @@ export default function TxnEditScreen() {
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
-        if (focusable.length > 0) setConfirmDelete(false);
+        if (!busyRef.current) setConfirmDelete(false);
         return;
       }
       if (event.key !== 'Tab' || focusable.length === 0) return;
@@ -404,8 +421,16 @@ export default function TxnEditScreen() {
         first.focus();
       }
     };
+    // Same rule as Escape and the scrim: while the delete is in flight the
+    // dialog stays put, and the press is swallowed rather than stepping the
+    // route out from under the request.
+    const releaseBack = registerBackHandler(() => {
+      if (!busyRef.current) setConfirmDelete(false);
+      return true;
+    });
     document.addEventListener('keydown', onKeyDown);
     return () => {
+      releaseBack();
       document.removeEventListener('keydown', onKeyDown);
       deleteButtonRef.current?.focus();
     };

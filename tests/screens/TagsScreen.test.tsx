@@ -2,13 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import TagsScreen, {
-  TagDeleteSheet,
   TagMenuSheet,
+  TagPurgeBlockedSheet,
+  TagPurgeSheet,
+  TagRetireSheet,
   planTagCreate,
   tagLastUsedLabel,
 } from '../../src/screens/TagsScreen';
 import type { TagsData } from '../../src/screens/TagsScreen';
-import type { Tag } from '../../src/db/repos/tags';
+import { PURGE_UNDO_MS } from '../../src/db/repos/purge';
+import type { Tag, TagPurgeInspection } from '../../src/db/repos/tags';
 
 const store = vi.hoisted(() => ({
   data: null as TagsData | null,
@@ -32,6 +35,16 @@ const MOVE: Tag = {
   archivedAt: '2026-09-01T00:00:00.000Z',
 };
 
+function inspection(overrides: Partial<TagPurgeInspection> = {}): TagPurgeInspection {
+  return {
+    purgeable: true,
+    archived: true,
+    linkCount: 0,
+    deletedLinkCount: 0,
+    ...overrides,
+  };
+}
+
 function tagsData(): TagsData {
   return {
     tags: [NIGHT, MOVE],
@@ -39,6 +52,7 @@ function tagsData(): TagsData {
       { id: NIGHT.id, name: NIGHT.name, count: 38, lastUsedDate: '2026-10-18' },
       { id: MOVE.id, name: MOVE.name, count: 12, lastUsedDate: '2026-08-21' },
     ],
+    undo: null,
   };
 }
 
@@ -73,13 +87,31 @@ describe('TagsScreen', () => {
   });
 
   it('says only 还没有标签 in the empty state, with the same create field', () => {
-    store.data = { tags: [], usage: [] };
+    store.data = { tags: [], usage: [], undo: null };
     const html = renderScreen();
 
     expect(html).toContain('还没有标签');
     // The how-to paragraph was removed; the create field is the instruction.
     expect(html).not.toContain('不用先想好体系');
     expect(html).toContain('新建标签');
+  });
+
+  it('restores the purge undo toast saved before the app restarted', () => {
+    store.data = {
+      ...tagsData(),
+      undo: {
+        kind: 'tag',
+        targetId: NIGHT.id,
+        label: NIGHT.name,
+        expiresAt: Date.now() + PURGE_UNDO_MS,
+      },
+    };
+    const html = renderScreen();
+
+    expect(html).toContain('标签「夜宵」已彻底删除');
+    expect(html).toContain('10 秒内可撤销');
+    expect(html).toContain('撤销');
+    store.data = tagsData();
   });
 
   it('survives a missing database with a readable line, not a crash', () => {
@@ -110,37 +142,137 @@ describe('tag copy helpers', () => {
   });
 });
 
-describe('TagMenuSheet / TagDeleteSheet', () => {
-  it('offers 改名 / 归档 / 删除关联 and says deletion only removes links', () => {
+describe('TagMenuSheet', () => {
+  it('offers 断联并归档 for a live tag instead of a delete action', () => {
     const html = render(
-      <TagMenuSheet tag={NIGHT} count={38} onRename={() => {}} onArchive={() => {}} onDelete={() => {}} onCancel={() => {}} />
+      <TagMenuSheet
+        tag={NIGHT}
+        count={38}
+        inspection={inspection({ archived: false, linkCount: 38 })}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
     );
 
     expect(html).toContain('改名');
     expect(html).toContain('归档');
-    expect(html).toContain('删除关联');
-    expect(html).toContain('只删关联，不删流水');
+    expect(html).toContain('断联并归档');
+    expect(html).toContain('删掉全部关联，标签收进已归档');
+    expect(html).toContain('38 次');
+    expect(html).not.toContain('删除关联');
+    expect(html).not.toContain('彻底删除');
     expect(html).toMatch(/role="dialog"/);
   });
 
-  it('offers 恢复 instead of 归档 for an archived tag', () => {
+  it('disables 断联并归档 while the links are still being read', () => {
     const html = render(
-      <TagMenuSheet tag={MOVE} count={12} onRename={() => {}} onUnarchive={() => {}} onDelete={() => {}} onCancel={() => {}} />
+      <TagMenuSheet
+        tag={NIGHT}
+        count={38}
+        inspection={null}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
     );
 
-    expect(html).toContain('恢复');
-    expect(html).not.toContain('>归档<');
+    expect(html).toContain('disabled');
   });
 
-  it('confirms that the transactions themselves stay', () => {
+  it('offers 恢复 and 彻底删除 for an archived tag, and says it is archived', () => {
     const html = render(
-      <TagDeleteSheet tag={NIGHT} linkCount={38} busy={false} onConfirm={() => {}} onCancel={() => {}} />
+      <TagMenuSheet
+        tag={MOVE}
+        count={12}
+        inspection={inspection({ linkCount: 12 })}
+        onRename={() => {}}
+        onUnarchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
     );
 
-    expect(html).toContain('删除关联');
-    expect(html).toContain('38 笔流水的关联会被删除');
-    expect(html).toContain('流水本身一笔都不会少');
-    expect(html).toContain('金额和日期都不变');
+    expect(html).toContain('已归档');
+    expect(html).toContain('恢复');
+    expect(html).toContain('彻底删除');
+    expect(html).toContain('只对没有关联的归档标签可用');
+    expect(html).not.toContain('删除关联');
+    expect(html).not.toContain('断联并归档');
+  });
+});
+
+describe('TagRetireSheet', () => {
+  it('confirms that the transactions stay and 恢复 will not bring the links back', () => {
+    const html = render(
+      <TagRetireSheet
+        tagName="夜宵"
+        inspection={inspection({ archived: false, linkCount: 38, deletedLinkCount: 2 })}
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('断联并归档');
+    expect(html).toContain(
+      '「夜宵」的 38 条流水关联会被删除（其中 2 条在已删除流水上）；流水本身一笔都不会少，金额和日期都不变。标签会收进「已归档」。'
+    );
+    expect(html).toContain('这个操作不能撤销');
+    expect(html).toContain('恢复标签，也不会恢复这些关联');
+    expect(html).toContain('38 条关联');
+    expect(html).toContain('sheet__danger');
+  });
+
+  it('omits the deleted-link parenthesis when nothing is deleted', () => {
+    const html = render(
+      <TagRetireSheet
+        tagName="夜宵"
+        inspection={inspection({ archived: false, linkCount: 38 })}
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).not.toContain('在已删除流水上');
+  });
+});
+
+describe('TagPurgeBlockedSheet', () => {
+  it('names the links, including the ones on deleted transactions', () => {
+    const html = render(
+      <TagPurgeBlockedSheet
+        tagName="搬家"
+        inspection={inspection({ linkCount: 12, deletedLinkCount: 3 })}
+        onClose={() => {}}
+      />
+    );
+
+    expect(html).toContain('不能彻底删除');
+    expect(html).toContain('「搬家」还关联着 12 笔流水（其中 3 笔已删除）。');
+    expect(html).toContain('有历史的标签只能保持归档');
+    expect(html).toContain('彻底删除只适用于没有任何关联的归档标签。');
+    expect(html).toContain('知道了');
+  });
+});
+
+describe('TagPurgeSheet', () => {
+  it('says the deletion affects no entry and offers a ten-second undo', () => {
+    const html = render(
+      <TagPurgeSheet tagName="搬家" busy={false} onConfirm={() => {}} onCancel={() => {}} />
+    );
+
+    expect(html).toContain('彻底删除');
+    expect(html).toContain('已归档');
+    expect(html).toContain('「搬家」没有任何流水关联，会从数据库里删除。删除不会影响任何一笔账。');
+    expect(html).toContain('10 秒内可以撤销');
+    expect(html).toContain('同时只保留最近一次彻底删除的撤销');
     expect(html).toContain('sheet__danger');
   });
 });

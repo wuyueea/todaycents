@@ -241,11 +241,11 @@ function assertDayCells(cells: readonly FilledDayCell[]): void {
  * All validation happens before the single db.transaction opens, and every
  * write happens inside it. A rejected amount therefore leaves no trace of the
  * day, and a row that fails a foreign key rolls back the cells written before
- * it. createExpense opens no transaction of its own by design: the driver
- * transactions are not re-entrant, and this is the one unit of work for the
- * day. A day with nothing filled opens no transaction at all: it writes
- * nothing, so it needs no atomicity. Callers must not wrap submitDay in a
- * transaction of their own for the same reason.
+ * it. createExpense opens no transaction of its own by design: this is the
+ * one unit of work for the day. A day with nothing filled opens no transaction
+ * at all: it writes nothing, so it needs no atomicity. A caller that wraps
+ * submitDay is harmless — the nested call joins this transaction — but nothing
+ * here needs it.
  */
 export async function submitDay(db: Db, dateISO: string, cells: DayCell[]): Promise<number> {
   assertTxnDate(dateISO);

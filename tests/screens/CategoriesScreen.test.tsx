@@ -2,14 +2,19 @@ import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import CategoriesScreen, {
-  CATEGORY_UNDO_MS,
-  CategoryDeleteSheet,
   CategoryMenuSheet,
-  CategoryUndoToast,
+  CategoryPurgeBlockedSheet,
+  CategoryPurgeSheet,
+  CategoryRetireSheet,
   buildCategoryRows,
+  loadCategoriesData,
+  selectActiveUndo,
 } from '../../src/screens/CategoriesScreen';
 import type { CategoriesData } from '../../src/screens/CategoriesScreen';
-import type { Category } from '../../src/db/repos/categories';
+import { PURGE_UNDO_MS } from '../../src/db/repos/purge';
+import type { PurgeUndoRecord } from '../../src/db/repos/purge';
+import type { Category, CategoryPurgeInspection } from '../../src/db/repos/categories';
+import { createTestDb } from '../helpers/nodeDb';
 
 const store = vi.hoisted(() => ({
   data: null as CategoriesData | null,
@@ -52,8 +57,23 @@ const OLD = category({
   archivedAt: '2026-09-01T00:00:00.000Z',
 });
 
+function inspection(overrides: Partial<CategoryPurgeInspection> = {}): CategoryPurgeInspection {
+  return {
+    purgeable: true,
+    archived: true,
+    liveTxnCount: 0,
+    txnCount: 0,
+    deletedTxnCount: 0,
+    templateCount: 0,
+    liveChildCount: 0,
+    childCount: 0,
+    hintCount: 0,
+    ...overrides,
+  };
+}
+
 function categoriesData(): CategoriesData {
-  return { categories: [FOOD, SPORT, BADMINTON, SALARY, OLD, SYSTEM] };
+  return { categories: [FOOD, SPORT, BADMINTON, SALARY, OLD, SYSTEM], undo: null };
 }
 
 function renderScreen(): string {
@@ -94,14 +114,75 @@ describe('CategoriesScreen', () => {
     expect(html).not.toContain('aria-label="未分类的菜单"');
   });
 
-  it('shows archived categories with 恢复 rather than a live menu', () => {
+  it('shows an archived category with its kind, 恢复 and 彻底删除', () => {
     store.data = categoriesData();
     const html = renderScreen();
 
-    expect(html).toContain('已归档');
     expect(html).toContain('娱乐');
+    expect(html).toContain('支出 · 已归档');
     expect(html).toContain('恢复');
     expect(html).toContain('aria-label="娱乐的菜单"');
+    expect(html).not.toContain('历史流水还在');
+  });
+
+  it('restores the purge undo toast saved before the app restarted', () => {
+    store.data = {
+      categories: categoriesData().categories,
+      undo: {
+        kind: 'category',
+        targetId: SPORT.id,
+        label: SPORT.name,
+        expiresAt: Date.now() + PURGE_UNDO_MS,
+      },
+    };
+    const html = renderScreen();
+
+    expect(html).toContain('「运动」已彻底删除');
+    expect(html).toContain('10 秒内可撤销');
+    expect(html).toContain('撤销');
+    store.data = categoriesData();
+  });
+
+  it('loads a pending purge undo together with the categories', async () => {
+    const db = await createTestDb();
+    await db.run(
+      `INSERT INTO purge_undo (id, kind, target_id, label, payload_json, expires_at, created_at)
+       VALUES (1, 'category', ?, ?, ?, ?, ?)`,
+      [
+        SPORT.id,
+        SPORT.name,
+        JSON.stringify({
+          category: [
+            {
+              id: SPORT.id,
+              parent_id: null,
+              name: SPORT.name,
+              kind: SPORT.kind,
+              sort: SPORT.sort,
+              archived_at: '2026-10-01T00:00:00.000Z',
+            },
+          ],
+          hints: [],
+        }),
+        Date.now() + PURGE_UNDO_MS,
+        new Date().toISOString(),
+      ]
+    );
+
+    const data = await loadCategoriesData(db);
+
+    expect(data.undo).toMatchObject({ kind: 'category', targetId: SPORT.id, label: SPORT.name });
+  });
+
+  it('does not surface a pending tag purge on the category screen', async () => {
+    const db = await createTestDb();
+    await db.run(
+      `INSERT INTO purge_undo (id, kind, target_id, label, payload_json, expires_at, created_at)
+       VALUES (1, 'tag', 't1', '夜宵', '{"tag":[{"id":"t1","name":"夜宵","color":null,"archived_at":"2026-10-01T00:00:00.000Z"}]}', ?, ?)`,
+      [Date.now() + PURGE_UNDO_MS, new Date().toISOString()]
+    );
+
+    expect((await loadCategoriesData(db)).undo).toBeNull();
   });
 
   it('survives a missing database with a readable line, not a crash', () => {
@@ -128,48 +209,192 @@ describe('buildCategoryRows', () => {
 });
 
 describe('CategoryMenuSheet', () => {
-  it('offers 改名 / 加二级分类 / 归档 / 删除, with the count the delete will move', () => {
+  it('offers 断联并归档 for a live category and says how many rows move', () => {
     const html = render(
-      <CategoryMenuSheet category={SPORT} txnCount={9} onRename={() => {}} onAddChild={() => {}} onArchive={() => {}} onDelete={() => {}} onCancel={() => {}} />
+      <CategoryMenuSheet
+        category={SPORT}
+        inspection={inspection({ archived: false, liveTxnCount: 9, txnCount: 9 })}
+        onRename={() => {}}
+        onAddChild={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
     );
 
     expect(html).toContain('改名');
     expect(html).toContain('加二级分类');
     expect(html).toContain('归档');
-    expect(html).toContain('删除');
-    expect(html).toContain('9 笔移到「未分类」');
+    expect(html).toContain('断联并归档');
+    expect(html).toContain('9 笔移到「未分类」，分类收进已归档');
     expect(html).toContain('category-menu__danger');
+    expect(html).not.toContain('彻底删除');
+    expect(html).toContain('9 笔');
+  });
+
+  it('says 没有在用的流水 when the live count is zero', () => {
+    const html = render(
+      <CategoryMenuSheet
+        category={SPORT}
+        inspection={inspection({ archived: false })}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('没有在用的流水，分类收进已归档');
+    expect(html).toContain('0 笔');
+  });
+
+  it('disables 断联并归档 while the counts are still loading', () => {
+    const html = render(
+      <CategoryMenuSheet
+        category={SPORT}
+        inspection={null}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('正在数…');
+    expect(html).toContain('正在数流水…');
+    expect(html).toContain('disabled');
+  });
+
+  it('offers 恢复 and 彻底删除 for an archived category', () => {
+    const html = render(
+      <CategoryMenuSheet
+        category={OLD}
+        inspection={inspection({ txnCount: 3, liveTxnCount: 0 })}
+        onRename={() => {}}
+        onUnarchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('已归档');
+    expect(html).toContain('恢复');
+    expect(html).toContain('彻底删除');
+    expect(html).toContain('只对没有历史的归档分类可用');
+    expect(html).not.toContain('断联并归档');
   });
 });
 
-describe('CategoryUndoToast', () => {
-  it('offers 撤销 for ten seconds and says the window is finite', () => {
-    expect(CATEGORY_UNDO_MS).toBe(10_000);
+describe('CategoryRetireSheet', () => {
+  it('states the move, the archive and that undo cannot bring the rows back', () => {
     const html = render(
-      <CategoryUndoToast categoryName="运动" movedTxns={9} onUndo={() => {}} />
+      <CategoryRetireSheet
+        categoryName="运动"
+        inspection={inspection({ archived: false, liveTxnCount: 9, deletedTxnCount: 2, childCount: 1 })}
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
     );
 
-    expect(html).toContain('「运动」已删除');
-    expect(html).toContain('9 笔移到「未分类」');
-    expect(html).toContain('10 秒内可撤销');
-    expect(html).toContain('toast--action');
-    expect(html).toContain('撤销');
-  });
-});
-
-describe('CategoryDeleteSheet', () => {
-  it('uses the §7 sentence with the real count and says 10 秒内可撤销', () => {
-    const html = render(
-      <CategoryDeleteSheet categoryName="运动" txnCount={9} busy={false} onConfirm={() => {}} onCancel={() => {}} />
-    );
-
-    expect(html).toContain('删除分类');
+    expect(html).toContain('断联并归档');
     expect(html).toContain(
-      '「运动」下的 9 笔流水会移到 未分类，金额和日期都不变；分类本身从选择里消失。'
+      '「运动」下的 9 笔流水会移到「未分类」，金额和日期都不变；「运动」及 1 个二级分类会收进「已归档」。'
     );
-    expect(html).toContain('10 秒内可以撤销');
-    expect(html).toContain('删除');
+    expect(html).toContain('已删除的 2 笔流水仍保留原分类，仍算历史');
+    expect(html).toContain('这个操作不能撤销');
+    expect(html).toContain('移到「未分类」的流水不会跟着回来');
     expect(html).toContain('sheet__danger');
     expect(html).toMatch(/role="dialog"/);
+  });
+
+  it('drops the child clause and the deleted note when they do not apply', () => {
+    const html = render(
+      <CategoryRetireSheet
+        categoryName="运动"
+        inspection={inspection({ archived: false })}
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).not.toContain('二级分类');
+    expect(html).not.toContain('已删除的');
+  });
+});
+
+describe('CategoryPurgeBlockedSheet', () => {
+  it('lists every reason the archive still counts as history', () => {
+    const html = render(
+      <CategoryPurgeBlockedSheet
+        categoryName="娱乐"
+        inspection={inspection({ txnCount: 4, deletedTxnCount: 1, templateCount: 2, liveChildCount: 3 })}
+        onClose={() => {}}
+      />
+    );
+
+    expect(html).toContain('不能彻底删除');
+    expect(html).toContain('「娱乐」还有历史，不能从数据库里删除。');
+    expect(html).toContain('还有 4 笔流水用过它（其中 1 笔已删除）。');
+    expect(html).toContain('还有 2 个模板在用它。');
+    expect(html).toContain('下面还有 3 个未归档的二级分类。');
+    expect(html).toContain('有历史的分类只能保持归档');
+    expect(html).toContain('知道了');
+    expect(html).not.toContain('sheet__danger');
+  });
+});
+
+describe('CategoryPurgeSheet', () => {
+  it('says the deletion affects no entries and offers a ten-second undo', () => {
+    const html = render(
+      <CategoryPurgeSheet
+        categoryName="娱乐"
+        inspection={inspection({ childCount: 2, hintCount: 1 })}
+        busy={false}
+        onConfirm={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('彻底删除');
+    expect(html).toContain('已归档');
+    expect(html).toContain(
+      '「娱乐」及 2 个二级分类会从数据库里删除。这个分类没有任何流水或模板，删除不会影响一笔账。'
+    );
+    expect(html).toContain('同时会清掉 1 条固定支出候选。');
+    expect(html).toContain('10 秒内可以撤销');
+    expect(html).toContain('同时只保留最近一次彻底删除的撤销');
+    expect(html).toContain('sheet__danger');
+  });
+});
+
+describe('selectActiveUndo', () => {
+  const record = (targetId: string, expiresAt: number): PurgeUndoRecord => ({
+    kind: 'category',
+    targetId,
+    label: targetId,
+    expiresAt,
+  });
+
+  it('prefers the purge result while the stored copy is still loading', () => {
+    const pending = record('sport', Date.now() + 2000);
+    expect(selectActiveUndo(pending, null, null)).toBe(pending);
+  });
+
+  it('shows a stored record until its key is dismissed', () => {
+    const stored = record('sport', Date.now() + 2000);
+    expect(selectActiveUndo(null, stored, null)).toBe(stored);
+    expect(selectActiveUndo(null, stored, 'category\u0000sport\u0000' + stored.expiresAt)).toBeNull();
+  });
+
+  it('does not let an old dismissal hide a newer purge', () => {
+    const newer = record('sport', Date.now() + 3000);
+    const oldKey = 'category\u0000sport\u0000' + (newer.expiresAt - 1000);
+    expect(selectActiveUndo(null, newer, oldKey)).toBe(newer);
   });
 });

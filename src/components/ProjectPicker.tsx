@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { Project } from '../db/repos/projects';
+import { useDialogFocus } from './useDialogFocus';
 
 /**
  * The shared project chooser for 记账 and 编辑流水.
@@ -59,6 +60,7 @@ export function ProjectSheet({
   const liveProjects = projects.filter(project => project.status === 'active');
   const current = liveProjects.find(project => project.id === value);
   const currentLabel = current?.name ?? (value === null ? '不归项目' : (valueLabel ?? '不归项目'));
+  const panelRef = useDialogFocus({ onClose });
 
   const choose = (id: string | null) => {
     onSelect(id);
@@ -73,7 +75,7 @@ export function ProjectSheet({
       aria-labelledby="project-sheet-title"
     >
       <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
-      <div className="sheet__panel">
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
         <div className="sheet__head">
           <h2 className="sheet__title" id="project-sheet-title">
             选项目

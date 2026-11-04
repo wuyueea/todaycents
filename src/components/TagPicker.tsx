@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Db } from '../db/driver';
 import { createTag, listTags } from '../db/repos/tags';
 import type { Tag } from '../db/repos/tags';
+import { useDialogFocus } from './useDialogFocus';
 
 /**
  * The shared tag chooser for 记账 and 编辑流水.
@@ -92,6 +93,7 @@ export function TagSheet({
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const panelRef = useDialogFocus({ onClose });
 
   const liveTags = tags
     .filter(tag => tag.archivedAt === null || selectedIds.includes(tag.id))
@@ -122,7 +124,7 @@ export function TagSheet({
   return (
     <div className="sheet tag-sheet" role="dialog" aria-modal="true" aria-labelledby="tag-sheet-title">
       <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
-      <div className="sheet__panel">
+      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
         <div className="sheet__head">
           <h2 className="sheet__title" id="tag-sheet-title">
             选标签

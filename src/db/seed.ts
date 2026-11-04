@@ -13,11 +13,11 @@
  * so 清除所有数据 can write the very same starter set inside the reset's own
  * transaction instead of keeping a second copy of the seed data. Both callers
  * want the same rows: a first launch and a reset leave one identical starter
- * set. The driver's transactions are not re-entrant, so nothing called from
- * seedInto may open one; accounts.ts and categories.ts never do, which is why
- * they are safe to call with the transaction handle. A seed that failed halfway
- * would leave categories without accounts — and, because of the guard, would
- * never be completed on the next launch.
+ * set. accounts.ts and categories.ts never open a transaction of their own,
+ * which is what lets seedInto hand them its handle; should either grow one
+ * later, the nested call would join this transaction instead of failing. A
+ * seed that failed halfway would leave categories without accounts — and,
+ * because of the guard, would never be completed on the next launch.
  */
 import type { Db } from './driver';
 import type { AccountType } from '../domain/types';
@@ -78,8 +78,8 @@ export async function seedInto(db: Db): Promise<void> {
  * Seeds the first launch, at most once.
  *
  * Safe to call on every launch: the first call seeds, every later call returns
- * before opening a transaction. Nothing here opens a nested transaction, so it
- * cannot be called from inside another unit of work.
+ * before opening a transaction. Called from inside another unit of work, its
+ * transaction joins the caller's instead of opening a second one.
  */
 export async function seedDefaults(db: Db): Promise<void> {
   const existing = await db.get<{ n: number }>(

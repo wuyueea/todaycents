@@ -74,9 +74,9 @@ function accountsData(overrides: Partial<AccountsData> = {}): AccountsData {
 }
 
 /** 账户 is a pushed page; it needs a router even though SSR never runs effects. */
-function renderScreen(): string {
+function renderScreen(state?: unknown): string {
   return renderToString(
-    <MemoryRouter initialEntries={['/accounts']}>
+    <MemoryRouter initialEntries={[{ pathname: '/accounts', state }]}>
       <AccountsScreen />
     </MemoryRouter>
   ).replace(/<!-- -->/g, '');
@@ -473,5 +473,15 @@ describe('AccountsScreen', () => {
     expect(back).toContain('aria-label="返回设置"');
     // The gear is gone: 设置 is a tab now, so 账户 does not lead to it.
     expect(html).not.toContain('class="accounts-settings"');
+  });
+
+  it('returns to the retained 随手记 sheet when opened from its empty-account link', () => {
+    store.data = accountsData({ accounts: [], balances: {} });
+    const html = renderScreen({ quickEntryOpen: true });
+
+    const back = html.match(/<a[^>]*class="add-back"[^>]*>/)?.[0] ?? '';
+    expect(back).toContain('href="/add"');
+    expect(back).toContain('aria-label="返回记账"');
+    expect(back).not.toContain('href="/settings"');
   });
 });

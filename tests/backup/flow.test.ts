@@ -6,7 +6,13 @@ import { seedDefaults } from '../../src/db/seed';
 import { listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
 import { createExpense, listTxnsByMonth } from '../../src/db/repos/txns';
-import { confirmImport, exportBackup, prepareImport, resetWithBackup } from '../../src/backup/flow';
+import {
+  confirmImport,
+  exportBackup,
+  exportMetaAction,
+  prepareImport,
+  resetWithBackup,
+} from '../../src/backup/flow';
 import { countTxnRows, readBackupMeta } from '../../src/backup/meta';
 import type { BackupFileWriter } from '../../src/backup/flow';
 import { beforeBackupFileName, utf8ByteLength } from '../../src/backup/format';
@@ -31,9 +37,11 @@ function memoryWriter(): BackupFileWriter & {
     copies,
     async writeForShare(fileName, text) {
       shared.push({ fileName, text });
+      return { kind: 'folder', folderName: 'Books' };
     },
     async writeCopy(fileName, text) {
       copies.push({ fileName, text });
+      return { kind: 'cache', uri: `file:///cache/${fileName}` };
     },
   };
 }
@@ -59,7 +67,7 @@ async function sourceBackupText(amountCents = 1230, note = 'source'): Promise<{ 
 }
 
 describe('exportBackup', () => {
-  it('writes the same JSON it can parse back, then records the three meta keys', async () => {
+  it('writes the same JSON it can parse back and reports where it went', async () => {
     const db = await createTestDb();
     await seedDefaults(db);
     await seedExpense(db, 1230, '午饭');
@@ -79,21 +87,37 @@ describe('exportBackup', () => {
     expect(result.bytes).toBe(utf8ByteLength(text));
 
     expect(result.meta).toEqual({ at: NOW.toISOString(), rows: 1, bytes: result.bytes });
-    expect(await readBackupMeta(db)).toEqual(result.meta);
+    expect(result.destination).toEqual({ kind: 'folder', folderName: 'Books' });
+    // Recording 上次备份 is the screen's call, not the writer's: a share still
+    // needs the owner's answer before it becomes a promise.
+    expect(await readBackupMeta(db)).toBeNull();
   });
 
-  it('records nothing when the share step fails', async () => {
+  it('records nothing when the writer fails before any destination exists', async () => {
     const db = await createTestDb();
     await seedDefaults(db);
     const writer: BackupFileWriter = {
       async writeForShare() {
         throw new Error('没有空间');
       },
-      async writeCopy() {},
+      async writeCopy() {
+        return { kind: 'none' };
+      },
     };
 
     await expect(exportBackup(db, writer, NOW)).rejects.toThrow('没有空间');
     expect(await readBackupMeta(db)).toBeNull();
+  });
+});
+
+describe('exportMetaAction', () => {
+  it('records a real file, asks before a share, and never records a cancel', () => {
+    expect(exportMetaAction({ kind: 'folder', folderName: 'Books' })).toBe('record');
+    expect(exportMetaAction({ kind: 'download' })).toBe('record');
+    expect(exportMetaAction({ kind: 'share' })).toBe('ask');
+    expect(exportMetaAction({ kind: 'share' }, true)).toBe('record');
+    expect(exportMetaAction({ kind: 'canceled' })).toBe('none');
+    expect(exportMetaAction({ kind: 'canceled' }, true)).toBe('none');
   });
 });
 
@@ -145,6 +169,10 @@ describe('confirmImport', () => {
 
     expect(result.rows).toBe(1);
     expect(result.beforeFileName).toBe(beforeBackupFileName(NOW));
+    expect(result.beforeDestination).toEqual({
+      kind: 'cache',
+      uri: `file:///cache/${beforeBackupFileName(NOW)}`,
+    });
     expect(writer.copies).toHaveLength(1);
     expect(writer.copies[0].fileName).toBe(beforeBackupFileName(NOW));
 
@@ -157,6 +185,28 @@ describe('confirmImport', () => {
     expect(restored).toHaveLength(1);
     expect(restored[0].id).toBe(sourceId);
     expect(restored[0].note).toBe('from file');
+  });
+
+  // The import toast has to be able to say what was repaired; a silent rewrite
+  // of the owner's rows is the thing this whole fix is against.
+  it('reports how many dangling project links it cleared', async () => {
+    const target = await createTestDb();
+    await seedDefaults(target);
+    const { text } = await sourceBackupText(1230, 'from file');
+    const raw = JSON.parse(text) as { tables: { txn: Record<string, unknown>[] } };
+    raw.tables.txn[0].project_id = 'ghost-project';
+    const prepared = await prepareImport(
+      target,
+      JSON.stringify(raw),
+      LEDGER_NAME,
+      utf8ByteLength(text)
+    );
+    const writer = memoryWriter();
+
+    const result = await confirmImport(target, prepared, writer, NOW);
+
+    expect(result.clearedProjectRefs).toBe(1);
+    expect((await listTxnsByMonth(target, '2026-10'))[0].projectId).toBeNull();
   });
 
   it('leaves the local ledger untouched when the file lies about its counts', async () => {
@@ -187,7 +237,9 @@ describe('confirmImport', () => {
     const { text } = await sourceBackupText();
     const prepared = await prepareImport(target, text, LEDGER_NAME, utf8ByteLength(text));
     const writer: BackupFileWriter = {
-      async writeForShare() {},
+      async writeForShare() {
+        return { kind: 'download' };
+      },
       async writeCopy() {
         throw new Error('缓存不可写');
       },
@@ -207,11 +259,14 @@ describe('resetWithBackup', () => {
     const writer = memoryWriter();
     let rowsWhenCopied: number | null = null;
     const observingWriter: BackupFileWriter = {
-      async writeForShare() {},
+      async writeForShare() {
+        return { kind: 'download' };
+      },
       async writeCopy(fileName, text) {
         writer.copies.push({ fileName, text });
         // The copy is the safety net: the ledger must still be whole here.
         rowsWhenCopied = await countTxnRows(db);
+        return { kind: 'cache', uri: `file:///cache/${fileName}` };
       },
     };
 
@@ -219,6 +274,10 @@ describe('resetWithBackup', () => {
 
     expect(rowsWhenCopied).toBe(1);
     expect(result.beforeFileName).toBe(beforeBackupFileName(NOW));
+    expect(result.beforeDestination).toEqual({
+      kind: 'cache',
+      uri: `file:///cache/${beforeBackupFileName(NOW)}`,
+    });
     expect(writer.copies.map(file => file.fileName)).toEqual([beforeBackupFileName(NOW)]);
     // It is the pre-reset ledger, readable by the same codec an import uses.
     const copy = parseBackup(writer.copies[0].text);
@@ -243,7 +302,9 @@ describe('resetWithBackup', () => {
     await seedDefaults(db);
     await seedExpense(db, 500, 'keep me');
     const writer: BackupFileWriter = {
-      async writeForShare() {},
+      async writeForShare() {
+        return { kind: 'download' };
+      },
       async writeCopy() {
         throw new Error('缓存不可写');
       },

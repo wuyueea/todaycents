@@ -8,6 +8,8 @@ export interface ToastProps {
   /** Optional one-tap follow-up, such as 撤销. */
   actionLabel?: string;
   onAction?(): void;
+  /** Extra positioning class, for stacking a status above an undo bar. */
+  className?: string;
 }
 
 /**
@@ -17,11 +19,14 @@ export interface ToastProps {
  * A toast that carries an action (the category delete's 10-second 撤销) keeps
  * that action inside the same bar, so the undo is where the confirmation was.
  */
-export function Toast({ text, actionLabel, onAction }: ToastProps) {
+export function Toast({ text, actionLabel, onAction, className }: ToastProps) {
   const withAction = actionLabel !== undefined && onAction !== undefined;
+  const classes = [withAction ? 'toast toast--action' : 'toast', className]
+    .filter(Boolean)
+    .join(' ');
 
   return (
-    <div className={withAction ? 'toast toast--action' : 'toast'} role="status">
+    <div className={classes} role="status">
       <span className="toast__text">{text}</span>
       {withAction && (
         <button className="toast__action" type="button" onClick={onAction}>

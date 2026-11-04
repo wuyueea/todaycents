@@ -7,9 +7,11 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 
+import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 
 /**
@@ -45,6 +47,41 @@ public class MainActivity extends BridgeActivity {
         // and a plugin added afterwards would miss the first page load.
         registerPlugin(FolderPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Capacitor 8 hands the back key to its App plugin, which this app does
+        // not ship, so Android finished the activity from every screen. The page
+        // now answers first: it closes the newest sheet, or steps back in the
+        // router, and only a page with nothing left to close lets the shell go.
+        // Never call super.onBackPressed() from that callback: it dispatches
+        // the press back into this same callback, which recurses until the
+        // stack runs out. The page owns the decision; the shell only exits.
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                askPageAboutBack();
+            }
+        });
+    }
+
+    /**
+     * Asks the page what the back key should do. The page returns "1" when it
+     * handled the press; anything else (0, null, a page that never loaded)
+     * means the press belongs to Android, so the activity finishes.
+     */
+    private void askPageAboutBack() {
+        Bridge bridge = getBridge();
+        if (bridge == null) {
+            finish();
+            return;
+        }
+        try {
+            bridge.eval("(window.__todaycentsBack ? window.__todaycentsBack() : 0)", value -> {
+                if (!"1".equals(value)) finish();
+            });
+        } catch (RuntimeException bridgeError) {
+            // A torn-down WebView must not turn a back press into a crash.
+            finish();
+        }
     }
 
     /**

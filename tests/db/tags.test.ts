@@ -5,18 +5,26 @@ import { createCategory } from '../../src/db/repos/categories';
 import { createExpense, listTxnsByMonth, softDeleteTxn } from '../../src/db/repos/txns';
 import {
   archiveTag,
+  archiveTagWithUnlink,
   createTag,
-  deleteTag,
   getTxnTags,
+  inspectTagPurge,
   listTags,
   listTagsForTxns,
+  purgeTag,
   renameTag,
   setTxnTags,
   tagUsage,
   unarchiveTag,
 } from '../../src/db/repos/tags';
+import { readPurgeUndo, undoPurge } from '../../src/db/repos/purge';
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
+
+async function purgeUndoCount(db: TestDb): Promise<number> {
+  const row = await db.get<{ count: number }>('SELECT COUNT(*) AS count FROM purge_undo');
+  return row?.count ?? 0;
+}
 
 /** A migrated database with one account, one category and a helper to spend. */
 async function fixture(): Promise<{
@@ -131,38 +139,143 @@ describe('archiveTag / unarchiveTag', () => {
   });
 });
 
-describe('deleteTag', () => {
-  it('removes only the tag links and soft-deletes the tag, leaving transactions intact', async () => {
+describe('archiveTagWithUnlink / inspectTagPurge', () => {
+  it('removes every link, including links on deleted transactions, and archives the tag without touching transactions', async () => {
     const { db, spend } = await fixture();
-    const txn = await spend('2026-10-01');
+    const liveTxn = await spend('2026-10-01');
+    const deletedTxn = await spend('2026-10-02');
     const tag = await createTag(db, '夜宵');
-    await setTxnTags(db, txn, [tag]);
+    await setTxnTags(db, liveTxn, [tag]);
+    await setTxnTags(db, deletedTxn, [tag]);
+    await softDeleteTxn(db, deletedTxn);
 
-    await deleteTag(db, tag);
+    expect(await inspectTagPurge(db, tag)).toMatchObject({
+      purgeable: false,
+      archived: false,
+      linkCount: 2,
+      deletedLinkCount: 1,
+    });
 
-    expect(await listTxnsByMonth(db, '2026-10')).toHaveLength(1);
-    expect((await listTxnsByMonth(db, '2026-10'))[0].id).toBe(txn);
+    const result = await archiveTagWithUnlink(db, tag);
+
+    expect(result).toEqual({ unlinked: 2, unlinkedOnDeleted: 1 });
     expect(await db.all('SELECT txn_id, tag_id FROM txn_tag')).toHaveLength(0);
-    expect(await getTxnTags(db, txn)).toEqual([]);
+    expect(await getTxnTags(db, liveTxn)).toEqual([]);
+    expect(await listTxnsByMonth(db, '2026-10')).toHaveLength(1);
+    expect(await db.all('SELECT id FROM txn')).toHaveLength(2);
+    expect(await purgeUndoCount(db)).toBe(0);
 
     const row = await db.get<{ archived_at: string | null }>(
       'SELECT archived_at FROM tag WHERE id = ?',
       [tag]
     );
     expect(row?.archived_at).not.toBeNull();
+    expect(await inspectTagPurge(db, tag)).toMatchObject({
+      purgeable: true,
+      archived: true,
+      linkCount: 0,
+      deletedLinkCount: 0,
+    });
   });
 
-  it('keeps the first deletion timestamp and never removes the tag row', async () => {
+  it('keeps the first archive timestamp when retired twice', async () => {
     const db = await createTestDb();
     const tag = await createTag(db, '夜宵');
 
-    await deleteTag(db, tag);
+    await archiveTagWithUnlink(db, tag);
     const first = await db.get<{ archived_at: string }>('SELECT archived_at FROM tag WHERE id = ?', [tag]);
-    await deleteTag(db, tag);
+    await archiveTagWithUnlink(db, tag);
     const second = await db.get<{ archived_at: string }>('SELECT archived_at FROM tag WHERE id = ?', [tag]);
 
     expect(second?.archived_at).toBe(first?.archived_at);
     expect(await db.all('SELECT id FROM tag')).toHaveLength(1);
+  });
+
+  it('rejects a missing tag and writes nothing', async () => {
+    const db = await createTestDb();
+
+    await expect(archiveTagWithUnlink(db, 'missing-tag')).rejects.toThrow(/不存在/);
+    await expect(inspectTagPurge(db, 'missing-tag')).rejects.toThrow(/不存在/);
+  });
+});
+
+describe('purgeTag', () => {
+  it('removes an archived tag with no links and undo restores it as archived', async () => {
+    const db = await createTestDb();
+    const tag = await createTag(db, '夜宵');
+    await archiveTag(db, tag);
+
+    const result = await purgeTag(db, tag);
+
+    expect(result.undo).toMatchObject({ kind: 'tag', targetId: tag, label: '夜宵' });
+    expect(await db.all('SELECT id FROM tag')).toHaveLength(0);
+    expect(await readPurgeUndo(db)).toMatchObject({ kind: 'tag', targetId: tag, label: '夜宵' });
+
+    await undoPurge(db, {
+      kind: 'tag',
+      targetId: tag,
+      expiresAt: result.undo.expiresAt,
+    });
+
+    const restored = await db.get<{ name: string; archived_at: string | null }>(
+      'SELECT name, archived_at FROM tag WHERE id = ?',
+      [tag]
+    );
+    expect(restored?.name).toBe('夜宵');
+    expect(restored?.archived_at).not.toBeNull();
+    expect(await purgeUndoCount(db)).toBe(0);
+  });
+
+  it('rolls the deletion back when writing the undo row fails in the same transaction', async () => {
+    const db = await createTestDb();
+    const tag = await createTag(db, '夜宵');
+    await archiveTag(db, tag);
+
+    const originalRun = db.run.bind(db);
+    let injected = false;
+    db.run = async (sql, params = []) => {
+      if (injected && sql.includes('INSERT INTO purge_undo')) {
+        injected = false;
+        throw new Error('injected failure');
+      }
+      return originalRun(sql, params);
+    };
+
+    try {
+      injected = true;
+      await expect(purgeTag(db, tag)).rejects.toThrow('injected failure');
+
+      expect(await db.all('SELECT id FROM tag WHERE id = ?', [tag])).toHaveLength(1);
+      expect(await purgeUndoCount(db)).toBe(0);
+    } finally {
+      db.run = originalRun;
+    }
+  });
+
+  it('refuses a live tag and a tag that still has links', async () => {
+    const { db, spend } = await fixture();
+    const txn = await spend('2026-10-01');
+    const live = await createTag(db, 'live');
+    const linked = await createTag(db, 'linked');
+    await setTxnTags(db, txn, [linked]);
+    await archiveTag(db, linked);
+
+    await expect(purgeTag(db, live)).rejects.toThrow('只有已归档的标签才能彻底删除');
+    await expect(purgeTag(db, linked)).rejects.toThrow('这个标签还有关联，不能彻底删除');
+    expect(await db.all('SELECT id FROM tag ORDER BY id')).toHaveLength(2);
+    expect(await purgeUndoCount(db)).toBe(0);
+  });
+
+  it('refuses a tag whose only link is on a deleted transaction', async () => {
+    const { db, spend } = await fixture();
+    const txn = await spend('2026-10-01');
+    const tag = await createTag(db, '夜宵');
+    await setTxnTags(db, txn, [tag]);
+    await softDeleteTxn(db, txn);
+    await archiveTag(db, tag);
+
+    await expect(purgeTag(db, tag)).rejects.toThrow('这个标签还有关联，不能彻底删除');
+    expect(await db.all('SELECT id FROM tag WHERE id = ?', [tag])).toHaveLength(1);
   });
 });
 

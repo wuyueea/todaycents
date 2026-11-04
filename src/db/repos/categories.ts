@@ -1,5 +1,7 @@
 import type { Db, DbParam } from '../driver';
 import { newId } from '../id';
+import type { PurgeUndoRecord } from './purge';
+import { PURGE_UNDO_MS, writePurgeUndo } from './purge';
 import {
   UNCATEGORIZED_CATEGORY_ID,
   UNCATEGORIZED_CATEGORY_NAME,
@@ -32,10 +34,34 @@ export interface CreateCategoryInput {
   sort?: number;
 }
 
-/** One transaction and the category it came from, captured by deleteCategory. */
-export interface CategoryMove {
-  txnId: string;
-  categoryId: string;
+/** What the archived-category menu needs to explain every purge blocker. */
+export interface CategoryPurgeInspection {
+  purgeable: boolean;
+  archived: boolean;
+  /** Live transactions 断联并归档 would move. */
+  liveTxnCount: number;
+  /** Every transaction in the subtree, soft-deleted rows included. */
+  txnCount: number;
+  deletedTxnCount: number;
+  templateCount: number;
+  /** Direct children that are not archived; they block a parent purge. */
+  liveChildCount: number;
+  /** Direct children a purge would delete with the target. */
+  childCount: number;
+  /** Derived hints that do not block a purge and are restored by undo. */
+  hintCount: number;
+}
+
+interface PurgedHintRow {
+  id: string;
+  category_id: string | null;
+  payee: string | null;
+  status: 'candidate' | 'confirmed' | 'dismissed';
+  monthly_cents: number;
+  last_date: string;
+  next_date: string;
+  occurrences: number;
+  detected_at: string;
 }
 
 /** Raw category row; the only shape that knows about snake_case columns. */
@@ -112,8 +138,8 @@ async function assertUsableParent(db: Db, parentId: string, kind: CategoryKind):
 
 /**
  * Creates one category and returns its id. Never opens a transaction: this is
- * called from inside seedDefaults' single unit of work, and the driver's
- * transactions are not re-entrant.
+ * called from inside seedDefaults' single unit of work, and a transaction
+ * opened here would only join that one.
  */
 export async function createCategory(db: Db, input: CreateCategoryInput): Promise<string> {
   const parentId = input.parentId ?? null;
@@ -163,8 +189,11 @@ export async function listCategories(
   return rows.map(toCategory);
 }
 
-/** The system category's three forbidden operations share one message shape. */
-function assertNotSystem(id: string, action: '改名' | '归档' | '删除'): void {
+/** The system category's forbidden operations share one message shape. */
+function assertNotSystem(
+  id: string,
+  action: '改名' | '归档' | '断联并归档' | '彻底删除'
+): void {
   if (id === UNCATEGORIZED_CATEGORY_ID) {
     throw new Error(`系统分类「${UNCATEGORIZED_CATEGORY_NAME}」不能${action}`);
   }
@@ -227,54 +256,120 @@ async function subtreeIds(db: Db, id: string): Promise<string[]> {
   return [id, ...children.map(child => child.id)];
 }
 
-/** Counts the live transactions that deleting this category would move. */
-export async function countCategoryTxns(db: Db, id: string): Promise<number> {
-  const ids = await subtreeIds(db, id);
-  const placeholders = ids.map(() => '?').join(', ');
-  const row = await db.get<{ n: number }>(
-    `SELECT COUNT(*) AS n FROM txn
-     WHERE deleted_at IS NULL AND category_id IN (${placeholders})`,
-    ids
-  );
-  return row?.n ?? 0;
+interface CategoryPurgeCounts {
+  liveTxnCount: number;
+  txnCount: number;
+  deletedTxnCount: number;
+  templateCount: number;
+  liveChildCount: number;
+  childCount: number;
+  hintCount: number;
 }
 
 /**
- * Deletes one category by reflowing history, then soft-deleting it.
- *
- * The whole operation is one transaction: every live transaction whose
- * category is this one or one of its direct children is pointed at the system
- * 未分类 category, then the category and its children get archived_at set. No
- * txn row is deleted, no amount changes, and the category rows themselves are
- * never physically removed. Soft-deleted transactions are history and keep
- * their old category_id; they are not moved.
- *
- * The ids are read before the UPDATE inside the same transaction, so they name
- * exactly the rows this call moved. A category with no transactions (or an
- * already-deleted one whose rows are all gone) succeeds and reports none.
+ * Every count the archived-category menu and purge need, over the subtree.
+ * Soft-deleted transactions count as history: they are hidden from the ledger
+ * but they still name this category, and rewriting them would be a data loss
+ * disguised as a menu action.
  */
-export async function deleteCategory(
+async function readPurgeCounts(
+  db: Db,
+  id: string,
+  ids: readonly string[]
+): Promise<CategoryPurgeCounts> {
+  const placeholders = ids.map(() => '?').join(', ');
+  const txn = await db.get<{
+    txn_count: number;
+    live_txn_count: number;
+    deleted_txn_count: number;
+  }>(
+    `SELECT COUNT(*) AS txn_count,
+            COALESCE(SUM(CASE WHEN deleted_at IS NULL THEN 1 ELSE 0 END), 0) AS live_txn_count,
+            COALESCE(SUM(CASE WHEN deleted_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS deleted_txn_count
+     FROM txn WHERE category_id IN (${placeholders})`,
+    ids
+  );
+  const template = await db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM template WHERE category_id IN (${placeholders})`,
+    ids
+  );
+  const children = await db.get<{ child_count: number; live_child_count: number }>(
+    `SELECT COUNT(*) AS child_count,
+            COALESCE(SUM(CASE WHEN archived_at IS NULL THEN 1 ELSE 0 END), 0) AS live_child_count
+     FROM category WHERE parent_id = ?`,
+    [id]
+  );
+  const hints = await db.get<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM recurring_hint WHERE category_id IN (${placeholders})`,
+    ids
+  );
+
+  return {
+    liveTxnCount: txn?.live_txn_count ?? 0,
+    txnCount: txn?.txn_count ?? 0,
+    deletedTxnCount: txn?.deleted_txn_count ?? 0,
+    templateCount: template?.n ?? 0,
+    liveChildCount: children?.live_child_count ?? 0,
+    childCount: children?.child_count ?? 0,
+    hintCount: hints?.n ?? 0,
+  };
+}
+
+/** Everything the archived category's 彻底删除 sheet needs, in one read. */
+export async function inspectCategoryPurge(
   db: Db,
   id: string
-): Promise<{ movedTxns: number; moves: CategoryMove[] }> {
-  assertNotSystem(id, '删除');
+): Promise<CategoryPurgeInspection> {
+  const ids = await subtreeIds(db, id);
+  const root = await db.get<{ archived_at: string | null }>(
+    'SELECT archived_at FROM category WHERE id = ?',
+    [id]
+  );
+  if (root === undefined) {
+    throw new Error(`分类不存在：${id}`);
+  }
+  const counts = await readPurgeCounts(db, id, ids);
+  const archived = root.archived_at !== null;
+  const system = id === UNCATEGORIZED_CATEGORY_ID;
+  return {
+    purgeable:
+      archived &&
+      !system &&
+      counts.txnCount === 0 &&
+      counts.templateCount === 0 &&
+      counts.liveChildCount === 0,
+    archived,
+    ...counts,
+  };
+}
+
+/**
+ * The live-category retirement action: move its live transactions to 未分类,
+ * then archive the root and every direct child.
+ *
+ * Soft-deleted transactions keep their category_id. They are history, not
+ * input to this action, and they still block a later purge. No undo record is
+ * written: 恢复 can bring the category back, but it cannot recreate the links
+ * this call deliberately broke, so the confirmation says so.
+ */
+export async function archiveCategoryWithUnlink(
+  db: Db,
+  id: string
+): Promise<{ movedTxns: number; archivedChildCount: number }> {
+  assertNotSystem(id, '断联并归档');
 
   return db.transaction(async tx => {
     const ids = await subtreeIds(tx, id);
     const placeholders = ids.map(() => '?').join(', ');
-
-    // Remember where each row came from: a child's transactions must return to
-    // that child on undo, not to the deleted parent.
-    const rows = await tx.all<{ id: string; category_id: string }>(
-      `SELECT id, category_id FROM txn
-       WHERE deleted_at IS NULL AND category_id IN (${placeholders})
-       ORDER BY created_at, id`,
+    const moved = await tx.get<{ n: number }>(
+      `SELECT COUNT(*) AS n FROM txn
+       WHERE deleted_at IS NULL AND category_id IN (${placeholders})`,
       ids
     );
-    const moves: CategoryMove[] = rows.map(row => ({
-      txnId: row.id,
-      categoryId: row.category_id,
-    }));
+    const children = await tx.get<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM category WHERE parent_id = ? AND archived_at IS NULL',
+      [id]
+    );
 
     await tx.run(
       `UPDATE txn SET category_id = ?
@@ -287,62 +382,100 @@ export async function deleteCategory(
       [new Date().toISOString(), ...ids]
     );
 
-    return { movedTxns: moves.length, moves };
+    return {
+      movedTxns: moved?.n ?? 0,
+      archivedChildCount: children?.n ?? 0,
+    };
   });
 }
 
 /**
- * The 10-second undo for deleteCategory.
+ * Physically removes an archived category that has no history at all. The
+ * check is repeated inside the transaction: an inspect result is a snapshot,
+ * and a transaction that trusts it could delete a row written since.
  *
- * One transaction restores the moved rows and clears the category's
- * archived_at. Children archived by the same delete (same timestamp) are
- * restored too, so the visible tree comes back rather than leaving orphans in
- * 已归档. It only touches rows that still point at 未分类: if the user already
- * gave one of them another category in that window, their newer choice wins.
- * Soft-deleted rows are never resurrected.
- *
- * The ids come from the delete that is being undone. An empty list still
- * unarchives the category, which is how a delete with zero moved rows is
- * undone. The system 未分类 category can never be the target: it is refused
- * with the same message as the destructive operation.
+ * The exact rows are stored in purge_undo before they disappear. That includes
+ * recurring_hint rows, which do not block a purge but must come back if the
+ * owner presses 撤销. No txn row is touched.
  */
-export async function undoDeleteCategory(
+export async function purgeCategory(
   db: Db,
-  id: string,
-  moves: readonly CategoryMove[]
-): Promise<void> {
-  assertNotSystem(id, '删除');
-  const unique = [...new Map(moves.map(move => [move.txnId, move])).values()];
+  id: string
+): Promise<{ undo: PurgeUndoRecord; deletedChildren: number }> {
+  assertNotSystem(id, '彻底删除');
 
-  await db.transaction(async tx => {
-    const existing = await tx.get<{ archived_at: string | null }>(
-      'SELECT archived_at FROM category WHERE id = ?',
+  return db.transaction(async tx => {
+    const ids = await subtreeIds(tx, id);
+    const root = await tx.get<CategoryRow>(
+      `SELECT ${CATEGORY_COLUMNS} FROM category WHERE id = ?`,
       [id]
     );
-    if (existing === undefined) {
+    if (root === undefined) {
       throw new Error(`分类不存在：${id}`);
     }
-
-    // Row by row: a parent delete can move transactions of several children,
-    // and each must go back to the category it actually came from.
-    for (const move of unique) {
-      await tx.run(
-        `UPDATE txn SET category_id = ?
-         WHERE id = ? AND category_id = ? AND deleted_at IS NULL`,
-        [move.categoryId, move.txnId, UNCATEGORIZED_CATEGORY_ID]
-      );
+    if (root.archived_at === null) {
+      throw new Error('只有已归档的分类才能彻底删除');
     }
 
-    // deleteCategory archives the root and its children with one timestamp.
-    // Undo restores exactly that batch; a child archived earlier keeps its own
-    // older timestamp and stays archived, so an unrelated archive is not undone
-    // by accident.
-    if (existing.archived_at !== null) {
-      await tx.run(
-        'UPDATE category SET archived_at = NULL WHERE parent_id = ? AND archived_at = ?',
-        [id, existing.archived_at]
-      );
+    const counts = await readPurgeCounts(tx, id, ids);
+    if (counts.txnCount > 0 || counts.templateCount > 0 || counts.liveChildCount > 0) {
+      throw new Error('这个分类还有历史，不能彻底删除');
     }
-    await tx.run('UPDATE category SET archived_at = NULL WHERE id = ?', [id]);
+
+    const children = await tx.all<CategoryRow>(
+      `SELECT ${CATEGORY_COLUMNS} FROM category WHERE parent_id = ? ORDER BY sort, name`,
+      [id]
+    );
+    const placeholders = ids.map(() => '?').join(', ');
+    const hints = await tx.all<PurgedHintRow>(
+      `SELECT id, category_id, payee, status, monthly_cents, last_date, next_date,
+              occurrences, detected_at
+       FROM recurring_hint WHERE category_id IN (${placeholders})
+       ORDER BY id`,
+      ids
+    );
+
+    const payload = {
+      category: [
+        {
+          id: root.id,
+          parent_id: root.parent_id,
+          name: root.name,
+          kind: root.kind,
+          sort: root.sort,
+          archived_at: root.archived_at,
+        },
+        ...children.map(child => ({
+          id: child.id,
+          parent_id: child.parent_id,
+          name: child.name,
+          kind: child.kind,
+          sort: child.sort,
+          archived_at: child.archived_at,
+        })),
+      ],
+      hints,
+    };
+
+    await tx.run(
+      `DELETE FROM recurring_hint WHERE category_id IN (${placeholders})`,
+      ids
+    );
+    await tx.run('DELETE FROM category WHERE parent_id = ?', [id]);
+    await tx.run('DELETE FROM category WHERE id = ?', [id]);
+
+    const expiresAt = Date.now() + PURGE_UNDO_MS;
+    await writePurgeUndo(tx, {
+      kind: 'category',
+      targetId: id,
+      label: root.name,
+      expiresAt,
+      payload,
+    });
+
+    return {
+      undo: { kind: 'category' as const, targetId: id, label: root.name, expiresAt },
+      deletedChildren: children.length,
+    };
   });
 }

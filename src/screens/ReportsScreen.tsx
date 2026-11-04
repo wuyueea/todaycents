@@ -12,7 +12,7 @@ import { formatCentsDisplay } from '../components/AmountText';
 import { ReportPie, sliceShade } from '../components/ReportPie';
 import { Toast, useToast } from '../components/Toast';
 import { useDb, useQuery } from '../store/useDb';
-import { deviceBinaryFileWriter } from '../backup/device';
+import { deviceBinaryFileWriter, ShareCanceledError } from '../backup/device';
 import { exportMonthWorkbook, exportYearWorkbook } from '../export/reportWorkbook';
 import { exportToast } from '../backup/format';
 import { formatMonthLabel, monthKeyOf, shiftMonthKey, todayLocalISO } from '../domain/date';
@@ -496,7 +496,11 @@ export default function ReportsScreen() {
       showToast(exportToast({ fileName: result.fileName, bytes: result.bytes }));
     } catch (reason) {
       clearToast();
-      setExportError(`导出失败：${reason instanceof Error ? reason.message : String(reason)}`);
+      setExportError(
+        reason instanceof ShareCanceledError
+          ? '已取消导出，文件还在应用缓存里。'
+          : `导出失败：${reason instanceof Error ? reason.message : String(reason)}`
+      );
     } finally {
       setExporting(false);
     }

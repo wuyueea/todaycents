@@ -1,5 +1,8 @@
+import { useEffect } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { installBackHandler } from './components/backButton';
 import AppDock from './components/AppDock';
+import GlobalPurgeUndo from './components/GlobalPurgeUndo';
 import TodayScreen from './screens/TodayScreen';
 import QuickEntryScreen from './screens/QuickEntryScreen';
 import LedgerScreen from './screens/LedgerScreen';
@@ -37,13 +40,24 @@ export default function App() {
   const { db, error } = useDb();
   const location = useLocation();
   const navigate = useNavigate();
+  // Android's back key: the newest sheet closes itself first, then the router
+  // steps back, and only on the first entry does the shell close the app.
+  useEffect(() => installBackHandler(navigate), [navigate]);
   const isEntryOpen = location.pathname === '/add';
+  const locationState = location.state as {
+    backgroundLocation?: typeof location;
+    /** 账户 was opened from 随手记's empty-account link. */
+    quickEntryOpen?: boolean;
+  } | null;
   // Opening 随手记 keeps the page underneath mounted: the + navigates to /add
   // with the current location in state, and the base Routes render that saved
   // location. A direct /add (a stale link) has no saved page, so 今天 stands in.
-  const backgroundLocation = (
-    location.state as { backgroundLocation?: typeof location } | null
-  )?.backgroundLocation;
+  const backgroundLocation = locationState?.backgroundLocation;
+  // 账户 can be opened from 随手记 when no account exists. Keep the sheet
+  // mounted underneath (hidden) so the typed draft survives the detour; the
+  // account screen returns by stepping back, which reveals the same instance.
+  const quickEntryOpen =
+    isEntryOpen || (location.pathname === '/accounts' && locationState?.quickEntryOpen === true);
   const baseLocation = isEntryOpen
     ? (backgroundLocation ?? { ...location, pathname: '/', search: '', hash: '' })
     : location;
@@ -110,13 +124,21 @@ export default function App() {
         </Routes>
       </main>
 
-      {isEntryOpen && (
-        <QuickEntryScreen
-          onClose={() => {
-            if (backgroundLocation) navigate(-1);
-            else navigate('/', { replace: true });
-          }}
-        />
+      {/* The category/tag purge's ten-second undo survives a restart in SQLite.
+          Only the four dock tabs read it here: pushed pages and 随手记 own the
+          bottom of their screen, and the management pages show their own copy. */}
+      {!isFullScreen && <GlobalPurgeUndo />}
+
+      {quickEntryOpen && (
+        <div hidden={!isEntryOpen}>
+          <QuickEntryScreen
+            active={isEntryOpen}
+            onClose={() => {
+              if (backgroundLocation) navigate(-1);
+              else navigate('/', { replace: true });
+            }}
+          />
+        </div>
       )}
 
       {!isFullScreen && <AppDock />}
