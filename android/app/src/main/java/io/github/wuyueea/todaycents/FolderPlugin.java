@@ -8,7 +8,6 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Environment;
-import android.os.FileUriExposedException;
 import android.provider.DocumentsContract;
 import android.util.Base64;
 
@@ -58,6 +57,9 @@ public class FolderPlugin extends Plugin {
     private static final String DEFAULT_FOLDER_NAME = "记账本";
     private static final String INTERNAL_STORAGE = "内部存储";
     private static final String PROBE_PREFIX = ".ledger-probe-";
+    private static final String EXTERNAL_STORAGE_AUTHORITY =
+        "com.android.externalstorage.documents";
+    private static final String DOCUMENTS_UI_PACKAGE = "com.android.documentsui";
 
     private SharedPreferences prefs() {
         return getContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE);
@@ -238,12 +240,16 @@ public class FolderPlugin extends Plugin {
     }
 
     /**
-     * Opens the folder in a file manager.
+     * Opens the exact folder in the system Files app.
      *
-     * A file:// Uri is tried first, with a read grant, because many file
-     * managers show the exact directory that way. If StrictMode raises
-     * FileUriExposedException (or no app claims it), the system Files app is
-     * started at internal storage instead. Nothing handling either is a normal
+     * A file:// Uri is not usable on API 26+, and a root/document Uri carrying
+     * FLAG_GRANT_READ_URI_PERMISSION makes the external-storage provider throw
+     * SecurityException. The document Uri needs no grant: the Files app already
+     * has provider access.
+     *
+     * The AOSP Files package is tried first so the owner lands in the folder
+     * without a chooser. A ROM without it gets the generic VIEW chooser, then
+     * the system folder picker. Nothing handling any of them is a normal
      * { opened: false }, not an error.
      */
     @PluginMethod
@@ -253,7 +259,7 @@ public class FolderPlugin extends Plugin {
             call.resolve(opened(false));
             return;
         }
-        call.resolve(opened(openWithFileManager(folder) || openSystemFiles()));
+        call.resolve(opened(openSystemFiles(folder)));
     }
 
     /**
@@ -360,36 +366,47 @@ public class FolderPlugin extends Plugin {
         return probe.delete();
     }
 
-    private boolean openWithFileManager(File folder) {
-        Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.setDataAndType(Uri.fromFile(folder), DocumentsContract.Document.MIME_TYPE_DIR);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        // No resolveActivity() gate: package visibility can hide a file manager
-        // that can still be started. FileUriExposedException is the signal to
-        // fall back to the system Files app.
+    /** The exact folder as a document Uri, or null outside shared storage. */
+    private Uri folderDocumentUri(File folder) {
         try {
-            getActivity().startActivity(intent);
-            return true;
-        } catch (FileUriExposedException error) {
-            return false;
-        } catch (Exception error) {
-            return false;
+            File root = sharedRoot().getCanonicalFile();
+            File target = folder.getCanonicalFile();
+            String rootPath = root.getAbsolutePath();
+            String targetPath = target.getAbsolutePath();
+            if (!targetPath.equals(rootPath)
+                && !targetPath.startsWith(rootPath + File.separator)) {
+                return null;
+            }
+
+            String relative = targetPath.substring(rootPath.length());
+            while (relative.startsWith(File.separator)) {
+                relative = relative.substring(1);
+            }
+            String docId = "primary:" + relative.replace(File.separatorChar, '/');
+            return DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, docId);
+        } catch (IOException | SecurityException error) {
+            return null;
         }
     }
 
-    /** The system Files app at internal storage, then the generic Files entry. */
-    private boolean openSystemFiles() {
-        Intent root = new Intent(Intent.ACTION_VIEW);
-        root.setDataAndType(
-            DocumentsContract.buildRootUri("com.android.externalstorage.documents", "primary"),
-            DocumentsContract.Document.MIME_TYPE_DIR
-        );
-        root.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        if (startIfHandled(root)) return true;
+    /** Direct Files app, generic VIEW chooser, then the folder picker. */
+    private boolean openSystemFiles(File folder) {
+        Uri uri = folderDocumentUri(folder);
+        if (uri == null) return false;
 
-        Intent files = new Intent(Intent.ACTION_MAIN);
-        files.addCategory(Intent.CATEGORY_APP_FILES);
-        return startIfHandled(files);
+        // No read grant: the external-storage provider rejects one for this Uri.
+        Intent direct = new Intent(Intent.ACTION_VIEW);
+        direct.setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR);
+        direct.setPackage(DOCUMENTS_UI_PACKAGE);
+        if (startIfHandled(direct)) return true;
+
+        Intent chooser = new Intent(Intent.ACTION_VIEW);
+        chooser.setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR);
+        if (startIfHandled(chooser)) return true;
+
+        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+        picker.putExtra(DocumentsContract.EXTRA_INITIAL_URI, uri);
+        return startIfHandled(picker);
     }
 
     private boolean startIfHandled(Intent intent) {

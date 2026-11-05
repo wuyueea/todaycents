@@ -16,8 +16,8 @@ import type { FolderAccess, FolderListing, StoredFolder } from '../storage/folde
  * this screen never touches the writers directly.
  */
 
-/** Shown when no app handles the folder or the Files app. */
-export const OPEN_FOLDER_UNAVAILABLE = '这台设备没有能打开文件夹的应用。';
+/** Shown when the folder could not be opened and there is no path to name. */
+export const OPEN_FOLDER_UNAVAILABLE = '没能打开文件夹，请在文件管理器里手动进入备份目录。';
 
 /** Shown when the native bridge is missing: the screen cannot do its job. */
 export const PLUGIN_MISSING = '这台设备不支持存储设置。';
@@ -34,9 +34,13 @@ export const NO_USABLE_FOLDER = '当前文件夹不可用，导出会放进应�
 /** The three states the page can be in; checking is the first render. */
 export type StorageAccessPhase = 'checking' | 'denied' | 'granted';
 
-/** A failed open is a sentence, not an exception. */
-export function openFolderNote(opened: boolean): string | null {
-  return opened ? null : OPEN_FOLDER_UNAVAILABLE;
+/** A failed open is a sentence with the path to enter, not an exception. */
+export function openFolderNote(opened: boolean, path?: string | null): string | null {
+  if (opened) return null;
+  const where = typeof path === 'string' ? path.trim() : '';
+  return where === ''
+    ? OPEN_FOLDER_UNAVAILABLE
+    : `没能打开文件夹，请在文件管理器里进入 ${where}。`;
 }
 
 export interface StorageViewProps {
@@ -402,14 +406,14 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
     setNote(null);
   };
 
-  /** False is a normal answer: the file manager simply is not there. */
+  /** False is a normal answer: no app took the folder; name the path instead. */
   const open = async () => {
     if (busy || stored === null) return;
     setBusy(true);
     setNote(null);
     setError(null);
     try {
-      setNote(openFolderNote(await folder.open()));
+      setNote(openFolderNote(await folder.open(), stored.path));
     } catch (reason) {
       setError(`打开失败：${reasonText(reason)}`);
     } finally {

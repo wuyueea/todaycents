@@ -116,7 +116,7 @@ describe('StorageView', () => {
     expect(up).toContain('disabled');
   });
 
-  it('shows the missing-file-manager sentence instead of crashing', () => {
+  it('shows the manual fallback sentence instead of crashing', () => {
     const html = render(
       <StorageView
         {...base}
@@ -126,7 +126,7 @@ describe('StorageView', () => {
       />
     );
 
-    expect(html).toContain('这台设备没有能打开文件夹的应用。');
+    expect(html).toContain('没能打开文件夹，请在文件管理器里手动进入备份目录。');
     expect(html).toMatch(/role="status"/);
   });
 
@@ -149,5 +149,11 @@ describe('openFolderNote', () => {
   it('is silent when the file manager opened and speaks up when none exists', () => {
     expect(openFolderNote(true)).toBeNull();
     expect(openFolderNote(false)).toBe(OPEN_FOLDER_UNAVAILABLE);
+  });
+
+  it('names the folder path when no app could open it', () => {
+    expect(openFolderNote(false, FOLDER.path)).toBe(
+      `没能打开文件夹，请在文件管理器里进入 ${FOLDER.path}。`
+    );
   });
 });

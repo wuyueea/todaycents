@@ -2,7 +2,7 @@
 
 一个自用的、离线的 Android 记账应用：本地 SQLite、整数分记账、无网络权限。
 
-> 当前状态：个人项目，UI v1 已落地，[v1.0.1](https://github.com/wuyueea/todaycents/releases/tag/v1.0.1) 已发布，836 个测试通过。欢迎围观和提 issue，但项目仍会按自己的节奏演进。
+> 当前状态：个人项目，UI v1 已落地，[v1.0.2](https://github.com/wuyueea/todaycents/releases/tag/v1.0.2) 已发布，848 个测试通过。欢迎围观和提 issue，但项目仍会按自己的节奏演进。
 
 <p align="center">
   <img src="docs/screenshots/today.jpg" width="230" alt="今天">

@@ -110,6 +110,27 @@ describe('monthReport', () => {
     ]);
   });
 
+  it('rolls second-level categories into their first-level parent', async () => {
+    const { db, card, food, daily } = await fixture();
+    const lunch = await createCategory(db, { name: '午餐', kind: 'expense', parentId: food });
+    const dinner = await createCategory(db, { name: '晚餐', kind: 'expense', parentId: food });
+
+    await createExpense(db, { date: '2026-10-01', accountId: card, amountCents: 1230, categoryId: lunch });
+    await createExpense(db, { date: '2026-10-02', accountId: card, amountCents: 1000, categoryId: dinner });
+    await createExpense(db, { date: '2026-10-03', accountId: card, amountCents: 350, categoryId: daily });
+
+    const report = await monthReport(db, '2026-10', { today: '2026-10-20' });
+
+    expect(
+      report.categories.map(({ categoryId, name, cents }) => ({ categoryId, name, cents }))
+    ).toEqual([
+      { categoryId: food, name: '饮食', cents: 2230 },
+      { categoryId: daily, name: '日用', cents: 350 },
+    ]);
+    expect(report.categories.map(row => row.name)).not.toContain('午餐');
+    expect(report.categories.map(row => row.name)).not.toContain('晚餐');
+  });
+
   it('flags future months without inventing or erasing their cents', async () => {
     const { db, card, food } = await fixture();
     await createExpense(db, { date: '2026-10-01', accountId: card, amountCents: 100, categoryId: food });
@@ -289,6 +310,25 @@ describe('yearReport', () => {
     // the quietest.
     expect(report.busiestMonth).toEqual({ month: '2026-07', cents: 5000 });
     expect(report.quietestMonth).toEqual({ month: '2026-02', cents: 0 });
+  });
+
+  it('rolls second-level categories into their first-level parent across the year', async () => {
+    const { db, card, food, daily } = await fixture();
+    const lunch = await createCategory(db, { name: '午餐', kind: 'expense', parentId: food });
+    const dinner = await createCategory(db, { name: '晚餐', kind: 'expense', parentId: food });
+
+    await createExpense(db, { date: '2026-01-01', accountId: card, amountCents: 1230, categoryId: lunch });
+    await createExpense(db, { date: '2026-02-01', accountId: card, amountCents: 1000, categoryId: dinner });
+    await createExpense(db, { date: '2026-03-01', accountId: card, amountCents: 350, categoryId: daily });
+
+    const report = await yearReport(db, 2026, { today: '2026-10-20' });
+
+    expect(
+      report.categories.map(({ categoryId, name, cents }) => ({ categoryId, name, cents }))
+    ).toEqual([
+      { categoryId: food, name: '饮食', cents: 2230 },
+      { categoryId: daily, name: '日用', cents: 350 },
+    ]);
   });
 
   it('covers a fully past year and an entirely future one', async () => {

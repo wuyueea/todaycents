@@ -14,10 +14,10 @@ export default function AppDock() {
   const location = useLocation();
   return (
     <nav className="dock" aria-label="主导航">
-      <NavLink to="/" end className={linkClass}>
+      <NavLink to="/" end replace className={linkClass}>
         今天
       </NavLink>
-      <NavLink to="/ledger" className={linkClass}>
+      <NavLink to="/ledger" replace className={linkClass}>
         流水
       </NavLink>
       <Link
@@ -28,10 +28,10 @@ export default function AppDock() {
       >
         <span aria-hidden="true">+</span>
       </Link>
-      <NavLink to="/reports" className={linkClass}>
+      <NavLink to="/reports" replace className={linkClass}>
         报表
       </NavLink>
-      <NavLink to="/settings" className={linkClass}>
+      <NavLink to="/settings" replace className={linkClass}>
         设置
       </NavLink>
     </nav>

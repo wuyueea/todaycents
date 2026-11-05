@@ -125,19 +125,21 @@ const MONTHLY_EXPENSE = `SELECT substr(t.occurred_date, 1, 7) AS month,
 /**
  * The year's category totals.
  *
- * The WHERE clause is SHARES_BY_MONTH's, only wider, and the rows go through
- * mergeCategoryShares so a null category and the system 未分类 row still collapse
- * into one bucket. One GROUP BY for the whole year is the difference; the
- * grouping key and the bucket rule are shared with the month report.
+ * The WHERE clause and first-level grouping key are SHARES_BY_MONTH's, only
+ * wider, and the rows go through mergeCategoryShares so a null category and the
+ * system 未分类 row still collapse into one bucket. One GROUP BY for the whole
+ * year is the difference; 午餐 and 晚餐 still land in 饮食.
  */
-const YEAR_SHARES = `SELECT t.category_id AS category_id, c.name AS name,
+const YEAR_SHARES = `SELECT COALESCE(c.parent_id, t.category_id) AS category_id,
+        COALESCE(p.name, c.name) AS name,
         SUM(-t.amount_cents) AS cents
  FROM txn t
  JOIN account a ON a.id = t.account_id
  LEFT JOIN category c ON c.id = t.category_id
+ LEFT JOIN category p ON p.id = c.parent_id
  WHERE t.deleted_at IS NULL AND t.direction = 'expense'
    AND t.occurred_date >= ? AND t.occurred_date <= ?
- GROUP BY t.category_id`;
+ GROUP BY COALESCE(c.parent_id, t.category_id)`;
 
 interface YearSummaryRow {
   expense_cents: number;

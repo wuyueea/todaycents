@@ -16,8 +16,15 @@ import { Toast, useToast } from './Toast';
  * It is absent on pushed pages and 随手记, which own the bottom of their screen.
  * The management pages render their own local copy for their kind; when the
  * owner returns to a tab, this component remounts and reads the row again.
+ *
+ * App uses onActiveChange to lift "an undo bar is on screen" into the shell,
+ * so the exit warning can stack above that bar instead of covering 撤销.
  */
-export default function GlobalPurgeUndo() {
+interface GlobalPurgeUndoProps {
+  onActiveChange?: (active: boolean) => void;
+}
+
+export default function GlobalPurgeUndo({ onActiveChange }: GlobalPurgeUndoProps) {
   const { db, bump } = useDb();
   const query = useQuery<PurgeUndoRecord | null>(readPurgeUndo, []);
   const { toast, showToast, clearToast } = useToast();
@@ -25,6 +32,18 @@ export default function GlobalPurgeUndo() {
   const [busy, setBusy] = useState(false);
 
   const active = selectPurgeUndo(null, query.data, dismissedKey);
+
+  useEffect(() => {
+    onActiveChange?.(active !== null);
+  }, [active, onActiveChange]);
+
+  // Unmounting (a pushed page) hides the bar without changing active.
+  useEffect(
+    () => () => {
+      onActiveChange?.(false);
+    },
+    [onActiveChange]
+  );
 
   useEffect(() => {
     if (active === null) return;

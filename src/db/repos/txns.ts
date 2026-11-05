@@ -526,19 +526,25 @@ export interface CategoryShareRow {
 }
 
 /**
- * Expense totals per category, largest first. Each null category collapses
- * into the single 未分类 bucket represented by an empty id, so the bucket is
- * stable across months. Summing the buckets equals monthSummary.expenseCents
- * because both queries take the same live expense rows and joins.
+ * Expense totals per first-level category, largest first.
+ *
+ * A second-level category's cents roll into its parent: 午餐 and 晚餐 are both
+ * 饮食 in the report. The parent join is why the key is COALESCE(parent_id,
+ * category_id) rather than t.category_id. Each null category collapses into
+ * the single 未分类 bucket represented by an empty id, so the bucket is stable
+ * across months. Summing the buckets equals monthSummary.expenseCents because
+ * both queries take the same live expense rows and joins.
  */
-const SHARES_BY_MONTH = `SELECT t.category_id AS category_id, c.name AS name,
+const SHARES_BY_MONTH = `SELECT COALESCE(c.parent_id, t.category_id) AS category_id,
+        COALESCE(p.name, c.name) AS name,
         SUM(-t.amount_cents) AS cents
  FROM txn t
  JOIN account a ON a.id = t.account_id
  LEFT JOIN category c ON c.id = t.category_id
+ LEFT JOIN category p ON p.id = c.parent_id
  WHERE t.deleted_at IS NULL AND t.direction = 'expense'
    AND t.occurred_date >= ? AND t.occurred_date <= ?
- GROUP BY t.category_id
+ GROUP BY COALESCE(c.parent_id, t.category_id)
  ORDER BY cents DESC`;
 
 export interface CategoryShare {
@@ -556,9 +562,10 @@ export interface CategoryShare {
  * when its category was deleted). They are one bucket to the owner, so merge
  * them here — the GROUP BY cannot, and two 未分类 bars would be a lie.
  *
- * categoryShares and a project's detail share this rule on purpose: a
- * project's 花在哪 must bucket exactly like a month's, or the same expense
- * would change category when it is attached to a trip.
+ * categoryShares and a project's detail both run their rows through this
+ * function so the same 未分类 bucket appears in both. The report's queries roll
+ * second-level categories into their parent first; a project's 花在哪 keeps the
+ * leaf category, so a trip can still say 午餐 rather than only 饮食.
  */
 export function mergeCategoryShares(rows: readonly CategoryShareRow[]): CategoryShare[] {
   const merged = new Map<string, CategoryShare>();

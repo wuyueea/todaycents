@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
-import { installBackHandler } from './components/backButton';
+import { EXIT_WINDOW_MS, installBackHandler } from './components/backButton';
 import AppDock from './components/AppDock';
 import GlobalPurgeUndo from './components/GlobalPurgeUndo';
+import { Toast } from './components/Toast';
 import TodayScreen from './screens/TodayScreen';
 import QuickEntryScreen from './screens/QuickEntryScreen';
 import LedgerScreen from './screens/LedgerScreen';
@@ -40,9 +41,35 @@ export default function App() {
   const { db, error } = useDb();
   const location = useLocation();
   const navigate = useNavigate();
-  // Android's back key: the newest sheet closes itself first, then the router
-  // steps back, and only on the first entry does the shell close the app.
-  useEffect(() => installBackHandler(navigate), [navigate]);
+  // Android's back key: the newest sheet closes itself first, then the page
+  // steps up one structural level, and only a tab can ask the shell to close.
+  // The handler is installed once; it reads the current route from this ref so
+  // a press after any navigation is judged against the screen on top.
+  const locationRef = useRef(location);
+  locationRef.current = location;
+  const [exitHint, setExitHint] = useState(0);
+  // GlobalPurgeUndo owns the stored undo record, but the exit warning lives in
+  // this shell. Lifting whether the bar is visible lets the warning stack above
+  // it instead of covering the 撤销 action for two seconds.
+  const [undoVisible, setUndoVisible] = useState(false);
+  useEffect(
+    () =>
+      installBackHandler({
+        navigate,
+        historyBack: () => navigate(-1),
+        current: () => locationRef.current,
+        onExitPrompt: () => setExitHint((count) => count + 1),
+      }),
+    [navigate]
+  );
+  // The warning is shallow: it clears itself, and a route change clears it too,
+  // so a stale “再按一次” cannot survive the next screen.
+  useEffect(() => {
+    if (exitHint === 0) return;
+    const timer = window.setTimeout(() => setExitHint(0), EXIT_WINDOW_MS);
+    return () => window.clearTimeout(timer);
+  }, [exitHint]);
+  useEffect(() => setExitHint(0), [location.pathname]);
   const isEntryOpen = location.pathname === '/add';
   const locationState = location.state as {
     backgroundLocation?: typeof location;
@@ -127,7 +154,7 @@ export default function App() {
       {/* The category/tag purge's ten-second undo survives a restart in SQLite.
           Only the four dock tabs read it here: pushed pages and 随手记 own the
           bottom of their screen, and the management pages show their own copy. */}
-      {!isFullScreen && <GlobalPurgeUndo />}
+      {!isFullScreen && <GlobalPurgeUndo onActiveChange={setUndoVisible} />}
 
       {quickEntryOpen && (
         <div hidden={!isEntryOpen}>
@@ -142,6 +169,13 @@ export default function App() {
       )}
 
       {!isFullScreen && <AppDock />}
+
+      {exitHint > 0 && (
+        <Toast
+          text="再按一次退出应用"
+          className={undoVisible ? 'toast--above-dock-stacked' : 'toast--above-dock'}
+        />
+      )}
     </div>
   );
 }
