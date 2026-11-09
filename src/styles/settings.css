@@ -1,0 +1,127 @@
+/* ---------- 设置 screen ---------- */
+
+.settings-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 分组标题像原型的 账本 / 结构 / 分析：小字、宽字距、墨-2。 */
+.settings-group {
+  margin-top: 8px;
+}
+
+.settings-group__title {
+  margin: 20px 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+/* 一行 = 标题 + 现状 + 右箭头，下边一条 1px 线。 */
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: 11px 0 10px;
+  border-bottom: var(--stroke) solid var(--rule);
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.settings-row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.settings-row__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-row__title {
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+}
+
+.settings-row__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+}
+
+.settings-row__chev {
+  flex: none;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 16px;
+  line-height: 1;
+}
+
+/*
+ * 存储 is the one row with a state line: the chosen folder's name, or the
+ * app-cache default. Its own class keeps the old rows name-only.
+ */
+.settings-row__value {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/*
+ * 重置组唯一的一行：danger 只做文字，没有填充红底，也没有右箭头。
+ * 它是个 button（就地弹确认层，不跳页），所以要把浏览器的默认按钮外观
+ * 全部归零，只留下和其他设置行一样的 1px 底线与行高。
+ */
+.settings-row--danger {
+  width: 100%;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--danger);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.settings-row--danger:disabled {
+  opacity: .6;
+}
+
+.settings-note {
+  margin: 22px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.settings-note + .settings-note {
+  margin-top: 8px;
+}
+
+/* 清除失败的说明：danger 文字，和其他 danger 一样没有底色。 */
+.settings-note--error {
+  color: var(--danger);
+}
+
+/* 设置下钻页的右端现状（标签数 / 分类数）。 */
+.settings-header__meta {
+  margin-left: auto;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}

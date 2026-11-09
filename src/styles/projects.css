@@ -1,0 +1,473 @@
+/* ---------- 项目 screens ---------- */
+
+.projects-screen,
+.project-detail-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+.projects-lead {
+  margin: 14px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.9;
+  letter-spacing: .02em;
+}
+
+/* 新建项目：和标签页同一只虚线框，先给「还没有」一个动作。 */
+.projects-create {
+  margin: 16px 0 6px;
+  padding: 12px 14px 14px;
+  border: var(--stroke) dashed var(--rule-strong);
+  border-radius: var(--radius);
+}
+
+.projects-create__title {
+  margin: 0 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .16em;
+}
+
+.projects-create__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: var(--tap);
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.projects-create__label {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .14em;
+}
+
+.projects-create__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.projects-create__input::placeholder {
+  color: var(--ink-3);
+}
+
+.projects-create__input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 2px;
+}
+
+.projects-create__input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 2px;
+}
+
+.projects-create__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.projects-create__button {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 14px;
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.projects-create__button:disabled {
+  opacity: .55;
+}
+
+.projects-create__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.projects-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* 进行中的项目是一张卡；已归档是一条灰行。 */
+.project-card {
+  margin-top: 10px;
+  padding: 15px 16px 12px;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  list-style: none;
+}
+
+.project-row {
+  border-bottom: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.project-row__link {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: var(--row-h);
+  padding: 12px 0;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.project-card .project-row__link {
+  padding: 0;
+}
+
+.project-row__link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.project-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 15.5px;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .09em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 归档后名字只是变浅：那趟的钱还在，归属也还在。 */
+.project-row--archived .project-row__name {
+  color: var(--project-dead);
+}
+
+.project-row__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.project-row__budget {
+  color: var(--ink);
+  font-size: var(--fs-card-amt);
+  letter-spacing: -.01em;
+}
+
+/* 预算条：2px 墨线，超了只加危险色描边，不把整条填红。 */
+.project-progress {
+  display: block;
+  width: 100%;
+  height: 2px;
+  margin: 10px 0 2px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--rule);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.project-progress::-webkit-progress-bar {
+  background: var(--rule);
+}
+
+.project-progress::-webkit-progress-value {
+  background: var(--ink);
+}
+
+.project-progress::-moz-progress-bar {
+  background: var(--ink);
+}
+
+.project-progress--over {
+  height: 4px;
+  border: var(--stroke) solid var(--danger);
+}
+
+.projects-section {
+  margin: 26px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+.projects-note {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.projects-note--error {
+  color: var(--danger);
+}
+
+/* ---------- 项目详情 ---------- */
+
+.project-detail-note {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.project-detail-note--error {
+  color: var(--danger);
+}
+
+/* 项目总额是这一页唯一的主数：46px、墨色、没有正负号。 */
+.project-hero {
+  padding: 22px 0 20px;
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+.project-hero__label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .24em;
+}
+
+.project-hero__value {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-size: var(--fs-hero);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: -.01em;
+  line-height: 1;
+}
+
+.project-hero__meta {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.project-section-block {
+  margin-top: 22px;
+}
+
+.project-section {
+  margin: 0 0 6px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+/* 最近几笔：一行一笔，标题在上、日期与分类在下。 */
+.project-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  border-top: var(--stroke) solid var(--ink);
+  list-style: none;
+}
+
+.project-recent > li {
+  list-style: none;
+}
+
+.project-recent > li + li {
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.project-txn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--row-h);
+  padding: 10px 0;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.project-txn--readonly {
+  cursor: default;
+}
+
+.project-txn__body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.project-txn__title {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-txn__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+}
+
+.project-txn .amount-text {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+}
+
+a.project-txn:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.project-actions {
+  margin-top: 26px;
+}
+
+.project-archive {
+  width: 100%;
+  min-height: var(--btn-h);
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.project-archive:disabled {
+  opacity: .6;
+}
+
+.project-archive:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 改名与预算：同一张纸上的字段行，不另起一张卡。 */
+.project-edit {
+  margin-top: 30px;
+  padding-top: 16px;
+  border-top: var(--stroke) solid var(--ink);
+}
+
+.project-edit__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.project-edit .add-field {
+  min-height: var(--row-h);
+  padding: 10px 0;
+}
+
+.project-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.project-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.project-input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.project-edit__error {
+  margin: 8px 0 0;
+  color: var(--danger);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+}
+
+.project-edit .add-submit {
+  margin-top: 18px;
+}
+
+/* 归档不是破坏性动作：墨底主按钮，取消才是次按钮。 */
+.sheet__primary {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 22px;
+  padding: 0 var(--space-4);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.sheet__primary:disabled {
+  opacity: .6;
+}
+
+.sheet__primary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* ---------- 流水/今天行上的两种痕迹 ---------- */
+
+/* 未分类：需要被重新归类，所以不是错误色，而是一条虚线下划线。 */
+.uncat {
+  border-bottom: 1px dashed var(--uncat-line);
+  padding-bottom: 1px;
+}
+
+/* 项目名接在副文最后：「· 国庆去成都」；归档后只是变浅，不消失。 */
+.project-mark {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.project-mark--archived {
+  color: var(--project-dead);
+}

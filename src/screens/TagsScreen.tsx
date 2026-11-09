@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { useDialogFocus } from '../components/useDialogFocus';
+import { Sheet } from '../components/Sheet';
 import type { Db } from '../db/driver';
 import type { Tag, TagPurgeInspection } from '../db/repos/tags';
 import {
@@ -118,65 +118,60 @@ export function TagMenuSheet({
   onPurge,
   onCancel,
 }: TagMenuSheetProps) {
-  const panelRef = useDialogFocus({ onClose: onCancel });
-
   return (
-    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="tag-menu-title">
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="tag-menu-title">
-            {tag.name}
-          </h2>
-          <span className="sheet__version">
-            {tag.archivedAt !== null ? '已归档' : `${count} 次`}
-          </span>
-        </div>
-
-        <div className="action-menu">
-          <button className="action-menu__item" type="button" onClick={onRename}>
-            改名
-            <span>历史流水一起改</span>
-          </button>
-          {tag.archivedAt === null ? (
-            <>
-              <button className="action-menu__item" type="button" onClick={onArchive}>
-                归档
-                <span>从选择里收起，历史保留</span>
-              </button>
-              <button
-                className="action-menu__item action-menu__item--danger"
-                type="button"
-                onClick={onRetire}
-                disabled={inspection === null}
-              >
-                断联并归档
-                <span>删掉全部关联，标签收进已归档</span>
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="action-menu__item" type="button" onClick={onUnarchive}>
-                恢复
-                <span>重新出现在标签选择里</span>
-              </button>
-              <button
-                className="action-menu__item action-menu__item--danger"
-                type="button"
-                onClick={onPurge}
-              >
-                彻底删除
-                <span>只对没有关联的归档标签可用</span>
-              </button>
-            </>
-          )}
-        </div>
-
-        <button className="sheet__secondary" type="button" onClick={onCancel}>
-          取消
+    <Sheet
+      titleId="tag-menu-title"
+      title={tag.name}
+      meta={(
+        <span className="sheet__version">
+          {tag.archivedAt !== null ? '已归档' : `${count} 次`}
+        </span>
+      )}
+      onClose={onCancel}
+    >
+      <div className="action-menu">
+        <button className="action-menu__item" type="button" onClick={onRename}>
+          改名
+          <span>历史流水一起改</span>
         </button>
+        {tag.archivedAt === null ? (
+          <>
+            <button className="action-menu__item" type="button" onClick={onArchive}>
+              归档
+              <span>从选择里收起，历史保留</span>
+            </button>
+            <button
+              className="action-menu__item action-menu__item--danger"
+              type="button"
+              onClick={onRetire}
+              disabled={inspection === null}
+            >
+              断联并归档
+              <span>删掉全部关联，标签收进已归档</span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="action-menu__item" type="button" onClick={onUnarchive}>
+              恢复
+              <span>重新出现在标签选择里</span>
+            </button>
+            <button
+              className="action-menu__item action-menu__item--danger"
+              type="button"
+              onClick={onPurge}
+            >
+              彻底删除
+              <span>只对没有关联的归档标签可用</span>
+            </button>
+          </>
+        )}
       </div>
-    </div>
+
+      <button className="sheet__secondary" type="button" onClick={onCancel}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 
@@ -199,11 +194,6 @@ export function TagRetireSheet({
   onConfirm,
   onCancel,
 }: TagRetireSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
   const deletedPart =
     inspection.deletedLinkCount > 0
       ? `（其中 ${inspection.deletedLinkCount} 条在已删除流水上）`
@@ -211,29 +201,26 @@ export function TagRetireSheet({
   const body = `「${tagName}」的 ${inspection.linkCount} 条流水关联会被删除${deletedPart}；流水本身一笔都不会少，金额和日期都不变。标签会收进「已归档」。`;
 
   return (
-    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="tag-retire-title">
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="tag-retire-title">
-            断联并归档
-          </h2>
-          <span className="sheet__version num">{inspection.linkCount} 条关联</span>
-        </div>
+    <Sheet
+      titleId="tag-retire-title"
+      title="断联并归档"
+      meta={<span className="sheet__version num">{inspection.linkCount} 条关联</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
+    >
+      <p className="sheet__text">{body}</p>
+      <p className="sheet__note">
+        这个操作不能撤销。之后恢复标签，也不会恢复这些关联。
+      </p>
 
-        <p className="sheet__text">{body}</p>
-        <p className="sheet__note">
-          这个操作不能撤销。之后恢复标签，也不会恢复这些关联。
-        </p>
-
-        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          断联并归档
-        </button>
-        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
-          取消
-        </button>
-      </div>
-    </div>
+      <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+        断联并归档
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 
@@ -249,33 +236,17 @@ export function TagPurgeBlockedSheet({
   inspection,
   onClose,
 }: TagPurgeBlockedSheetProps) {
-  const panelRef = useDialogFocus({ onClose });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="tag-purge-blocked-title"
-    >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="tag-purge-blocked-title">
-            不能彻底删除
-          </h2>
-        </div>
+    <Sheet titleId="tag-purge-blocked-title" title="不能彻底删除" onClose={onClose}>
+      <p className="sheet__text">
+        「{tagName}」还关联着 {inspection.linkCount} 笔流水（其中 {inspection.deletedLinkCount} 笔已删除）。有历史的标签只能保持归档，不能从数据库里删除。
+      </p>
+      <p className="sheet__note">彻底删除只适用于没有任何关联的归档标签。</p>
 
-        <p className="sheet__text">
-          「{tagName}」还关联着 {inspection.linkCount} 笔流水（其中 {inspection.deletedLinkCount} 笔已删除）。有历史的标签只能保持归档，不能从数据库里删除。
-        </p>
-        <p className="sheet__note">彻底删除只适用于没有任何关联的归档标签。</p>
-
-        <button className="sheet__secondary" type="button" onClick={onClose}>
-          知道了
-        </button>
-      </div>
-    </div>
+      <button className="sheet__secondary" type="button" onClick={onClose}>
+        知道了
+      </button>
+    </Sheet>
   );
 }
 
@@ -293,38 +264,29 @@ export function TagPurgeSheet({
   onConfirm,
   onCancel,
 }: TagPurgeSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
-
   return (
-    <div className="sheet" role="dialog" aria-modal="true" aria-labelledby="tag-purge-title">
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="tag-purge-title">
-            彻底删除
-          </h2>
-          <span className="sheet__version">已归档</span>
-        </div>
+    <Sheet
+      titleId="tag-purge-title"
+      title="彻底删除"
+      meta={<span className="sheet__version">已归档</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
+    >
+      <p className="sheet__text">
+        「{tagName}」没有任何流水关联，会从数据库里删除。删除不会影响任何一笔账。
+      </p>
+      <p className="sheet__note">
+        10 秒内可以撤销；撤销会把标签恢复成现在的归档状态。同时只保留最近一次彻底删除的撤销。
+      </p>
 
-        <p className="sheet__text">
-          「{tagName}」没有任何流水关联，会从数据库里删除。删除不会影响任何一笔账。
-        </p>
-        <p className="sheet__note">
-          10 秒内可以撤销；撤销会把标签恢复成现在的归档状态。同时只保留最近一次彻底删除的撤销。
-        </p>
-
-        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          彻底删除
-        </button>
-        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
-          取消
-        </button>
-      </div>
-    </div>
+      <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+        彻底删除
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 

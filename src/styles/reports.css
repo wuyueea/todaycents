@@ -1,0 +1,445 @@
+/* ---------- 报表 screen ---------- */
+
+.reports-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 月/年 是两个字的开关：字号只差一档，选中靠一条墨色下划线，不靠底色块。
+   控件本体 44dp 高（可点），下划线用伪元素贴在字下面。 */
+.reports-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin: 10px 0 0;
+}
+
+.reports-seg {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.reports-seg__item {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .16em;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.reports-seg__item.is-on {
+  color: var(--ink);
+}
+
+.reports-seg__item.is-on::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  bottom: 8px;
+  left: 0;
+  height: var(--stroke);
+  background: var(--ink);
+}
+
+.reports-seg__item:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* 右侧的月份/年份控件是次级信息：小字、墨-2，箭头比页面里的小一档。 */
+.reports-switch .month-nav,
+.reports-switch .year-nav {
+  margin-left: auto;
+}
+
+.reports-switch .month-nav__arrow {
+  color: var(--ink-2);
+  font-size: 18px;
+}
+
+.reports-switch .month-nav__label {
+  font-size: var(--fs-meta);
+  letter-spacing: .02em;
+}
+
+.year-nav {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.year-nav__label {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+/* 主数：一个期间的支出。汇总数字不上方向色，它是结果。 */
+.reports-summary {
+  margin: 22px 0 0;
+  padding: 0 0 18px;
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+.reports-summary__label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .24em;
+}
+
+.reports-summary__value {
+  margin: 8px 0 0;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-stat);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.038em;
+  line-height: 1;
+}
+
+.reports-summary__extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .04em;
+}
+
+.reports-summary__extra .amount-text {
+  font-size: var(--fs-meta);
+}
+
+.reports-section {
+  margin: 26px 0 0;
+}
+
+.reports-section__title {
+  margin: 0 0 8px;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+/* ---- 钱去哪了：饼 + 引出线 ---- */
+
+/* 320×178 是饼图的坐标系：360dp 宽减两侧 20dp 留白。窄屏等比缩小。 */
+.reports-pie {
+  width: 100%;
+  max-width: 320px;
+  margin: 2px auto 0;
+}
+
+/* 标签从图的两侧伸出，允许压出版心，但不产生横向滚动。 */
+.reports-pie__svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* 扇区之间是 1.5 纸色间隙，不是白线：纸动过，间隙就跟着纸。 */
+.reports-pie__slice {
+  stroke: var(--paper);
+  stroke-width: 1.5;
+}
+
+.reports-pie__slice--1 { fill: var(--slice-1); }
+.reports-pie__slice--2 { fill: var(--slice-2); }
+.reports-pie__slice--3 { fill: var(--slice-3); }
+.reports-pie__slice--4 { fill: var(--slice-4); }
+.reports-pie__slice--5 { fill: var(--slice-5); }
+.reports-pie__slice--6 { fill: var(--slice-6); }
+
+/* 引出线是非文字装饰线，走 --ink-3，与原型 50% 墨同明度。 */
+.reports-pie__leader {
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1;
+}
+
+.reports-pie__name {
+  fill: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-meta);
+  letter-spacing: .06em;
+}
+
+.reports-pie__percent {
+  fill: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.reports-pie__amount {
+  fill: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.015em;
+}
+
+/* 饼下面的那一行：其他 X / 通讯 Y / 订阅 Z，最多三格。 */
+.reports-rest {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 10px 0 0;
+  padding-top: 12px;
+  border-top: var(--stroke) solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .04em;
+}
+
+.reports-rest__item {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.reports-rest__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-rest__amount {
+  flex: 0 0 auto;
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+/* ---- 十二个月柱 ---- */
+
+.reports-bars {
+  margin-top: 12px;
+}
+
+.reports-bars__plot {
+  display: flex;
+  align-items: flex-end;
+  gap: 5px;
+  height: 104px;
+  border-bottom: var(--stroke) solid var(--ink);
+}
+
+/* 发生过的月份是墨色的一档；本月实心；没有支出只留一根发丝。 */
+.reports-bars__col {
+  flex: 1 1 0;
+  min-height: 1px;
+  border-radius: 1px 1px 0 0;
+  background: var(--slice-5);
+}
+
+.reports-bars__col--current {
+  background: var(--ink);
+}
+
+.reports-bars__col--zero {
+  height: 1px;
+  background: var(--rule-strong);
+}
+
+/* 未来月份留空：一根虚线，不是一根 0。 */
+.reports-bars__col--future {
+  height: 1px;
+  background: transparent;
+  border-top: var(--stroke) dashed var(--rule-strong);
+  border-radius: 0;
+}
+
+.reports-bars__axis {
+  display: flex;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.reports-bars__tick {
+  flex: 1 1 0;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+/* ---- 预算对实际 ---- */
+
+.reports-budgets {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reports-budget {
+  padding: 9px 0 11px;
+}
+
+.reports-budget__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.reports-budget__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  letter-spacing: .06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-budget__value {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+.reports-budget__track {
+  position: relative;
+  height: 2px;
+  margin-top: 9px;
+  background: var(--rule);
+}
+
+.reports-budget__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--ink);
+}
+
+/* 全屏只有这里可以用 danger：超额。 */
+.reports-budget__fill--over {
+  background: var(--danger);
+}
+
+/* ---- 两头（年视图） ---- */
+
+.reports-extremes {
+  margin: 0;
+  padding: 0;
+  border-top: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.reports-extreme {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: 11px 0 12px;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.reports-extreme__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.reports-extreme__title {
+  color: var(--ink);
+  font-size: var(--fs-row);
+  letter-spacing: .06em;
+}
+
+.reports-extreme__meta {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.reports-extreme__value {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+}
+
+/* ---- 导出入口（xlsx 是下一件事，先画出来、先不可点） ---- */
+
+.reports-export {
+  min-height: var(--btn-h);
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+  border-top: var(--stroke) solid var(--rule);
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  letter-spacing: .06em;
+  text-align: left;
+  opacity: .55;
+}
+
+.reports-export:disabled {
+  cursor: default;
+}
+
+/* ---- 说明与空态 ---- */
+
+.reports-note {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.reports-note--error {
+  color: var(--danger);
+}
+
+.reports-empty {
+  padding: 16px 0 18px;
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.reports-empty__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  letter-spacing: .08em;
+}
+
+.reports-empty__note {
+  margin: 8px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}

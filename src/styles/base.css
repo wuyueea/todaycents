@@ -1,0 +1,50 @@
+/* ---------- 数字工具类（来自 docs/design-tokens.css） ---------- */
+.num {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.012em;
+}
+
+.num--out {
+  color: var(--out);
+}
+
+.num--in {
+  color: var(--in);
+}
+
+/* 汇总类数字（本月合计、项目总额、额度、笔数）保持墨色，不做方向色 */
+.num--total {
+  color: var(--ink);
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-row);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 {
+  margin: 0 0 var(--space-4);
+  font-size: var(--fs-display);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .06em;
+}
+
+/* Sits over the page, under the OS status bar: content that scrolls up is

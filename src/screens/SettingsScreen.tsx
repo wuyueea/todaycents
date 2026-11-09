@@ -15,7 +15,7 @@ import { readResetCounts } from '../db/reset';
 import type { ResetCounts } from '../db/reset';
 import { detectCandidates } from '../db/repos/fixedCosts';
 import { Toast, useToast } from '../components/Toast';
-import { useDialogFocus } from '../components/useDialogFocus';
+import { Sheet } from '../components/Sheet';
 
 import { useDb, useQuery } from '../store/useDb';
 
@@ -104,43 +104,29 @@ export function ResetConfirmSheet({
   onConfirm,
   onCancel,
 }: ResetConfirmSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="reset-confirm-title"
+    <Sheet
+      titleId="reset-confirm-title"
+      title="清除所有数据"
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
     >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="reset-confirm-title">
-            清除所有数据
-          </h2>
-        </div>
+      <p className="sheet__text">{resetSummary(counts)}</p>
+      <p className="sheet__note">
+        清除后只留下 3 个账户和 12 个分类，其余记录都不保留，也不能撤销。
+      </p>
+      <p className="sheet__note">
+        按下按钮之后，会先把现在的账本写成一份备份文件，再清除。{plannedCopyNote(folderName)}
+      </p>
 
-        <p className="sheet__text">{resetSummary(counts)}</p>
-        <p className="sheet__note">
-          清除后只留下 3 个账户和 12 个分类，其余记录都不保留，也不能撤销。
-        </p>
-        <p className="sheet__note">
-          按下按钮之后，会先把现在的账本写成一份备份文件，再清除。{plannedCopyNote(folderName)}
-        </p>
-
-        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          确认清除
-        </button>
-        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
-          取消
-        </button>
-      </div>
-    </div>
+      <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+        确认清除
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 

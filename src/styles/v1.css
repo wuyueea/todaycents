@@ -1964,28 +1964,6 @@ body {
   margin: 0;
 }
 
-.txn-edit-screen--v1 .add-field--amount .money-input {
-  min-height: 42px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--v1-ink);
-  font-family: var(--font-num);
-  font-size: 30px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  text-align: right;
-}
-
-.txn-edit-screen--v1 .add-field--amount .money-input:focus-visible {
-  outline: 0;
-}
-
-.txn-edit-screen--v1 .add-field--amount .money-input[aria-invalid='true'] {
-  outline: 1px solid var(--v1-err);
-  outline-offset: 2px;
-}
-
 .txn-edit-screen--v1 .add-label {
   flex: 0 0 auto;
   color: var(--v1-t2);

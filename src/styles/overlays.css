@@ -1,0 +1,58 @@
+/* ---------- Toast ---------- */
+
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: calc(26px + var(--safe-area-bottom));
+  left: 18px;
+  /* 浮层打开时 toast 必须让位：否则上一条状态会盖住确认页，甚至挡住按钮。 */
+  z-index: 35;
+  max-width: 604px;
+  margin: 0 auto;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font-size: 12.5px;
+  line-height: 1.6;
+  letter-spacing: .03em;
+  text-align: center;
+}
+
+/* 普通状态与撤销条同时出现时，状态叠在撤销条上方，避免错误被遮住。 */
+.toast--stacked {
+  bottom: calc(96px + var(--safe-area-bottom));
+}
+
+/* 带撤销的 toast：文字在左，动作在右；两个都是纸色，动作靠下划线显出可点。 */
+.toast--action {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 8px 16px;
+  text-align: left;
+}
+
+.toast__text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.toast__action {
+  flex: none;
+  min-height: var(--tap);
+  padding: 0 4px;
+  border: 0;
+  border-bottom: var(--stroke) solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  color: var(--paper);
+  font: inherit;
+  font-size: 12.5px;
+  letter-spacing: .12em;
+}
+
+.toast__action:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 2px;
+}

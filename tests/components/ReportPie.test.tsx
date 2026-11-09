@@ -31,26 +31,26 @@ const TOTAL = 121630;
 
 describe('piePoint', () => {
   it('starts at 12 o’clock and grows clockwise', () => {
-    expect(piePoint(0)).toEqual({ x: 160, y: 8 });
-    expect(piePoint(90)).toEqual({ x: 220, y: 68 });
-    expect(piePoint(180)).toEqual({ x: 160, y: 128 });
-    expect(piePoint(270)).toEqual({ x: 100, y: 68 });
+    expect(piePoint(0)).toEqual({ x: 160, y: 80 });
+    expect(piePoint(90)).toEqual({ x: 220, y: 140 });
+    expect(piePoint(180)).toEqual({ x: 160, y: 200 });
+    expect(piePoint(270)).toEqual({ x: 100, y: 140 });
   });
 
   it('keeps the radius the caller asks for, the label ring sits outside the pie', () => {
-    expect(piePoint(0, PIE_VIEW.radius)).toEqual({ x: 160, y: 8 });
-    expect(piePoint(0, PIE_VIEW.radius + 4)).toEqual({ x: 160, y: 4 });
+    expect(piePoint(0, PIE_VIEW.radius)).toEqual({ x: 160, y: 80 });
+    expect(piePoint(0, PIE_VIEW.radius + 4)).toEqual({ x: 160, y: 76 });
   });
 });
 
 describe('slicePath', () => {
   it('draws a wedge from the centre, with the large-arc flag only past half', () => {
     expect(slicePath({ startAngle: 0, sweepAngle: 90 })).toBe(
-      'M 160 68 L 160 8 A 60 60 0 0 1 220 68 Z'
+      'M 160 140 L 160 80 A 60 60 0 0 1 220 140 Z'
     );
-    expect(slicePath({ startAngle: 0, sweepAngle: 270 })).toContain('A 60 60 0 1 1 100 68 Z');
+    expect(slicePath({ startAngle: 0, sweepAngle: 270 })).toContain('A 60 60 0 1 1 100 140 Z');
     // 0 -> 90 and 90 -> 180 share the point in between: slices close on each other.
-    expect(slicePath({ startAngle: 90, sweepAngle: 90 })).toContain('L 220 68 A 60 60 0 0 1 160 128');
+    expect(slicePath({ startAngle: 90, sweepAngle: 90 })).toContain('L 220 140 A 60 60 0 0 1 160 200');
   });
 
   it('paints one slice as a full circle instead of a zero-length arc', () => {
@@ -95,6 +95,23 @@ function vertices(leader: { points: string }): string[] {
   return leader.points.split(' ');
 }
 
+
+/** Distance from a point to a line segment, for proving a leader clears the pie. */
+function distanceToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lengthSquared = dx * dx + dy * dy;
+  const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lengthSquared));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
 describe('leaderGeometry', () => {
   // The bug this pins: the old routing solved the elbow's x from a fixed label
   // row, so a slice pointing one way and a label sitting another produced a
@@ -108,18 +125,52 @@ describe('leaderGeometry', () => {
     }
   });
 
-  it('leaves along the slice’s own radius and only turns outside the pie', () => {
-    const leader = leaderGeometry(0, 73);
-    const [anchor, elbow, end] = vertices(leader);
+  it('starts on its slice mid-angle and bends at r+14', () => {
+    const angles = [73, 80];
+    const leaders = layoutLeaders(angles);
+    leaders.forEach((leader, index) => {
+      const angle = angles[index]!;
+      const [anchor, bend, end] = vertices(leader);
+      const expectedAnchor = piePoint(angle, PIE_VIEW.radius + 4);
+      const expectedBendX = piePoint(angle, PIE_VIEW.radius + 14).x;
+      expect(Number(anchor!.split(',')[0])).toBeCloseTo(expectedAnchor.x, 1);
+      expect(Number(anchor!.split(',')[1])).toBeCloseTo(expectedAnchor.y, 1);
+      expect(Number(bend!.split(',')[0])).toBeCloseTo(expectedBendX, 1);
+      expect(Number(bend!.split(',')[1])).toBe(leader.labelY);
+      expect(Number(end!.split(',')[1])).toBe(leader.labelY);
+      expect(Number(end!.split(',')[0])).toBe(leader.labelX);
+    });
+    expect(leaders[0]!.labelY).not.toBe(leaders[1]!.labelY);
+  });
 
-    // The first stop is the ring point at the mid angle.
-    expect(radiusOf(anchor!)).toBeCloseTo(PIE_VIEW.radius + 4, 1);
-    // It travels away from the centre, on that same y.
-    expect(Number(anchor!.split(',')[0])).toBeLessThan(Number(elbow!.split(',')[0]!));
-    expect(elbow!.split(',')[1]).toBe(anchor!.split(',')[1]);
-    // Then straight down the rail, which sits outside the pie's x-range.
-    expect(Number(elbow!.split(',')[0])).toBeGreaterThan(PIE_VIEW.cx + PIE_VIEW.radius);
-    expect(elbow!.split(',')[0]).toBe(end!.split(',')[0]);
+  it('keeps every diagonal segment outside the pie for the report angles', () => {
+    const angles = [92.5, 230.3, 294.8, 323.2, 339.6, 353.4];
+    const leaders = layoutLeaders(angles);
+    leaders.forEach(leader => {
+      const [anchor, bend] = vertices(leader).map(vertex => vertex.split(',').map(Number));
+      expect(
+        distanceToSegment(
+          PIE_VIEW.cx,
+          PIE_VIEW.cy,
+          anchor![0]!,
+          anchor![1]!,
+          bend![0]!,
+          bend![1]!
+        )
+      ).toBeGreaterThanOrEqual(PIE_VIEW.radius);
+    });
+  });
+
+  it('puts the bend above or below the anchor according to the radius', () => {
+    const angles = [92.5, 230.3, 294.8, 323.2, 339.6, 353.4];
+    const leaders = layoutLeaders(angles);
+    leaders.forEach((leader, index) => {
+      const [anchor] = vertices(leader);
+      const anchorY = Number(anchor!.split(',')[1]);
+      if (anchorY < PIE_VIEW.cy) expect(leader.labelY).toBeLessThan(anchorY);
+      else expect(leader.labelY).toBeGreaterThan(anchorY);
+      expect(angles[index]).toBeDefined();
+    });
   });
 
   it('puts left-side labels on the left rail with an end anchor', () => {

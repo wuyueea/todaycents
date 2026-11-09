@@ -1,0 +1,301 @@
+/* ---------- 账户 screen ---------- */
+
+/* Pushed pages under 设置 (账户 today, 标签/项目 later) share one header:
+   a back chevron then the title. */
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: 4px;
+}
+
+.settings-header h1 {
+  margin: 0;
+  font-size: var(--fs-display);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .08em;
+  line-height: 1;
+}
+
+.accounts-note {
+  margin: 10px 0 12px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.accounts-note--error {
+  color: var(--danger);
+}
+
+/* 成功提示不是方向色，保持墨色。 */
+.accounts-note--success {
+  color: var(--ink);
+}
+
+.accounts-note--info {
+  color: var(--ink-2);
+}
+
+.accounts-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  margin: 0 0 4px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.accounts-toggle input {
+  accent-color: var(--ink);
+}
+
+.accounts-empty {
+  margin: 0 0 12px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+/* 账户是一行一行，不是一张一张卡：56px 行高 + 1px 行线。 */
+.accounts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.accounts-item {
+  padding: 0;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  list-style: none;
+}
+
+.accounts-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: var(--row-h);
+  padding: 8px 0;
+}
+
+.accounts-row__main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.accounts-row__name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .045em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.accounts-row__type {
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.accounts-row__archived {
+  align-self: flex-start;
+  padding: 1px 5px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 9.5px;
+  letter-spacing: .12em;
+}
+
+.accounts-row__balance {
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-amount);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.01em;
+  text-align: right;
+}
+
+.accounts-row__budget {
+  margin: -2px 0 8px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+  text-align: right;
+}
+
+.accounts-actions {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.accounts-action {
+  min-height: var(--tap);
+  padding: 0 14px;
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-meta);
+  letter-spacing: .08em;
+}
+
+.accounts-action:disabled {
+  opacity: 0.6;
+}
+
+.accounts-action:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.accounts-action--danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.accounts-edit,
+.accounts-reconcile {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 0 14px;
+}
+
+.accounts-edit .add-field,
+.accounts-reconcile .add-field {
+  flex-wrap: wrap;
+  align-content: center;
+  min-height: var(--row-h);
+  padding: 10px 0;
+}
+
+.accounts-edit__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 14px;
+}
+
+.accounts-edit__actions .add-submit {
+  width: auto;
+  min-width: 0;
+  min-height: var(--btn-h);
+  margin: 0;
+  padding: 0 22px;
+}
+
+/* 表单里的一对按钮：主 = 墨底，次 = 墨描边；都 52px。 */
+.accounts-edit__actions .accounts-action {
+  min-height: var(--btn-h);
+  padding: 0 20px;
+  font-size: var(--fs-btn);
+  letter-spacing: .12em;
+}
+
+.accounts-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 24px 0 0;
+  padding: 16px 0 0;
+  border: 0;
+  border-top: var(--stroke) solid var(--ink);
+  border-radius: 0;
+  background: transparent;
+}
+
+.accounts-form__title {
+  margin: 0 0 2px;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .1em;
+}
+
+.accounts-form .add-field {
+  flex-wrap: wrap;
+  align-content: center;
+  min-height: var(--row-h);
+  padding: 10px 0;
+}
+
+.accounts-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.accounts-form .accounts-input,
+.accounts-edit .accounts-input,
+.accounts-reconcile .accounts-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+}
+
+.accounts-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.accounts-input[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.accounts-hint {
+  flex: 0 0 100%;
+  margin: 6px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  letter-spacing: .02em;
+  text-align: right;
+}
+
+/* 对账/编辑时字段内的错误提示也占满一行。 */
+.accounts-form .add-field .accounts-note,
+.accounts-edit .add-field .accounts-note,
+.accounts-reconcile .add-field .accounts-note {
+  flex: 0 0 100%;
+  margin: 6px 0 0;
+  text-align: right;
+}

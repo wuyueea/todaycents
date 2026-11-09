@@ -1,0 +1,82 @@
+/* ---------- 占比横条（项目详情与报表共用） ---------- */
+
+/* 分类占比：墨色明度阶（与报表饼图同一组），行与行之间只留 1.5px 纸缝。 */
+.share-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  list-style: none;
+}
+
+.share-bars > li {
+  min-width: 0;
+  list-style: none;
+}
+
+/* 六档墨色，与报表饼图同一组 token。 */
+.share-bars > li:nth-child(6n+1) { --bar-ink: var(--slice-1); }
+.share-bars > li:nth-child(6n+2) { --bar-ink: var(--slice-2); }
+.share-bars > li:nth-child(6n+3) { --bar-ink: var(--slice-3); }
+.share-bars > li:nth-child(6n+4) { --bar-ink: var(--slice-4); }
+.share-bars > li:nth-child(6n+5) { --bar-ink: var(--slice-5); }
+.share-bars > li:nth-child(6n+6) { --bar-ink: var(--slice-6); }
+
+.category-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 0 9px;
+}
+
+.category-bar__head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.category-bar__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.category-bar__amount {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.category-bar__percent {
+  flex: 0 0 4em;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-align: right;
+}
+
+.category-bar__track {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 0;
+  background: var(--wash);
+}
+
+/* 图表是结构，不是方向：只走墨色明度阶，不占方向色。 */
+.category-bar__fill {
+  height: 100%;
+  border-radius: 0;
+  background: var(--bar-ink, var(--ink));
+}

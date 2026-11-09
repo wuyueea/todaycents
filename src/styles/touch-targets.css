@@ -1,0 +1,176 @@
+/* Coarse-pointer touch targets.
+   v1 keeps some controls visually compact (31–38px). On touch devices we keep
+   that look where a pseudo element can carry the hit area, and grow text
+   fields/chips to 44px because replaced elements cannot use ::after reliably.
+   Desktop browsers (pointer: fine) are unchanged. */
+@media (pointer: coarse) {
+  /* Navigation buttons keep the header compact while growing to 44px. */
+  .add-header .add-back,
+  .settings-header .add-back {
+    width: 44px;
+    height: 44px;
+  }
+
+  .entry-sheet__close {
+    min-width: 44px;
+    height: 44px;
+    padding: 0 10px;
+  }
+
+  .entry-seg button {
+    height: 44px;
+  }
+
+  .categories-seg button {
+    min-height: 44px;
+  }
+
+  .entry-chip {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 11px;
+  }
+
+  .entry-chips {
+    min-height: 44px;
+    align-items: center;
+  }
+
+  .entry-tagin,
+  .entry-tag-add,
+  .entry-date,
+  .entry-note {
+    height: 44px;
+  }
+
+  .entry-ledger-link {
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    padding: 0 18px;
+  }
+
+  /* Row menus sit in 52–60px rows with 10px padding; expanding them into that
+     padding does not change the row height. */
+  .category-row__menu,
+  .tag-row__menu {
+    position: relative;
+  }
+
+  .category-row__menu::after,
+  .tag-row__menu::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
+  }
+
+  /* Archived rows only; the visible button can grow without touching the
+     common list rhythm. */
+  .categories-screen--v1 .category-row__restore {
+    min-height: 44px;
+  }
+}
+
+/* Forms, pickers and edit states that the first pass did not cover.
+   These are still only for coarse pointers: desktop keeps the compact v1
+   density, while every tappable field reaches 44px on a phone. */
+@media (pointer: coarse) {
+  /* 无账户时，从随手记去账户页的入口 */
+  .entry-noacc {
+    align-items: center;
+  }
+
+  .entry-noacc a {
+    display: inline-flex;
+    min-height: 44px;
+    align-items: center;
+  }
+
+  /* 流水编辑页 */
+  .txn-edit-screen--v1 .txn-edit-note__input,
+  .txn-edit-screen--v1 .add-value {
+    min-height: 44px;
+  }
+
+  /* 标签页：新建、改名 */
+  .tags-screen--v1 .tags-create__input,
+  .tags-screen--v1 .tags-create__button,
+  .tags-screen--v1 .tag-rename__input,
+  .tags-screen--v1 .tag-rename__save,
+  .tags-screen--v1 .tag-rename__cancel {
+    min-height: 44px;
+  }
+
+  /* 分类页：新建表单 */
+  .categories-screen--v1 .category-create__input,
+  .categories-screen--v1 .category-create__select {
+    min-height: 44px;
+  }
+
+  /* 账户页：开关、行操作、新增/编辑/对账表单 */
+  .accounts-screen--v1 .accounts-toggle,
+  .accounts-screen--v1 .accounts-action,
+  .accounts-screen--v1 .accounts-input,
+  .accounts-screen--v1 .accounts-edit .add-account,
+  .accounts-screen--v1 .accounts-form .add-account {
+    min-height: 44px;
+  }
+
+  /* 金额键盘字段在账户/项目表单里的页面级覆盖 */
+  .accounts-screen--v1 .add-field .amount-keypad-field,
+  .projects-screen--v1 .projects-create__row .amount-keypad-field,
+  .project-detail-screen--v1 .project-edit .add-field .amount-keypad-field {
+    min-height: 44px;
+  }
+
+  /* 项目页：新建/编辑表单 */
+  .projects-screen--v1 .projects-create__input {
+    min-height: 44px;
+  }
+
+  /* 固定支出页：提示按钮与撤销 */
+  .fixed-screen--v1 .fixed-prompt__button,
+  .fixed-screen--v1 .fixed-flash__undo {
+    min-height: 44px;
+  }
+
+  /* 流水/报表：月份切换按钮；流水页行删除已有 44px 伪元素命中区 */
+  .month-nav__button {
+    min-height: 44px;
+  }
+
+  /* 选择器 sheet 的行与标签 chip */
+  .add-value {
+    min-height: 44px;
+  }
+}
+
+/* 固定支出页的「去流水」文字链接，按粗指针补足命中高度。 */
+@media (pointer: coarse) {
+  .fixed-screen--v1 .fixed-manual__link {
+    min-height: 44px;
+    align-items: center;
+  }
+}
+
+/* 账户新增表单的名称输入有独立的三级选择器，priority 高于上面的通用规则。 */
+@media (pointer: coarse) {
+  .accounts-screen--v1 .accounts-form .accounts-input,
+  .accounts-screen--v1 .accounts-edit .accounts-input {
+    min-height: 44px;
+  }
+}
+
+/* 44px 后分类新建的两行输入上下相接，视觉上像一块；给第二行留出竖向间距。 */
+@media (pointer: coarse) {
+  .categories-screen--v1 .category-create__row + .category-create__row {
+    margin-top: 10px;
+  }
+}

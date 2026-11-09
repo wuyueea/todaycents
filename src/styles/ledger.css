@@ -1,0 +1,540 @@
+/* ---------- 流水 screen ---------- */
+
+/* Money display: the sign comes from the cents, the colour from the direction.
+   Typography only here — AmountText renders the leading hyphen as U+2212. */
+.amount-text {
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.012em;
+  font-weight: var(--font-weight-regular);
+}
+
+.amount-text--expense {
+  color: var(--out);
+}
+
+.amount-text--income {
+  color: var(--in);
+}
+
+.amount-text--transfer,
+.amount-text--adjust {
+  color: var(--ink);
+}
+
+/* The month bar is ink, not green: green belongs to signed amounts only.
+   It is full-bleed — the negative margins cancel .app-main's padding so the
+   bar reaches both edges and sits flush under the status bar, as in the
+   prototype (docs/prototypes/shots/a/ledger.png). */
+.ledger-hero {
+  position: relative;
+  display: grid;
+  gap: 10px;
+  margin: calc(var(--pad) * -1) calc(var(--pad) * -1) 12px;
+  /* Side padding leaves room for the arrows, which sit at the block's vertical
+     centre rather than on the month's line. */
+  padding: 12px calc(var(--pad) + 34px) 14px;
+  border-radius: 0;
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* One arrow per side, centred on the whole ink block. */
+.ledger-hero__arrow {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  width: var(--tap);
+  height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--paper);
+  font-size: 26px;
+  font-weight: 600;
+  line-height: 1;
+  opacity: 0.92;
+}
+
+.ledger-hero__arrow--prev {
+  left: 4px;
+}
+
+.ledger-hero__arrow--next {
+  right: 4px;
+}
+
+.ledger-hero__arrow:disabled {
+  opacity: 0.35;
+}
+
+.ledger-hero__arrow:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 1px;
+}
+
+.ledger-hero .month-nav--label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+}
+
+.ledger-hero .month-nav__field {
+  width: 100%;
+}
+
+/* The label/input pair: the field is the positioned box the transparent input
+   stretches over, so arrows placed next to it stay clickable. */
+.month-nav__field {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+}
+
+/* Painted by us so it can be centred; the native control cannot. */
+.month-nav__label {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--fs-nav);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0;
+  color: inherit;
+  pointer-events: none;
+}
+
+.ledger-hero .month-nav__label {
+  color: var(--paper);
+}
+
+/* Transparent, stretched over the label: the whole line is the picker. */
+.month-nav__input--overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Inline variant: bold chevrons either side of the painted month. */
+.month-nav__arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.month-nav__arrow:disabled {
+  opacity: 0.35;
+}
+
+.ledger-hero .month-nav__button,
+.ledger-hero .month-nav__input {
+  min-height: var(--tap);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--paper);
+}
+
+.ledger-hero .month-nav__button {
+  font-size: 18px;
+  line-height: 1;
+  opacity: 0.82;
+}
+
+/* Centred like the prototype: ‹  2026年10月  › */
+.ledger-hero .month-nav__input {
+  text-align: center;
+  font-family: var(--font-sans);
+  font-size: var(--fs-nav);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0;
+}
+
+.ledger-hero .month-nav__input {
+  width: 100%;
+  max-width: none;
+  /* The whole text is the picker: the native arrow is gone, the label itself
+     opens the month chooser. */
+  color-scheme: dark;
+}
+
+/* With the input transparent the native arrow cannot show, but hide it
+   anyway for safety on engines that ignore opacity on the indicator. */
+.month-nav__input--overlay::-webkit-calendar-picker-indicator {
+  display: none;
+  opacity: 0;
+}
+
+
+.ledger-hero .month-nav__button:disabled {
+  color: var(--paper);
+  opacity: 0.45;
+}
+
+.ledger-hero .month-nav__button:focus-visible,
+.ledger-hero .month-nav__input:focus-visible {
+  outline: 2px solid var(--paper);
+  outline-offset: 1px;
+}
+
+/* On the ink bar the totals are paper (the inverse of ink), never a direction colour. */
+.ledger-hero__totals {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 26px;
+  margin: 0;
+  color: var(--paper);
+}
+
+.ledger-hero__total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.ledger-hero__label {
+  font-size: var(--fs-meta);
+  opacity: 0.62;
+}
+
+.ledger-hero__total .num {
+  font-size: 15px;
+  font-weight: var(--font-weight-regular);
+}
+
+.ledger-hero__totals strong {
+  color: var(--paper);
+  font-family: var(--font-num);
+  font-size: var(--fs-meta);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+}
+
+.ledger-hero__dot {
+  opacity: 0.5;
+}
+
+/* Shared by 流水 and 统计: the month is selectable, not pinned to today. */
+.month-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.month-nav__button {
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-label);
+}
+
+/* A month control never needs the full width of a phone header. */
+.month-nav__input {
+  min-width: 0;
+  max-width: 8.5em;
+  padding: var(--space-1);
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+}
+
+.month-nav__button:disabled {
+  opacity: 0.5;
+}
+
+.month-nav__button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.month-nav__input:focus-visible {
+  border-color: var(--rule-strong);
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 1px;
+}
+
+.ledger-days {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* One day is one paper card: a meta header, then hairline-separated rows. */
+.ledger-day {
+  overflow: hidden;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+}
+
+.ledger-day__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 13px 8px;
+  border-bottom: var(--stroke) solid var(--rule);
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .06em;
+}
+
+.ledger-day__date {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.ledger-day__totals {
+  display: flex;
+  gap: 10px;
+  margin: 0;
+}
+
+.ledger-day__total {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--fs-label);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+/* 合计是结果，不是方向：卡头保持墨色。 */
+.ledger-day__total--expense,
+.ledger-day__total--income {
+  color: var(--ink);
+}
+
+.ledger-day__rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ledger-day__rows > li + li {
+  border-top: var(--stroke) solid var(--rule);
+}
+
+.ledger-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 13px;
+  color: inherit;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+a.ledger-row:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: -2px;
+}
+
+.ledger-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ledger-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ledger-row__category {
+  overflow: hidden;
+  font-size: var(--fs-row);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row__meta {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  letter-spacing: .03em;
+}
+
+.ledger-row__account {
+  flex: 0 0 auto;
+}
+
+.ledger-row__note {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ledger-row .amount-text {
+  flex: 0 0 auto;
+  font-size: var(--fs-amount);
+  line-height: 1.2;
+}
+
+.ledger-row--readonly {
+  cursor: default;
+}
+
+/* Whole-group transfer deletion: a small destructive action, never an edit. */
+.ledger-row__delete {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: var(--space-1) var(--space-2);
+  border: var(--stroke) solid var(--danger);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--fs-label);
+}
+
+.ledger-row__delete:disabled {
+  opacity: 0.6;
+}
+
+.ledger-row__delete:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 1px;
+}
+
+.ledger-note {
+  margin: var(--space-3) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+
+.ledger-note--error {
+  color: var(--danger);
+}
+
+/* 成功提示不是方向色，保持墨色。 */
+.ledger-note--success {
+  color: var(--ink);
+}
+
+/* ---------- 编辑流水 screen ---------- */
+
+.txn-edit-kind {
+  margin-left: 0;
+  padding: 2px 6px;
+  border: var(--stroke) solid var(--rule);
+  border-radius: var(--radius-chip);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .08em;
+}
+
+.txn-edit-date {
+  margin: 12px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .03em;
+}
+
+/* 删除是页内次级动作：危险色文字 + 44px 点击区，不是一块实心红。
+   原型把它放在 nav 右端；这里也从表单末尾移到页头。 */
+.txn-edit-delete {
+  margin-left: auto;
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--danger);
+  font: inherit;
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .14em;
+}
+
+.txn-edit-delete:disabled {
+  opacity: 0.6;
+}
+
+.txn-edit-delete:focus-visible {
+  outline: 2px solid var(--danger);
+  outline-offset: 2px;
+}
+
+/* 转账腿只读：与表单同一张纸，不加卡片框。 */
+.txn-edit-readonly {
+  margin-top: 20px;
+  padding: 18px 0 20px;
+  border-top: var(--stroke) solid var(--ink);
+  border-bottom: var(--stroke) solid var(--rule);
+  background: transparent;
+}
+
+.txn-edit-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0 0 var(--space-3);
+}
+
+.txn-edit-facts > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: var(--tap);
+  padding: 8px 0;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.txn-edit-facts dt {
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .14em;
+}
+
+.txn-edit-facts dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: var(--fs-row);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}

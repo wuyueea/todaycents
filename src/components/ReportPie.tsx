@@ -12,42 +12,33 @@ import type { ReportCategory } from '../db/repos/reports';
  * of ink, and the gap between two slices is a 1.5 paper-coloured stroke.
  *
  * The geometry is constants instead of measured text: the pie lives in a fixed
- * 320x178 viewBox (the width of a 360dp phone minus its 20dp padding), so the
- * same numbers hold on every device and the picture is identical to the one in
- * docs/prototypes/shots/a/reports.png.
+ * 320x178 viewBox (the width of a 360dp phone minus its 20dp padding), with
+ * the centre at y=88 so the top labels have room above the ring.
  */
 
 /** The drawing's box, in user units. 0° is 12 o'clock and angles grow clockwise. */
 export const PIE_VIEW = {
   width: 320,
-  height: 178,
+  height: 236,
   cx: 160,
-  cy: 68,
+  cy: 140,
   radius: 60,
 } as const;
 
 /**
- * Where a leader starts: just outside the ring, and where its elbow sits.
- *
- * The line leaves along the slice's own radius and only then turns horizontal.
- * The earlier version fixed each label to a row and solved the elbow's x from
- * that row, which made a long diagonal cut straight across the pie whenever a
- * slice's mid angle pointed somewhere else — the line crossed the very wedge it
- * described.
+ * The anchor sits just outside the ring at the slice's mid-angle, and the bend
+ * a little farther out on the same radius. The horizontal run starts at the
+ * bend's x; spreadLabels may move the bend's y, but the start still belongs to
+ * the wedge it labels.
  */
 const LEADER_RADIUS = PIE_VIEW.radius + 4;
 
 /**
- * The two vertical rails the leaders turn at, and where the text begins.
- *
- * Both sit outside the pie's own x-range (100–220), which is what makes the
- * routing safe: the first segment only ever moves away from the centre
- * horizontally, and the second runs down a rail the pie never reaches. No
- * diagonal exists that could cross a wedge.
+ * Where the text begins on each side. The bend's x comes from the slice's own
+ * radius, so each leader starts from the wedge it describes; the horizontal
+ * run lands on the text edge at the spread label row.
  */
-const RIGHT_EDGE = 240;
 const RIGHT_TEXT = 243;
-const LEFT_EDGE = 80;
 const LEFT_TEXT = 77;
 
 /** Labels must stay inside the drawing and far enough apart to read. */
@@ -130,7 +121,7 @@ export function sliceShade(index: number): number {
 
 /** One leader line: the polyline plus where its two text lines sit. */
 export interface LeaderGeometry {
-  /** SVG polyline points: ring, elbow, then the horizontal run to the text. */
+  /** SVG polyline points: ring anchor, rail elbow, then the horizontal run to the text. */
   points: string;
   labelX: number;
   labelY: number;
@@ -138,21 +129,23 @@ export interface LeaderGeometry {
   side: 'left' | 'right';
 }
 
-/** Where a leader wants to start and turn, before the labels are spread. */
+/** A label's anchor and bend, before the labels are spread. */
 interface LeaderDraft {
   anchor: { x: number; y: number };
-  elbow: { x: number; y: number };
+  bend: { x: number; y: number };
   side: 'left' | 'right';
 }
 
 function draftFor(midAngleDeg: number): LeaderDraft {
+  // The prototype: leave the wedge at its mid-angle, then run out to r+14.
+  // The bend keeps the radial x even when spreadLabels moves its y later, so
+  // the start of each line still belongs to the wedge it labels.
   const anchor = piePoint(midAngleDeg, LEADER_RADIUS);
-  // The side is decided where the line starts: a label belongs on the half it
-  // is leaving, otherwise the line would have to cross the picture to reach it.
+  const bend = piePoint(midAngleDeg, PIE_VIEW.radius + 14);
   return {
     anchor,
-    elbow: { x: anchor.x >= PIE_VIEW.cx ? RIGHT_EDGE : LEFT_EDGE, y: anchor.y },
-    side: anchor.x >= PIE_VIEW.cx ? 'right' : 'left',
+    bend,
+    side: bend.x >= PIE_VIEW.cx ? 'right' : 'left',
   };
 }
 
@@ -193,27 +186,68 @@ export function spreadLabels(
 }
 
 /**
+ * Places each side's labels above or below the pie centre according to the
+ * direction of its anchor's radius. Upward anchors get rows above the anchor;
+ * downward anchors get rows below. This is what makes the diagonal pull out in
+ * the same vertical direction as the wedge instead of folding every label to
+ * one side.
+ */
+function placeLabels(drafts: readonly LeaderDraft[]): number[] {
+  const result = drafts.map(() => 0);
+
+  for (const side of ['left', 'right'] as const) {
+    const indexes = drafts
+      .map((draft, index) => ({ draft, index }))
+      .filter(entry => entry.draft.side === side)
+      .sort((a, b) => a.draft.anchor.y - b.draft.anchor.y);
+
+    const up = indexes.filter(entry => entry.draft.anchor.y < PIE_VIEW.cy);
+    const down = indexes.filter(entry => entry.draft.anchor.y >= PIE_VIEW.cy);
+
+    if (up.length > 0) {
+      const last = Math.min(LABEL_BOTTOM, up[up.length - 1]!.draft.anchor.y - 8);
+      let first = last - (up.length - 1) * LABEL_MIN_GAP;
+      if (first < LABEL_TOP) first = LABEL_TOP;
+      up.forEach((entry, row) => {
+        result[entry.index] = round2(first + row * LABEL_MIN_GAP);
+      });
+    }
+
+    if (down.length > 0) {
+      const first = Math.max(LABEL_TOP, down[0]!.draft.anchor.y + 8);
+      down.forEach((entry, row) => {
+        result[entry.index] = round2(Math.min(LABEL_BOTTOM, first + row * LABEL_MIN_GAP));
+      });
+    }
+  }
+
+  return result;
+}
+
+/**
  * Routes every label out of its slice in one pass.
  *
- * The line always leaves along the slice's radius and only turns once it is
- * clear of the pie, so it can never cut across a wedge. The horizontal run then
- * lands on the label's own baseline, which the spread pass has already moved
- * out of its neighbours' way.
+ * The prototype shape is two segments: leave the correct wedge at its mid-angle
+ * and run out along that radius, then turn horizontal on the label's row.
+ * Because the second segment is at the spread label's own y, neighbouring
+ * leaders no longer share one vertical rail and cannot pile up on each other.
+ * The geometry test pins the anchor to the wedge mid-angle and the bend to the
+ * r+14 radial x.
  */
 export function layoutLeaders(midAngles: readonly number[]): LeaderGeometry[] {
   const drafts = midAngles.map(draftFor);
-  const spread = spreadLabels(drafts.map(draft => ({ side: draft.side, y: draft.elbow.y })));
+  const spread = placeLabels(drafts);
 
   return drafts.map((draft, index) => {
     const side = draft.side;
     const labelY = spread[index]!;
-    const rail = side === 'right' ? RIGHT_EDGE : LEFT_EDGE;
+    const labelX = side === 'right' ? RIGHT_TEXT : LEFT_TEXT;
+    const bendX = round2(draft.bend.x);
     return {
-      // Out along the slice's own radius to the rail, then down the rail to the
-      // label's baseline. The rail is outside the pie, so the turn is always
-      // clear of it — even when the spread pass moved the label a long way.
-      points: `${draft.anchor.x},${draft.anchor.y} ${rail},${draft.anchor.y} ${rail},${labelY}`,
-      labelX: side === 'right' ? RIGHT_TEXT : LEFT_TEXT,
+      // Prototype routing: anchor on the wedge mid-angle, bend on the same
+      // radius's x, then horizontal on the spread label row.
+      points: `${draft.anchor.x},${draft.anchor.y} ${bendX},${labelY} ${labelX},${labelY}`,
+      labelX,
       labelY,
       anchor: side === 'right' ? 'start' : 'end',
       side,

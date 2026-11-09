@@ -4,10 +4,10 @@ import {
   applyAmountKey,
   formatAmountDraft,
 } from '../components/AmountKeypad';
-import { registerBackHandler } from '../components/backButton';
+import { Sheet } from '../components/Sheet';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { createTagForPicker } from '../components/TagPicker';
+import { createTagForPicker } from '../components/createTagForPicker';
 import { useDb, useQuery } from '../store/useDb';
 import { listAccounts } from '../db/repos/accounts';
 import { listCategories } from '../db/repos/categories';
@@ -399,7 +399,6 @@ export default function QuickEntryScreen({
   const { db, bump } = useDb();
   const navigate = useNavigate();
   const today = todayLocalISO();
-  const sheetRef = useRef<HTMLElement>(null);
   const newTagRef = useRef<HTMLInputElement>(null);
   const fieldsRef = useRef<HTMLDivElement>(null);
   const tagRowRef = useRef<HTMLDivElement>(null);
@@ -444,63 +443,10 @@ export default function QuickEntryScreen({
   }, []);
 
   const close = onClose ?? (() => navigate('/'));
-  const closeRef = useRef(close);
-  closeRef.current = close;
   const data = query.data;
   const isTransfer = direction === 'transfer';
 
-  // Re-runs when 账户 covers or reveals this sheet. A hidden sheet must not
-  // steal focus, hear Escape/Tab, or answer Android's back key; on reveal it
-  // takes focus again with the draft exactly as it was.
-  const activeRef = useRef(active);
-  activeRef.current = active;
 
-  useEffect(() => {
-    if (!active) return;
-    const sheet = sheetRef.current;
-    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    sheet?.focus();
-
-    const selector =
-      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeRef.current();
-        return;
-      }
-      if (event.key !== 'Tab' || sheet === null) return;
-
-      const items = Array.from(sheet.querySelectorAll<HTMLElement>(selector)).filter(
-        element => element.offsetParent !== null
-      );
-      if (items.length === 0) return;
-      const first = items[0]!;
-      const last = items[items.length - 1]!;
-      if (event.shiftKey && (document.activeElement === first || document.activeElement === sheet)) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    // The back key leaves the form exactly like Escape and the ✕ button: the
-    // caller already knows whether that means step back or replace the entry.
-    const releaseBack = registerBackHandler(() => {
-      closeRef.current();
-      return true;
-    });
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      releaseBack();
-      document.removeEventListener('keydown', onKeyDown);
-      // Deactivation is not closing: leave focus to the screen that covered
-      // this one. Only removal from the tree returns it to the opener.
-      if (activeRef.current) previous?.focus();
-    };
-  }, [active]);
 
   useEffect(() => {
     if (tagOpen) newTagRef.current?.focus();
@@ -745,16 +691,15 @@ export default function QuickEntryScreen({
   };
 
   return (
-    <div className="entry-layer">
-      <div className="entry-scrim" aria-hidden="true" onClick={close} />
-      <section
-        className="entry-sheet"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="entry-sheet-title"
-        ref={sheetRef}
-        tabIndex={-1}
-      >
+    <Sheet
+      variant="entry"
+      open={active}
+      titleId="entry-sheet-title"
+      onClose={close}
+      initialFocus="panel"
+      restoreFocus={() => active}
+      focusableFilter={element => element.offsetParent !== null}
+    >
         <div className="entry-sheet__grab" aria-hidden="true" />
         <header className="entry-sheet__head">
           <h1 className="sr-only" id="entry-sheet-title">
@@ -1118,7 +1063,6 @@ export default function QuickEntryScreen({
             </div>
           )}
         </form>
-      </section>
-    </div>
+    </Sheet>
   );
 }

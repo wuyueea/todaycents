@@ -6,10 +6,14 @@ interface DialogFocusOptions {
   /** Whether the dialog is currently mounted; false keeps the effect idle. */
   open?: boolean;
   onClose: () => void;
-  /** Focus the safe action (last button) instead of the first control. */
-  initial?: 'first' | 'last';
+  /** Focus the panel, the first control, or the safe action (last button). */
+  initial?: 'first' | 'last' | 'panel';
   /** Optional guard for Escape while a destructive request is in flight. */
   canClose?: () => boolean;
+  /** Skip restoring focus when a temporary deactivation must leave it alone. */
+  restoreFocus?: () => boolean;
+  /** Exclude elements hidden by the screen (for example an inactive tab panel). */
+  focusableFilter?: (element: HTMLElement) => boolean;
 }
 
 /**
@@ -24,12 +28,18 @@ export function useDialogFocus({
   onClose,
   initial = 'first',
   canClose,
+  restoreFocus,
+  focusableFilter,
 }: DialogFocusOptions): RefObject<HTMLDivElement | null> {
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef(onClose);
   const canCloseRef = useRef(canClose);
+  const restoreFocusRef = useRef(restoreFocus);
+  const focusableFilterRef = useRef(focusableFilter);
   closeRef.current = onClose;
   canCloseRef.current = canClose;
+  restoreFocusRef.current = restoreFocus;
+  focusableFilterRef.current = focusableFilter;
 
   useEffect(() => {
     if (!open) return;
@@ -50,19 +60,25 @@ export function useDialogFocus({
       panel.querySelectorAll<HTMLElement>(
         'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
       )
-    );
-    const first = initial === 'first' ? focusable[0] : focusable[focusable.length - 1];
-    (first ?? panel).focus();
+    ).filter(element => focusableFilterRef.current?.(element) ?? true);
+    const target =
+      initial === 'panel'
+        ? panel
+        : initial === 'first'
+          ? focusable[0]
+          : focusable[focusable.length - 1];
+    (target ?? panel).focus();
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         if (canCloseRef.current === undefined || canCloseRef.current()) closeRef.current();
         return;
       }
       if (event.key !== 'Tab' || focusable.length === 0) return;
       const firstFocusable = focusable[0]!;
       const lastFocusable = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === firstFocusable) {
+      if (event.shiftKey && (document.activeElement === firstFocusable || document.activeElement === panel)) {
         event.preventDefault();
         lastFocusable.focus();
       } else if (!event.shiftKey && document.activeElement === lastFocusable) {
@@ -75,7 +91,7 @@ export function useDialogFocus({
     return () => {
       releaseBack();
       document.removeEventListener('keydown', onKeyDown);
-      previous?.focus();
+      if (restoreFocusRef.current === undefined || restoreFocusRef.current()) previous?.focus();
     };
   }, [open, initial]);
 

@@ -1,0 +1,263 @@
+/* ---------- 随手记 screen ---------- */
+
+/* /add, /accounts and /txn/:id replace the tab bar, so the shell must not reserve room for one. */
+.app-shell--full {
+  padding-bottom: var(--safe-area-bottom);
+}
+
+.add-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Pushed page: a 56px nav, then a form of ruled rows. */
+.add-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  margin-bottom: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.add-header h1 {
+  margin: 0;
+  font-size: var(--fs-nav);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .1em;
+}
+
+.add-back {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 22px;
+  line-height: 1;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.add-back:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* 支出 / 收入 / 转账: three choices, framed like a field row. */
+.add-direction {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+}
+
+.add-direction__choice {
+  min-height: var(--btn-h);
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: var(--fs-btn);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: .08em;
+}
+
+.add-direction__choice.is-active {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.add-direction__choice:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+/* One field = one ruled row, as in the prototype's 记一笔. */
+.add-field {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 60px;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.add-label {
+  flex: 0 0 auto;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .14em;
+  line-height: 1.45;
+}
+
+/* 金额 is the one hero field: big number, no box. */
+.add-field--amount {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  min-height: 0;
+  padding: 22px 0 14px;
+}
+
+/* 分类 / 标签 are value rows whose right side is a button that opens a sheet. */
+.add-value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  letter-spacing: .05em;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-value:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.add-value[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.add-account {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  text-align: right;
+  text-align-last: right;
+}
+
+.add-account:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+.add-account[aria-invalid='true'] {
+  outline: 1px solid var(--danger);
+  outline-offset: 4px;
+}
+
+.add-submit {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: var(--space-5);
+  padding: 0 var(--pad);
+  border: var(--stroke) solid var(--ink);
+  border-radius: var(--radius);
+  background: var(--ink);
+  color: var(--paper);
+  font: inherit;
+  font-size: var(--fs-btn);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .14em;
+}
+
+.add-submit:disabled {
+  opacity: 0.6;
+}
+
+.add-submit:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.add-note {
+  margin: var(--space-3) 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+}
+
+.add-note--error {
+  color: var(--danger);
+}
+
+.add-date,
+.add-note-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.add-note-input::placeholder {
+  color: var(--ink-2);
+  opacity: 1;
+}
+
+.add-date:focus-visible,
+.add-note-input:focus-visible {
+  outline: 1px solid var(--rule-strong);
+  outline-offset: 4px;
+}
+
+/* A back-filled date keeps its 补记 hint under the row, never in it. */
+.add-field--date {
+  flex-wrap: wrap;
+  padding: 14px 0;
+}
+
+.add-date-hint {
+  flex: 0 0 100%;
+  margin: 7px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  text-align: right;
+}
+
+.add-ledger-link {
+  display: block;
+  margin-top: var(--space-4);
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  text-align: center;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.add-ledger-link:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}

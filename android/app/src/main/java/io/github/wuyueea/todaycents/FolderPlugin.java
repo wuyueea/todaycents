@@ -22,7 +22,6 @@ import com.getcapacitor.annotation.CapacitorPlugin;
 
 import java.io.File;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -55,7 +54,6 @@ public class FolderPlugin extends Plugin {
     private static final String PREFS = "ledger_storage";
     private static final String KEY_PATH = "folder_path";
     private static final String DEFAULT_FOLDER_NAME = "记账本";
-    private static final String INTERNAL_STORAGE = "内部存储";
     private static final String PROBE_PREFIX = ".ledger-probe-";
     private static final String EXTERNAL_STORAGE_AUTHORITY =
         "com.android.externalstorage.documents";
@@ -281,7 +279,7 @@ public class FolderPlugin extends Plugin {
         }
 
         String name = rawName.trim();
-        if (!isSafeName(name)) {
+        if (!FolderPolicy.isSafeName(name)) {
             call.reject("这个文件名不能用。");
             return;
         }
@@ -335,17 +333,7 @@ public class FolderPlugin extends Plugin {
      * for a path that cannot be canonicalized, so callers treat it as refused.
      */
     private File insideShared(File file) {
-        try {
-            File root = sharedRoot().getCanonicalFile();
-            File target = file.getCanonicalFile();
-            String rootPath = root.getAbsolutePath();
-            String targetPath = target.getAbsolutePath();
-            if (targetPath.equals(rootPath)) return target;
-            if (targetPath.startsWith(rootPath + File.separator)) return target;
-            return null;
-        } catch (IOException | SecurityException error) {
-            return null;
-        }
+        return FolderPolicy.insideShared(sharedRoot(), file);
     }
 
     /**
@@ -368,25 +356,9 @@ public class FolderPlugin extends Plugin {
 
     /** The exact folder as a document Uri, or null outside shared storage. */
     private Uri folderDocumentUri(File folder) {
-        try {
-            File root = sharedRoot().getCanonicalFile();
-            File target = folder.getCanonicalFile();
-            String rootPath = root.getAbsolutePath();
-            String targetPath = target.getAbsolutePath();
-            if (!targetPath.equals(rootPath)
-                && !targetPath.startsWith(rootPath + File.separator)) {
-                return null;
-            }
-
-            String relative = targetPath.substring(rootPath.length());
-            while (relative.startsWith(File.separator)) {
-                relative = relative.substring(1);
-            }
-            String docId = "primary:" + relative.replace(File.separatorChar, '/');
-            return DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, docId);
-        } catch (IOException | SecurityException error) {
-            return null;
-        }
+        String docId = FolderPolicy.documentId(sharedRoot(), folder);
+        if (docId == null) return null;
+        return DocumentsContract.buildDocumentUri(EXTERNAL_STORAGE_AUTHORITY, docId);
     }
 
     /** Direct Files app, generic VIEW chooser, then the folder picker. */
@@ -418,13 +390,6 @@ public class FolderPlugin extends Plugin {
         }
     }
 
-    private boolean isSafeName(String name) {
-        return !name.equals(".")
-            && !name.equals("..")
-            && name.indexOf('/') < 0
-            && name.indexOf('\\') < 0
-            && name.indexOf('\0') < 0;
-    }
 
     private JSObject accessJson() {
         boolean granted = hasAccess();
@@ -449,15 +414,7 @@ public class FolderPlugin extends Plugin {
     }
 
     private String displayNameOf(File folder) {
-        try {
-            if (folder.getCanonicalPath().equals(sharedRoot().getCanonicalPath())) {
-                return INTERNAL_STORAGE;
-            }
-        } catch (IOException ignored) {
-            // The name is cosmetic; fall through to the directory name.
-        }
-        String name = folder.getName();
-        return name == null || name.trim().isEmpty() ? INTERNAL_STORAGE : name;
+        return FolderPolicy.displayName(sharedRoot(), folder);
     }
 
     private JSObject opened(boolean opened) {

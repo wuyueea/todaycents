@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { AmountText } from '../components/AmountText';
-import { useDialogFocus } from '../components/useDialogFocus';
+import { Sheet } from '../components/Sheet';
 import { CategoryBar } from '../components/CategoryBar';
 import { AmountKeypadField } from '../components/AmountKeypadField';
 import { Toast, useToast } from '../components/Toast';
@@ -120,41 +120,27 @@ export function ProjectArchiveSheet({
   onConfirm,
   onCancel,
 }: ProjectArchiveSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="project-archive-title"
+    <Sheet
+      titleId="project-archive-title"
+      title="归档项目"
+      meta={<span className="sheet__version num">{txnCount} 笔</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
     >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="project-archive-title">
-            归档项目
-          </h2>
-          <span className="sheet__version num">{txnCount} 笔</span>
-        </div>
+      <p className="sheet__text">
+        归档后，「{projectName}」不再出现在进行中。这趟的 {txnCount} 笔账一笔都不会动，仍然算进各月的分类统计。
+      </p>
+      <p className="sheet__note">随时可以反悔：在「已归档」里点开，选恢复。</p>
 
-        <p className="sheet__text">
-          归档后，「{projectName}」不再出现在进行中。这趟的 {txnCount} 笔账一笔都不会动，仍然算进各月的分类统计。
-        </p>
-        <p className="sheet__note">随时可以反悔：在「已归档」里点开，选恢复。</p>
-
-        <button className="sheet__primary" type="button" onClick={onConfirm} disabled={busy}>
-          归档
-        </button>
-        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
-          取消
-        </button>
-      </div>
-    </div>
+      <button className="sheet__primary" type="button" onClick={onConfirm} disabled={busy}>
+        归档
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 

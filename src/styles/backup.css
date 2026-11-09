@@ -1,0 +1,290 @@
+/* ---------- 备份与恢复 screen ---------- */
+
+.backup-screen {
+  display: flex;
+  flex-direction: column;
+}
+
+/* 上次备份：一个安静的数字块，下面一条线把它和动作分开。 */
+.backup-state {
+  padding: 26px 0 22px;
+  border-bottom: var(--stroke) solid var(--rule);
+}
+
+.backup-state__label {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .24em;
+}
+
+.backup-state__value {
+  margin: 12px 0 0;
+  color: var(--ink);
+  font-size: 25px;
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .09em;
+  line-height: 1.2;
+}
+
+.backup-state__meta {
+  margin: 10px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+/* 主 = 墨底，次 = 墨描边；都 52px。 */
+.backup-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 0 6px;
+}
+
+.backup-button {
+  width: 100%;
+  min-height: var(--btn-h);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.backup-button--primary {
+  border: var(--stroke) solid var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.backup-button--secondary {
+  border: var(--stroke) solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+}
+
+.backup-button:disabled {
+  opacity: .6;
+}
+
+.backup-button:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+/* The input is invisible but must stay in the accessibility tree. */
+.backup-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.backup-note {
+  margin: 18px 0 0;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+  letter-spacing: .02em;
+}
+
+.backup-note--error {
+  color: var(--danger);
+}
+
+/* 目录浏览：路径可以很长，按字符换行，不撑破页面。 */
+.storage-path {
+  word-break: break-all;
+  font-size: var(--fs-meta);
+  line-height: 1.6;
+  letter-spacing: .02em;
+}
+
+.storage-dirs {
+  margin: 10px 0 0;
+  padding: 0;
+  border-top: var(--stroke) solid var(--rule);
+  list-style: none;
+}
+
+.storage-dir {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: 11px 0 10px;
+  border: 0;
+  border-bottom: var(--stroke) solid var(--rule);
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--fs-row);
+  letter-spacing: .045em;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.storage-dir:disabled {
+  opacity: .6;
+}
+
+.storage-dir:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}
+
+.storage-dir__chev {
+  flex: none;
+  color: var(--ink-2);
+  font-family: var(--font-num);
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* ---------- 导入弹层（确认 / 失败） ---------- */
+
+/* 底部升起：顶边 1px 墨线，纸底，最高屏幕 − 118px，内部滚动。 */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.sheet__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(25, 25, 23, .24);
+}
+
+.sheet__panel {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 640px;
+  max-height: calc(100% - 118px);
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 22px var(--pad) calc(30px + var(--safe-area-bottom));
+  border-top: var(--stroke) solid var(--ink);
+  background: var(--paper);
+}
+
+.sheet__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.sheet__title {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: .24em;
+}
+
+.sheet__version {
+  flex: none;
+  color: var(--ink-2);
+  font-size: var(--fs-label);
+  letter-spacing: .12em;
+}
+
+.sheet__file {
+  margin-top: 18px;
+  padding: 13px 14px;
+  border: var(--stroke) solid var(--rule-strong);
+  border-radius: var(--radius);
+  background: var(--paper-card);
+}
+
+.sheet__file-name {
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  letter-spacing: .03em;
+}
+
+.sheet__file-meta {
+  margin-top: 7px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .04em;
+}
+
+.sheet__text {
+  margin: 16px 0 0;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.9;
+  letter-spacing: .02em;
+}
+
+.sheet__note {
+  margin: 14px 0 0;
+  padding-left: 11px;
+  border-left: var(--stroke) solid var(--rule-strong);
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.8;
+}
+
+.sheet__reasons {
+  margin: 14px 0 0;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: var(--fs-meta);
+  line-height: 1.9;
+}
+
+.sheet__reasons li + li {
+  margin-top: 4px;
+}
+
+.sheet__danger,
+.sheet__secondary {
+  width: 100%;
+  min-height: var(--btn-h);
+  margin-top: 12px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius);
+  background: transparent;
+  font: inherit;
+  font-size: var(--fs-btn);
+  letter-spacing: .14em;
+}
+
+.sheet__danger {
+  border: var(--stroke) solid var(--danger);
+  color: var(--danger);
+}
+
+.sheet__secondary {
+  border: var(--stroke) solid var(--ink);
+  color: var(--ink);
+}
+
+.sheet__note + .sheet__danger {
+  margin-top: 22px;
+}
+
+.sheet__danger:disabled,
+.sheet__secondary:disabled {
+  opacity: .6;
+}
+
+.sheet__danger:focus-visible,
+.sheet__secondary:focus-visible {
+  outline: 2px solid var(--ink);
+  outline-offset: 2px;
+}

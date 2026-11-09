@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AmountText } from '../components/AmountText';
@@ -7,7 +7,7 @@ import {
   applyAmountKey,
   formatAmountDraft,
 } from '../components/AmountKeypad';
-import { registerBackHandler } from '../components/backButton';
+import { Sheet } from '../components/Sheet';
 import { useDb, useQuery } from '../store/useDb';
 import { listAccounts } from '../db/repos/accounts';
 import { listCategories } from '../db/repos/categories';
@@ -308,17 +308,9 @@ export default function TxnEditScreen() {
   const [problems, setProblems] = useState<TxnEditProblems>(noProblems);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // The keydown/back handlers are installed once per dialog; a ref keeps them
-  // from reading the busy flag as it was when the dialog opened.
-  const busyRef = useRef(busy);
-  busyRef.current = busy;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [amountPristine, setAmountPristine] = useState(false);
-  const amountButtonRef = useRef<HTMLButtonElement>(null);
-  const keypadPanelRef = useRef<HTMLDivElement>(null);
-  const deleteButtonRef = useRef<HTMLButtonElement>(null);
-  const deletePanelRef = useRef<HTMLDivElement>(null);
 
   const data = query.data;
   const row = data?.row ?? null;
@@ -359,82 +351,9 @@ export default function TxnEditScreen() {
     row.categoryId !== UNCATEGORIZED_CATEGORY_ID &&
     !categories.some(category => category.id === row.categoryId);
 
-  useEffect(() => {
-    if (!keypadOpen) return;
-    const panel = keypadPanelRef.current;
-    const focusable = Array.from(
-      panel?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []
-    );
-    (focusable[0] ?? panel)?.focus();
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setKeypadOpen(false);
-        return;
-      }
-      if (event.key !== 'Tab' || focusable.length === 0) return;
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    // The back key closes the keypad first, then the screen itself.
-    const releaseBack = registerBackHandler(() => {
-      setKeypadOpen(false);
-      return true;
-    });
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      releaseBack();
-      document.removeEventListener('keydown', onKeyDown);
-      amountButtonRef.current?.focus();
-    };
-  }, [keypadOpen]);
 
-  useEffect(() => {
-    if (!confirmDelete) return;
-    const panel = deletePanelRef.current;
-    const focusable = Array.from(
-      panel?.querySelectorAll<HTMLElement>('button:not(:disabled)') ?? []
-    );
-    // Focus 取消, the safe action, not the destructive one.
-    (focusable[focusable.length - 1] ?? panel)?.focus();
 
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        if (!busyRef.current) setConfirmDelete(false);
-        return;
-      }
-      if (event.key !== 'Tab' || focusable.length === 0) return;
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    // Same rule as Escape and the scrim: while the delete is in flight the
-    // dialog stays put, and the press is swallowed rather than stepping the
-    // route out from under the request.
-    const releaseBack = registerBackHandler(() => {
-      if (!busyRef.current) setConfirmDelete(false);
-      return true;
-    });
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      releaseBack();
-      document.removeEventListener('keydown', onKeyDown);
-      deleteButtonRef.current?.focus();
-    };
-  }, [confirmDelete]);
 
   const clearProblem = (field: keyof TxnEditProblems) => {
     setProblems(previous => (previous[field] ? { ...previous, [field]: false } : previous));
@@ -548,7 +467,6 @@ export default function TxnEditScreen() {
             危险色文字 + 44px 点击区，不做实心红块。 */}
         {row !== null && row.direction !== 'transfer' && (
           <button
-            ref={deleteButtonRef}
             className="txn-edit-delete"
             type="button"
             onClick={() => setConfirmDelete(true)}
@@ -606,7 +524,6 @@ export default function TxnEditScreen() {
           <div className="add-field add-field--amount">
             <span className="add-label">金额</span>
             <button
-              ref={amountButtonRef}
               id="edit-amount"
               className="txn-amount-button"
               type="button"
@@ -802,93 +719,72 @@ export default function TxnEditScreen() {
       )}
 
       {keypadOpen && (
-        <div
-          className="txn-keypad-layer"
-          role="dialog"
-          aria-modal="true"
-          aria-label="金额键盘"
-        >
-          <div
-            className="txn-keypad-scrim"
-            aria-hidden="true"
-            onClick={() => setKeypadOpen(false)}
-          />
-          <div className="txn-keypad-panel" ref={keypadPanelRef} tabIndex={-1}>
-            <div className="txn-keypad-head">
-              <span>金额</span>
-              <strong aria-live="polite">{formatAmountDraft(amount)}</strong>
-            </div>
-            <AmountKeypad
-              value={amount}
-              onChange={next => {
-                setAmountEdit(next);
-                clearProblem('amountInvalid');
-                setErrorText(null);
-              }}
-              onKey={key => {
-                // The first digit replaces the loaded amount; a decimal starts
-                // a fresh cents value; edit keys keep the old draft editable.
-                let next: string;
-                if (amountPristine && /^\d$/.test(key)) {
-                  next = key;
-                } else if (amountPristine && key === '.') {
-                  next = '0.';
-                } else {
-                  next = applyAmountKey(amount, key);
-                }
-                setAmountPristine(false);
-                setAmountEdit(next);
-                clearProblem('amountInvalid');
-                setErrorText(null);
-              }}
-              actionLabel="完成"
-              actionType="button"
-              actionData="done"
-              onAction={() => setKeypadOpen(false)}
-            />
+        <Sheet variant="keypad" ariaLabel="金额键盘" onClose={() => setKeypadOpen(false)}>
+          <div className="txn-keypad-head">
+            <span>金额</span>
+            <strong aria-live="polite">{formatAmountDraft(amount)}</strong>
           </div>
-        </div>
+          <AmountKeypad
+            value={amount}
+            onChange={next => {
+              setAmountEdit(next);
+              clearProblem('amountInvalid');
+              setErrorText(null);
+            }}
+            onKey={key => {
+              // The first digit replaces the loaded amount; a decimal starts
+              // a fresh cents value; edit keys keep the old draft editable.
+              let next: string;
+              if (amountPristine && /^\d$/.test(key)) {
+                next = key;
+              } else if (amountPristine && key === '.') {
+                next = '0.';
+              } else {
+                next = applyAmountKey(amount, key);
+              }
+              setAmountPristine(false);
+              setAmountEdit(next);
+              clearProblem('amountInvalid');
+              setErrorText(null);
+            }}
+            actionLabel="完成"
+            actionType="button"
+            actionData="done"
+            onAction={() => setKeypadOpen(false)}
+          />
+        </Sheet>
       )}
 
       {confirmDelete && row !== null && (
-        <div
-          className="sheet txn-delete-sheet"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="txn-delete-title"
+        <Sheet
+          className="txn-delete-sheet"
+          titleId="txn-delete-title"
+          title="删除这笔流水"
+          onClose={() => setConfirmDelete(false)}
+          initialFocus="last"
+          canClose={() => !busy}
+          scrimDismiss={!busy}
         >
-          <div
-            className="sheet__scrim"
-            aria-hidden="true"
-            onClick={() => {
-              if (!busy) setConfirmDelete(false);
-            }}
-          />
-          <div className="sheet__panel" ref={deletePanelRef} tabIndex={-1}>
-            <h2 className="sheet__title" id="txn-delete-title">
-              删除这笔流水
-            </h2>
-            <p className="sheet__text">
-              它会从流水和统计中消失，记录仍保留在本地，且不能撤销。
-            </p>
-            <button
-              className="sheet__danger"
-              type="button"
-              disabled={busy}
-              onClick={() => void handleDelete()}
-            >
-              {busy ? '正在删除…' : '删除'}
-            </button>
-            <button
-              className="sheet__secondary"
-              type="button"
-              disabled={busy}
-              onClick={() => setConfirmDelete(false)}
-            >
-              取消
-            </button>
-          </div>
-        </div>
+          <p className="sheet__text">
+            它会从流水和统计中消失，记录仍保留在本地，且不能撤销。
+          </p>
+          <button
+            className="sheet__danger"
+            type="button"
+            disabled={busy}
+            onClick={() => void handleDelete()}
+          >
+            {busy ? '正在删除…' : '删除'}
+          </button>
+          <button
+            className="sheet__secondary"
+            type="button"
+            disabled={busy}
+            onClick={() => setConfirmDelete(false)}
+          >
+            取消
+          </button>
+        </Sheet>
       )}
     </div>
   );

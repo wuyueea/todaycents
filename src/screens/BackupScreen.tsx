@@ -21,7 +21,7 @@ import { cachedBackups, deviceFileWriter } from '../backup/device';
 import type { CachedBackup } from '../backup/device';
 import { deviceFolder } from '../storage/folder';
 import { Toast, useToast } from '../components/Toast';
-import { useDialogFocus } from '../components/useDialogFocus';
+import { Sheet } from '../components/Sheet';
 import { useDb, useQuery } from '../store/useDb';
 
 /**
@@ -88,58 +88,44 @@ export function ImportConfirmSheet({
   onConfirm,
   onCancel,
 }: ImportConfirmSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="import-confirm-title"
+    <Sheet
+      titleId="import-confirm-title"
+      title="从文件导入"
+      meta={<span className="sheet__version">版本 {schemaVersion}</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
     >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="import-confirm-title">
-            从文件导入
-          </h2>
-          <span className="sheet__version">版本 {schemaVersion}</span>
+      <div className="sheet__file">
+        <div className="sheet__file-name">{fileName}</div>
+        <div className="sheet__file-meta">
+          {backupFileMeta(fileRows, fileBytes)} · {formatBackupTime(exportedAt, now)}
         </div>
-
-        <div className="sheet__file">
-          <div className="sheet__file-name">{fileName}</div>
-          <div className="sheet__file-meta">
-            {backupFileMeta(fileRows, fileBytes)} · {formatBackupTime(exportedAt, now)}
-          </div>
-        </div>
-
-        <p className="sheet__text">{importSummary({ fileRows, localRows })}</p>
-        <p className="sheet__note">
-          按下按钮之后，会先把现在的账本导出成一份备份，再覆盖。{plannedCopyNote(folderName)}
-        </p>
-
-        <button
-          className="sheet__danger"
-          type="button"
-          onClick={onConfirm}
-          disabled={busy}
-        >
-          覆盖并导入
-        </button>
-        <button
-          className="sheet__secondary"
-          type="button"
-          onClick={onCancel}
-          disabled={busy}
-        >
-          取消
-        </button>
       </div>
-    </div>
+
+      <p className="sheet__text">{importSummary({ fileRows, localRows })}</p>
+      <p className="sheet__note">
+        按下按钮之后，会先把现在的账本导出成一份备份，再覆盖。{plannedCopyNote(folderName)}
+      </p>
+
+      <button
+        className="sheet__danger"
+        type="button"
+        onClick={onConfirm}
+        disabled={busy}
+      >
+        覆盖并导入
+      </button>
+      <button
+        className="sheet__secondary"
+        type="button"
+        onClick={onCancel}
+        disabled={busy}
+      >
+        取消
+      </button>
+    </Sheet>
   );
 }
 
@@ -160,38 +146,22 @@ export function ImportFailureSheet({
   fileMeta,
   onClose,
 }: ImportFailureSheetProps) {
-  const panelRef = useDialogFocus({ onClose });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="import-failure-title"
-    >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="import-failure-title">
-            {copy.title}
-          </h2>
+    <Sheet titleId="import-failure-title" title={copy.title} onClose={onClose}>
+      {fileName !== undefined && (
+        <div className="sheet__file">
+          <div className="sheet__file-name">{fileName}</div>
+          {fileMeta !== undefined && <div className="sheet__file-meta">{fileMeta}</div>}
         </div>
+      )}
 
-        {fileName !== undefined && (
-          <div className="sheet__file">
-            <div className="sheet__file-name">{fileName}</div>
-            {fileMeta !== undefined && <div className="sheet__file-meta">{fileMeta}</div>}
-          </div>
-        )}
+      <p className="sheet__text">{copy.reason}</p>
+      <p className="sheet__note">{copy.advice}</p>
 
-        <p className="sheet__text">{copy.reason}</p>
-        <p className="sheet__note">{copy.advice}</p>
-
-        <button className="sheet__secondary" type="button" onClick={onClose}>
-          知道了
-        </button>
-      </div>
-    </div>
+      <button className="sheet__secondary" type="button" onClick={onClose}>
+        知道了
+      </button>
+    </Sheet>
   );
 }
 
@@ -215,59 +185,42 @@ export function ExportConfirmSheet({
   onSaved,
   onNotSaved,
 }: ExportConfirmSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onNotSaved,
-    initial: 'last',
-    canClose: () => !busy,
-  });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="export-confirm-title"
+    <Sheet
+      titleId="export-confirm-title"
+      title="备份文件已生成"
+      onClose={onNotSaved}
+      initialFocus="last"
+      canClose={() => !busy}
+      scrimDismiss={!busy}
     >
-      <div
-        className="sheet__scrim"
-        aria-hidden="true"
-        onClick={busy ? undefined : onNotSaved}
-      />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="export-confirm-title">
-            备份文件已生成
-          </h2>
-        </div>
-
-        <div className="sheet__file">
-          <div className="sheet__file-name">{fileName}</div>
-          <div className="sheet__file-meta">{fileSizeText(bytes)}</div>
-        </div>
-
-        <p className="sheet__text">文件已经交给系统分享面板。它保存好了吗？</p>
-        <p className="sheet__note">
-          只有确认保存过，才会更新「上次备份」。没有保存的话，文件还在应用缓存里，可以在下面另存。
-        </p>
-
-        <button
-          className="sheet__primary"
-          type="button"
-          onClick={onSaved}
-          disabled={busy}
-        >
-          已保存
-        </button>
-        <button
-          className="sheet__secondary"
-          type="button"
-          onClick={onNotSaved}
-          disabled={busy}
-        >
-          没有保存
-        </button>
+      <div className="sheet__file">
+        <div className="sheet__file-name">{fileName}</div>
+        <div className="sheet__file-meta">{fileSizeText(bytes)}</div>
       </div>
-    </div>
+
+      <p className="sheet__text">文件已经交给系统分享面板。它保存好了吗？</p>
+      <p className="sheet__note">
+        只有确认保存过，才会更新「上次备份」。没有保存的话，文件还在应用缓存里，可以在下面另存。
+      </p>
+
+      <button
+        className="sheet__primary"
+        type="button"
+        onClick={onSaved}
+        disabled={busy}
+      >
+        已保存
+      </button>
+      <button
+        className="sheet__secondary"
+        type="button"
+        onClick={onNotSaved}
+        disabled={busy}
+      >
+        没有保存
+      </button>
+    </Sheet>
   );
 }
 

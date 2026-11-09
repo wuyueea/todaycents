@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
-import { useDialogFocus } from '../components/useDialogFocus';
+import { Sheet } from '../components/Sheet';
 import type { Db } from '../db/driver';
 import type {
   Category,
@@ -73,7 +73,7 @@ function bySort(a: Category, b: Category): number {
  * Live roots of one kind, each followed by its live children. The system row is
  * excluded here and rendered separately, which is what keeps it last even
  * while an archived section sits above it. A child whose parent is not live is
- * omitted rather than promoted: the same rule CategoryPicker uses.
+ * omitted rather than promoted, matching how the category tree is built.
  */
 export function buildCategoryRows(
   categories: readonly Category[],
@@ -126,87 +126,78 @@ export function CategoryMenuSheet({
   onPurge,
   onCancel,
 }: CategoryMenuSheetProps) {
-  const panelRef = useDialogFocus({ onClose: onCancel });
   const busy = inspection === null;
 
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="category-menu-title"
+    <Sheet
+      titleId="category-menu-title"
+      title={category.name}
+      meta={(
+        <span className="sheet__version num">
+          {category.archivedAt !== null
+            ? '已归档'
+            : inspection === null
+              ? '正在数…'
+              : `${inspection.liveTxnCount} 笔`}
+        </span>
+      )}
+      onClose={onCancel}
     >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="category-menu-title">
-            {category.name}
-          </h2>
-          <span className="sheet__version num">
-            {category.archivedAt !== null
-              ? '已归档'
-              : inspection === null
-                ? '正在数…'
-                : `${inspection.liveTxnCount} 笔`}
-          </span>
-        </div>
-
-        <div className="action-menu">
-          <button className="action-menu__item" type="button" onClick={onRename}>
-            改名
-            <span>历史流水一起改</span>
-          </button>
-          {category.archivedAt === null && category.parentId === null && (
-            <button className="action-menu__item" type="button" onClick={onAddChild}>
-              加二级分类
-              <span>最多两级</span>
-            </button>
-          )}
-          {category.archivedAt === null ? (
-            <>
-              <button className="action-menu__item" type="button" onClick={onArchive}>
-                归档
-                <span>从记账选择里收起</span>
-              </button>
-              <button
-                className="action-menu__item action-menu__item--danger category-menu__danger"
-                type="button"
-                onClick={onRetire}
-                disabled={busy}
-              >
-                断联并归档
-                <span>
-                  {inspection === null
-                    ? '正在数流水…'
-                    : inspection.liveTxnCount > 0
-                      ? `${inspection.liveTxnCount} 笔移到「未分类」，分类收进已归档`
-                      : '没有在用的流水，分类收进已归档'}
-                </span>
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="action-menu__item" type="button" onClick={onUnarchive}>
-                恢复
-                <span>回到记账选择</span>
-              </button>
-              <button
-                className="action-menu__item action-menu__item--danger category-menu__danger"
-                type="button"
-                onClick={onPurge}
-              >
-                彻底删除
-                <span>只对没有历史的归档分类可用</span>
-              </button>
-            </>
-          )}
-        </div>
-
-        <button className="sheet__secondary" type="button" onClick={onCancel}>
-          取消
+      <div className="action-menu">
+        <button className="action-menu__item" type="button" onClick={onRename}>
+          改名
+          <span>历史流水一起改</span>
         </button>
+        {category.archivedAt === null && category.parentId === null && (
+          <button className="action-menu__item" type="button" onClick={onAddChild}>
+            加二级分类
+            <span>最多两级</span>
+          </button>
+        )}
+        {category.archivedAt === null ? (
+          <>
+            <button className="action-menu__item" type="button" onClick={onArchive}>
+              归档
+              <span>从记账选择里收起</span>
+            </button>
+            <button
+              className="action-menu__item action-menu__item--danger category-menu__danger"
+              type="button"
+              onClick={onRetire}
+              disabled={busy}
+            >
+              断联并归档
+              <span>
+                {inspection === null
+                  ? '正在数流水…'
+                  : inspection.liveTxnCount > 0
+                    ? `${inspection.liveTxnCount} 笔移到「未分类」，分类收进已归档`
+                    : '没有在用的流水，分类收进已归档'}
+              </span>
+            </button>
+          </>
+        ) : (
+          <>
+            <button className="action-menu__item" type="button" onClick={onUnarchive}>
+              恢复
+              <span>回到记账选择</span>
+            </button>
+            <button
+              className="action-menu__item action-menu__item--danger category-menu__danger"
+              type="button"
+              onClick={onPurge}
+            >
+              彻底删除
+              <span>只对没有历史的归档分类可用</span>
+            </button>
+          </>
+        )}
       </div>
-    </div>
+
+      <button className="sheet__secondary" type="button" onClick={onCancel}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 
@@ -229,49 +220,36 @@ export function CategoryRetireSheet({
   onConfirm,
   onCancel,
 }: CategoryRetireSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
   const childPart =
     inspection.childCount > 0 ? `及 ${inspection.childCount} 个二级分类` : '';
   const body = `「${categoryName}」下的 ${inspection.liveTxnCount} 笔流水会移到「未分类」，金额和日期都不变；「${categoryName}」${childPart}会收进「已归档」。`;
 
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="category-retire-title"
+    <Sheet
+      titleId="category-retire-title"
+      title="断联并归档"
+      meta={<span className="sheet__version num">{inspection.liveTxnCount} 笔</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
     >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="category-retire-title">
-            断联并归档
-          </h2>
-          <span className="sheet__version num">{inspection.liveTxnCount} 笔</span>
-        </div>
-
-        <p className="sheet__text">{body}</p>
-        {inspection.deletedTxnCount > 0 && (
-          <p className="sheet__note">
-            已删除的 {inspection.deletedTxnCount} 笔流水仍保留原分类，仍算历史，之后可能挡住彻底删除。
-          </p>
-        )}
+      <p className="sheet__text">{body}</p>
+      {inspection.deletedTxnCount > 0 && (
         <p className="sheet__note">
-          这个操作不能撤销。之后可以在「已归档」里恢复分类，但移到「未分类」的流水不会跟着回来。
+          已删除的 {inspection.deletedTxnCount} 笔流水仍保留原分类，仍算历史，之后可能挡住彻底删除。
         </p>
+      )}
+      <p className="sheet__note">
+        这个操作不能撤销。之后可以在「已归档」里恢复分类，但移到「未分类」的流水不会跟着回来。
+      </p>
 
-        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          断联并归档
-        </button>
-        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
-          取消
-        </button>
-      </div>
-    </div>
+      <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+        断联并归档
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 
@@ -287,44 +265,28 @@ export function CategoryPurgeBlockedSheet({
   inspection,
   onClose,
 }: CategoryPurgeBlockedSheetProps) {
-  const panelRef = useDialogFocus({ onClose });
-
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="category-purge-blocked-title"
-    >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onClose} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="category-purge-blocked-title">
-            不能彻底删除
-          </h2>
-        </div>
+    <Sheet titleId="category-purge-blocked-title" title="不能彻底删除" onClose={onClose}>
+      <p className="sheet__text">「{categoryName}」还有历史，不能从数据库里删除。</p>
+      <ul className="sheet__reasons">
+        {inspection.txnCount > 0 && (
+          <li>
+            还有 {inspection.txnCount} 笔流水用过它（其中 {inspection.deletedTxnCount} 笔已删除）。
+          </li>
+        )}
+        {inspection.templateCount > 0 && <li>还有 {inspection.templateCount} 个模板在用它。</li>}
+        {inspection.liveChildCount > 0 && (
+          <li>下面还有 {inspection.liveChildCount} 个未归档的二级分类。</li>
+        )}
+      </ul>
+      <p className="sheet__note">
+        有历史的分类只能保持归档，历史流水的分类显示不会丢。
+      </p>
 
-        <p className="sheet__text">「{categoryName}」还有历史，不能从数据库里删除。</p>
-        <ul className="sheet__reasons">
-          {inspection.txnCount > 0 && (
-            <li>
-              还有 {inspection.txnCount} 笔流水用过它（其中 {inspection.deletedTxnCount} 笔已删除）。
-            </li>
-          )}
-          {inspection.templateCount > 0 && <li>还有 {inspection.templateCount} 个模板在用它。</li>}
-          {inspection.liveChildCount > 0 && (
-            <li>下面还有 {inspection.liveChildCount} 个未归档的二级分类。</li>
-          )}
-        </ul>
-        <p className="sheet__note">
-          有历史的分类只能保持归档，历史流水的分类显示不会丢。
-        </p>
-
-        <button className="sheet__secondary" type="button" onClick={onClose}>
-          知道了
-        </button>
-      </div>
-    </div>
+      <button className="sheet__secondary" type="button" onClick={onClose}>
+        知道了
+      </button>
+    </Sheet>
   );
 }
 
@@ -344,47 +306,34 @@ export function CategoryPurgeSheet({
   onConfirm,
   onCancel,
 }: CategoryPurgeSheetProps) {
-  const panelRef = useDialogFocus({
-    onClose: onCancel,
-    initial: 'last',
-    canClose: () => !busy,
-  });
   const childPart =
     inspection.childCount > 0 ? `及 ${inspection.childCount} 个二级分类` : '';
   const body = `「${categoryName}」${childPart}会从数据库里删除。这个分类没有任何流水或模板，删除不会影响一笔账。`;
 
   return (
-    <div
-      className="sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="category-purge-title"
+    <Sheet
+      titleId="category-purge-title"
+      title="彻底删除"
+      meta={<span className="sheet__version">已归档</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
     >
-      <div className="sheet__scrim" aria-hidden="true" onClick={onCancel} />
-      <div className="sheet__panel" ref={panelRef} tabIndex={-1}>
-        <div className="sheet__head">
-          <h2 className="sheet__title" id="category-purge-title">
-            彻底删除
-          </h2>
-          <span className="sheet__version">已归档</span>
-        </div>
+      <p className="sheet__text">{body}</p>
+      {inspection.hintCount > 0 && (
+        <p className="sheet__note">同时会清掉 {inspection.hintCount} 条固定支出候选。</p>
+      )}
+      <p className="sheet__note">
+        10 秒内可以撤销；撤销会把分类恢复成现在的归档状态。同时只保留最近一次彻底删除的撤销。
+      </p>
 
-        <p className="sheet__text">{body}</p>
-        {inspection.hintCount > 0 && (
-          <p className="sheet__note">同时会清掉 {inspection.hintCount} 条固定支出候选。</p>
-        )}
-        <p className="sheet__note">
-          10 秒内可以撤销；撤销会把分类恢复成现在的归档状态。同时只保留最近一次彻底删除的撤销。
-        </p>
-
-        <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
-          彻底删除
-        </button>
-        <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
-          取消
-        </button>
-      </div>
-    </div>
+      <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
+        彻底删除
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
   );
 }
 

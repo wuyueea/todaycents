@@ -301,8 +301,6 @@
 }
 
 .accounts-screen--v1 .accounts-input,
-.accounts-screen--v1 .accounts-edit .money-input,
-.accounts-screen--v1 .accounts-reconcile .money-input,
 .accounts-screen--v1 .accounts-edit .add-account {
   border: 0;
   background: var(--v1-s2);
@@ -364,7 +362,6 @@
 }
 
 .accounts-screen--v1 .accounts-form .accounts-input,
-.accounts-screen--v1 .accounts-form .money-input,
 .accounts-screen--v1 .accounts-form .add-account {
   min-height: 34px;
   padding: 0 9px;
@@ -1594,23 +1591,6 @@
   font-size: 13.5px;
 }
 
-.projects-screen--v1 .projects-create .money-input {
-  min-width: 0;
-  flex: 1;
-  min-height: 34px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 9px;
-  background: var(--v1-s2);
-  color: var(--v1-ink);
-  font-size: 13.5px;
-  text-align: right;
-}
-
-.projects-screen--v1 .projects-create .money-input::placeholder {
-  color: var(--v1-t3);
-}
-
 .projects-screen--v1 .projects-create__error {
   margin: 4px 0;
   color: var(--v1-err);
@@ -1871,8 +1851,7 @@
   font-size: 12.5px;
 }
 
-.project-detail-screen--v1 .project-input,
-.project-detail-screen--v1 .project-edit .money-input {
+.project-detail-screen--v1 .project-input {
   min-width: 0;
   flex: 1;
   min-height: 34px;
