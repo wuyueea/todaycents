@@ -119,6 +119,50 @@ public class FolderPluginWriteTest {
     }
 
     @Test
+    public void writesAtomicallyWithoutLeavingTemporaryFiles() throws Exception {
+        String name = "atomic.ledger";
+        assertNull(write(name, new byte[] { 1, 2, 3 }).rejected);
+
+        String[] names = testFolder.list();
+        assertNotNull(names);
+        assertEquals(Arrays.asList(name), Arrays.asList(names));
+    }
+
+    @Test
+    public void overwritesExistingFileWithoutLeavingTemporaryFiles() throws Exception {
+        String name = "覆盖测试.ledger";
+        byte[] first = "第一份内容，比较长".getBytes(StandardCharsets.UTF_8);
+        byte[] second = "第二份".getBytes(StandardCharsets.UTF_8);
+
+        assertNull(write(name, first).rejected);
+        assertNull(write(name, second).rejected);
+
+        assertArrayEquals(second, Files.readAllBytes(new File(testFolder, name).toPath()));
+        String[] names = testFolder.list();
+        assertNotNull(names);
+        assertEquals(Arrays.asList(name), Arrays.asList(names));
+    }
+
+    @Test
+    public void rejectsWhenTargetCannotBeReplacedAndKeepsItsContents() throws Exception {
+        File blocked = new File(testFolder, "blocked.ledger");
+        assertTrue(blocked.mkdir());
+        File child = new File(blocked, "旧数据.txt");
+        Files.write(child.toPath(), "不能被破坏".getBytes(StandardCharsets.UTF_8));
+
+        TestCall call = write(blocked.getName(), new byte[] { 1, 2, 3 });
+
+        assertRejected(call);
+        assertTrue(blocked.isDirectory());
+        assertEquals("不能被破坏", new String(Files.readAllBytes(child.toPath()), StandardCharsets.UTF_8));
+        assertEquals(
+            "失败后目录里只应有被封住的目标",
+            Arrays.asList(blocked.getName()),
+            Arrays.asList(testFolder.list())
+        );
+    }
+
+    @Test
     public void rejectsBadNamesAndInvalidBase64() {
         TestCall badName = new TestCall("writeFile", new JSObject().put("name", "../escape").put("base64", "eA=="));
         plugin.writeFile(badName);

@@ -116,12 +116,37 @@ function parseCivilDay(dateISO: string): CivilDay {
 }
 
 /**
- * The ledger's one calendar-day guard, shared by every write that takes a date
- * and by the day counter below. Fixed-cost detection compares bill dates, so a
- * row dated 2026-02-30 must be refused rather than silently skipped later.
+ * The ledger's calendar-day shape guard, shared by every write that takes a
+ * date and by the day counter below. Fixed-cost detection compares bill dates,
+ * so a row dated 2026-02-30 must be refused rather than silently skipped later.
+ *
+ * This proves the day exists. Whether the day is allowed is a separate policy:
+ * a transaction may not be booked in the future (assertNotFutureDate), while a
+ * project start date is a plan and may be.
  */
 export function assertDateISO(dateISO: string): void {
   parseCivilDay(dateISO);
+}
+
+/**
+ * Rejects a day later than today, the local calendar day by default.
+ *
+ * Money may be filled in for any past day, never for a day that has not
+ * happened yet. Both strings are proved real calendar days first, so the
+ * lexicographic comparison is safe: YYYY-MM-DD is fixed-width and sorts
+ * chronologically.
+ */
+export function assertNotFutureDate(
+  dateISO: string,
+  todayISO: string = todayLocalISO()
+): void {
+  assertDateISO(dateISO);
+  assertDateISO(todayISO);
+  if (dateISO > todayISO) {
+    throw new RangeError(
+      `date must not be in the future, received ${dateISO} (today ${todayISO})`
+    );
+  }
 }
 
 /**

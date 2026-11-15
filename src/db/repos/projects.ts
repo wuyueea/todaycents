@@ -113,8 +113,9 @@ export async function createProject(db: Db, input: CreateProjectInput): Promise<
 
   const startedDate = input.startedDate ?? null;
   if (startedDate !== null) {
-    // Reuses the ledger's one date rule: a start date that is not a real
-    // calendar day would silently fall outside every range query.
+    // Shape only: a start date that is not a real calendar day would silently
+    // fall outside every range query. It may be in the future because this is
+    // a plan; txn rows use assertTxnWritableDate instead.
     assertTxnDate(startedDate);
   }
 

@@ -27,9 +27,20 @@ interface HarnessOptions {
   saved?: boolean;
   /** Simulates the owner dismissing the system share sheet. */
   share?: ShareOutcome;
+  /** Simulates the native bridge rejecting instead of answering. */
+  folderWriteError?: unknown;
+  /** Simulates the app cache refusing its own fallback write. */
+  cacheTextError?: unknown;
 }
 
-function harness({ native, folder, saved = true, share = 'shared' }: HarnessOptions) {
+function harness({
+  native,
+  folder,
+  saved = true,
+  share = 'shared',
+  folderWriteError,
+  cacheTextError,
+}: HarnessOptions) {
   const folderWrites: { name: string; base64: string }[] = [];
   const cacheText: { fileName: string; text: string }[] = [];
   const cacheBytes: { fileName: string; bytes: Uint8Array }[] = [];
@@ -47,6 +58,7 @@ function harness({ native, folder, saved = true, share = 'shared' }: HarnessOpti
     open: async () => false,
     write: async (name, base64) => {
       folderWrites.push({ name, base64 });
+      if (folderWriteError !== undefined) throw folderWriteError;
       return { saved, name };
     },
   };
@@ -55,6 +67,7 @@ function harness({ native, folder, saved = true, share = 'shared' }: HarnessOpti
     isNativePlatform: async () => native,
     folder: access,
     writeCacheFile: async (fileName, text) => {
+      if (cacheTextError !== undefined) throw cacheTextError;
       cacheText.push({ fileName, text });
       return `file:///cache/${fileName}`;
     },
@@ -125,6 +138,93 @@ describe('deviceFileWriter with a chosen folder', () => {
     expect(destination).toEqual({ kind: 'folder', folderName: 'Books' });
     expect(h.folderWrites).toHaveLength(1);
     expect(h.cacheText).toHaveLength(0);
+    expect(h.shared).toHaveLength(0);
+  });
+});
+
+describe('deviceFileWriter when the chosen folder write rejects', () => {
+  const folderError = new Error('写入「a.ledger」失败。');
+
+  it('falls back to the cache and share sheet for a text export', async () => {
+    const h = harness({ native: true, folder: FOLDER, folderWriteError: folderError });
+
+    const destination = await h.writers.text.writeForShare('a.ledger', 'text');
+
+    expect(destination).toEqual({ kind: 'share' });
+    expect(h.folderWrites).toHaveLength(1);
+    expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
+    expect(h.shared).toEqual([
+      { fileName: 'a.ledger', uri: 'file:///cache/a.ledger' },
+    ]);
+  });
+
+  it('keeps a dismissed share sheet as canceled after the folder fallback', async () => {
+    const h = harness({
+      native: true,
+      folder: FOLDER,
+      folderWriteError: folderError,
+      share: 'canceled',
+    });
+
+    const destination = await h.writers.text.writeForShare('a.ledger', 'text');
+
+    expect(destination).toEqual({ kind: 'canceled' });
+    expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
+    expect(h.shared).toHaveLength(1);
+  });
+
+  it('falls back to the cache for the automatic before-copy', async () => {
+    const h = harness({ native: true, folder: FOLDER, folderWriteError: folderError });
+
+    const destination = await h.writers.text.writeCopy('before.ledger', 'text');
+
+    expect(destination).toEqual({ kind: 'cache', uri: 'file:///cache/before.ledger' });
+    expect(h.folderWrites).toHaveLength(1);
+    expect(h.cacheText).toEqual([{ fileName: 'before.ledger', text: 'text' }]);
+    expect(h.shared).toHaveLength(0);
+  });
+
+  it('falls back to the cache and share sheet for workbook bytes', async () => {
+    const h = harness({ native: true, folder: FOLDER, folderWriteError: folderError });
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+
+    await h.writers.binary.writeForShare('记账本-2026-10.xlsx', bytes, XLSX_MIME_TYPE);
+
+    expect(h.folderWrites).toHaveLength(1);
+    expect(h.cacheBytes).toHaveLength(1);
+    expect(h.cacheBytes[0]?.fileName).toBe('记账本-2026-10.xlsx');
+    expect(h.shared).toEqual([
+      { fileName: '记账本-2026-10.xlsx', uri: 'file:///cache/记账本-2026-10.xlsx' },
+    ]);
+  });
+
+  it('still rejects a cancelled workbook share after the folder fallback', async () => {
+    const h = harness({
+      native: true,
+      folder: FOLDER,
+      folderWriteError: folderError,
+      share: 'canceled',
+    });
+    const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
+
+    await expect(
+      h.writers.binary.writeForShare('记账本-2026-10.xlsx', bytes, XLSX_MIME_TYPE)
+    ).rejects.toBeInstanceOf(ShareCanceledError);
+    expect(h.cacheBytes).toHaveLength(1);
+    expect(h.shared).toHaveLength(1);
+  });
+
+  it('does not hide a cache failure behind the folder fallback', async () => {
+    const h = harness({
+      native: true,
+      folder: FOLDER,
+      folderWriteError: folderError,
+      cacheTextError: new Error('cache full'),
+    });
+
+    await expect(h.writers.text.writeForShare('a.ledger', 'text')).rejects.toThrow(
+      'cache full'
+    );
     expect(h.shared).toHaveLength(0);
   });
 });

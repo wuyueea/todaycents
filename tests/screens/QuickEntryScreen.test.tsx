@@ -14,6 +14,7 @@ import QuickEntryScreen, {
 import type { QuickEntryData, QuickEntryDraft } from '../../src/screens/QuickEntryScreen';
 import App, { LEGACY_TRANSFER_TARGET } from '../../src/App';
 import { createTestDb } from '../helpers/nodeDb';
+import { failingDb } from '../helpers/failingDb';
 import { seedDefaults } from '../../src/db/seed';
 import { lastEntryDefaults, listTxnsByMonth, monthSummary } from '../../src/db/repos/txns';
 import { accountBalance, createAccount, listAccounts } from '../../src/db/repos/accounts';
@@ -510,34 +511,20 @@ describe('submitQuickEntry', () => {
     const { db, food, card } = await seeded();
     const night = await createTag(db, '夜宵');
 
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('INSERT INTO txn_tag')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
-
-    try {
-      injected = true;
-      await expect(
-        submitQuickEntry(
-          db,
-          '2026-10-20',
-          validDraft({
-            categoryId: food.id,
-            accountId: card.id,
-            amount: '3.50',
-            tagIds: [night],
-          })
-        )
-      ).rejects.toThrow('injected failure');
-      expect(await listTxnsByMonth(db, '2026-10')).toEqual([]);
-    } finally {
-      db.run = originalRun;
-    }
+    const failing = failingDb(db, sql => sql.includes('INSERT INTO txn_tag'));
+    await expect(
+      submitQuickEntry(
+        failing,
+        '2026-10-20',
+        validDraft({
+          categoryId: food.id,
+          accountId: card.id,
+          amount: '3.50',
+          tagIds: [night],
+        })
+      )
+    ).rejects.toThrow('injected failure');
+    expect(await listTxnsByMonth(db, '2026-10')).toEqual([]);
   });
 
   it('leaves no row behind when the project write fails', async () => {
@@ -545,39 +532,25 @@ describe('submitQuickEntry', () => {
     const night = await createTag(db, '夜宵');
     const project = await createProject(db, { name: '国庆去成都' });
 
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('UPDATE txn SET project_id')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
-
-    try {
-      injected = true;
-      await expect(
-        submitQuickEntry(
-          db,
-          '2026-10-20',
-          validDraft({
-            categoryId: food.id,
-            accountId: card.id,
-            amount: '3.50',
-            tagIds: [night],
-            projectId: project,
-          })
-        )
-      ).rejects.toThrow('injected failure');
-      expect(await listTxnsByMonth(db, '2026-10')).toEqual([]);
-      // The tag write ran before the failing project write, so it must be gone
-      // too: a rolled-back row with a surviving link would be worse than either.
-      const tagLinks = await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn_tag');
-      expect(tagLinks?.n).toBe(0);
-    } finally {
-      db.run = originalRun;
-    }
+    const failing = failingDb(db, sql => sql.includes('UPDATE txn SET project_id'));
+    await expect(
+      submitQuickEntry(
+        failing,
+        '2026-10-20',
+        validDraft({
+          categoryId: food.id,
+          accountId: card.id,
+          amount: '3.50',
+          tagIds: [night],
+          projectId: project,
+        })
+      )
+    ).rejects.toThrow('injected failure');
+    expect(await listTxnsByMonth(db, '2026-10')).toEqual([]);
+    // The tag write ran before the failing project write, so it must be gone
+    // too: a rolled-back row with a surviving link would be worse than either.
+    const tagLinks = await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn_tag');
+    expect(tagLinks?.n).toBe(0);
   });
 
   it('writes income as positive rather than as an expense', async () => {

@@ -17,6 +17,7 @@
  * written before it must still import (see OPTIONAL_TABLES).
  */
 import type { Db, DbParam } from './driver';
+import { assertDateISO, assertNotFutureDate, todayLocalISO } from '../domain/date';
 import {
   PROJECT_SCHEMA_VERSION,
   UNCATEGORIZED_CATEGORY_ID,
@@ -256,39 +257,48 @@ function toBackupRow(
  * Tables are read in dependency order and every table is present even when it
  * has no rows. Counts come from the rows actually read, so the file can always
  * be checked against itself before anything is restored.
+ *
+ * The whole read happens inside one transaction. That alone would not make a
+ * snapshot: the transaction runner tracks "already open" per connection, so a
+ * concurrent save would join this transaction and commit with it. It is the
+ * Db's write queue (SerialDb) that keeps every other write out until the read
+ * is over — together they guarantee the file is the database at one instant,
+ * never a txn table from before a save and a txn_tag table from after it.
  */
 export async function buildBackup(db: Db): Promise<BackupFile> {
-  const versionRow = await db.get<{ version: number | null }>(
-    'SELECT MAX(version) AS version FROM schema_migrations'
-  );
-
-  const tables = {} as Record<BackupTable, BackupRow[]>;
-  const counts = {} as Record<BackupTable, number>;
-
-  for (const table of BACKUP_TABLES) {
-    const { columns } = TABLE_SPECS[table];
-    // rowid order preserves the order rows were created in and is stable for
-    // every table in this schema (none uses WITHOUT ROWID).
-    // Categories are the only self-referencing table: parents must be inserted
-    // before their children, and rowid order alone does not promise that (a
-    // child is always created after its parent today, but nothing enforces the
-    // dump order). Parents first, then rowid for a stable file.
-    const orderBy = table === 'category' ? 'parent_id IS NULL DESC, rowid' : 'rowid';
-    const rows = await db.all<Record<string, unknown>>(
-      `SELECT ${columns.join(', ')} FROM ${table} ORDER BY ${orderBy}`
+  return db.transaction(async tx => {
+    const versionRow = await tx.get<{ version: number | null }>(
+      'SELECT MAX(version) AS version FROM schema_migrations'
     );
-    tables[table] = rows.map(raw => toBackupRow(table, raw, columns));
-    counts[table] = rows.length;
-  }
 
-  return {
-    magic: 'ledger-backup',
-    formatVersion: 1,
-    schemaVersion: versionRow?.version ?? 0,
-    exportedAt: localTimestamp(new Date()),
-    counts,
-    tables,
-  };
+    const tables = {} as Record<BackupTable, BackupRow[]>;
+    const counts = {} as Record<BackupTable, number>;
+
+    for (const table of BACKUP_TABLES) {
+      const { columns } = TABLE_SPECS[table];
+      // rowid order preserves the order rows were created in and is stable for
+      // every table in this schema (none uses WITHOUT ROWID).
+      // Categories are the only self-referencing table: parents must be inserted
+      // before their children, and rowid order alone does not promise that (a
+      // child is always created after its parent today, but nothing enforces the
+      // dump order). Parents first, then rowid for a stable file.
+      const orderBy = table === 'category' ? 'parent_id IS NULL DESC, rowid' : 'rowid';
+      const rows = await tx.all<Record<string, unknown>>(
+        `SELECT ${columns.join(', ')} FROM ${table} ORDER BY ${orderBy}`
+      );
+      tables[table] = rows.map(raw => toBackupRow(table, raw, columns));
+      counts[table] = rows.length;
+    }
+
+    return {
+      magic: 'ledger-backup',
+      formatVersion: 1,
+      schemaVersion: versionRow?.version ?? 0,
+      exportedAt: localTimestamp(new Date()),
+      counts,
+      tables,
+    };
+  });
 }
 
 /** Canonical key order for one row: declared columns first, then anything else. */
@@ -448,6 +458,47 @@ function parseTables(value: unknown): Record<BackupTable, BackupRow[]> {
   return tables;
 }
 
+/** Test seam: pin the local calendar day that "future" is measured against. */
+interface BackupDateOptions {
+  /** Defaults to todayLocalISO(). */
+  today?: string;
+}
+
+/**
+ * The one date rule the codec enforces on txn rows, including soft-deleted
+ * ones: occurred_date must be a real calendar day that has already happened.
+ * A hand-edited file must not be able to book tomorrow into the new ledger.
+ *
+ * Throws a Chinese message with the row number; parseBackup reads nothing and
+ * restoreBackup calls this before opening its transaction, so a rejected file
+ * leaves the old ledger untouched.
+ */
+function assertBackupTxnDates(rows: readonly BackupRow[], todayISO: string): void {
+  assertDateISO(todayISO);
+  for (let index = 0; index < rows.length; index += 1) {
+    const value = rows[index].occurred_date;
+    if (typeof value !== 'string') continue;
+    try {
+      assertDateISO(value);
+    } catch (cause) {
+      throw new Error(
+        `备份文件的 txn 表第 ${index + 1} 行日期「${value}」不是真实日历日，` +
+          '导入已取消，本机的账一笔没动。',
+        { cause }
+      );
+    }
+    try {
+      assertNotFutureDate(value, todayISO);
+    } catch (cause) {
+      throw new Error(
+        `备份文件的 txn 表第 ${index + 1} 行日期「${value}」晚于今天（${todayISO}），` +
+          '导入已取消，本机的账一笔没动。',
+        { cause }
+      );
+    }
+  }
+}
+
 /**
  * Parses and validates one backup file.
  *
@@ -455,13 +506,18 @@ function parseTables(value: unknown): Record<BackupTable, BackupRow[]> {
  * file cannot start a transaction. The check covers the format envelope, every
  * table array (project may be absent only in a pre-v3 file), and each row's
  * shape and column kinds (TEXT columns hold
- * strings, INTEGER columns hold safe integers, and NULL is allowed). Values
- * are still subject to the schema's own constraints when restored, which is
- * where foreign keys and CHECKs are enforced. counts is shape-checked here but intentionally not
- * compared with the array lengths: restoreBackup owns that check so it can
- * roll back a lying file.
+ * strings, INTEGER columns hold safe integers, and NULL is allowed). It also
+ * proves every txn occurred_date is a real calendar day that has already
+ * happened, so a hand-edited file cannot book tomorrow. Values are still
+ * subject to the schema's own constraints when restored, which is where
+ * foreign keys and CHECKs are enforced. counts is shape-checked here but
+ * intentionally not compared with the array lengths: restoreBackup owns that
+ * check so it can roll back a lying file.
  */
-export function parseBackup(text: string): BackupFile {
+export function parseBackup(
+  text: string,
+  options: BackupDateOptions = {}
+): BackupFile {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -510,6 +566,8 @@ export function parseBackup(text: string): BackupFile {
       );
     }
   }
+
+  assertBackupTxnDates(tables.txn, options.today ?? todayLocalISO());
 
   return {
     magic: 'ledger-backup',
@@ -601,14 +659,25 @@ export interface RestoreResult {
  * dangling txn.project_id. That column has no foreign key, so the row would
  * import happily and keep a dead id forever; it is cleared here and counted, so
  * the caller can say so instead of rewriting the owner's data silently.
+ *
+ * The txn date rule is re-checked here even when the caller skipped parseBackup,
+ * so a hand-built file cannot smuggle a future day in through the direct path.
  */
-export async function restoreBackup(db: Db, file: BackupFile): Promise<RestoreResult> {
+export async function restoreBackup(
+  db: Db,
+  file: BackupFile,
+  options: BackupDateOptions = {}
+): Promise<RestoreResult> {
   const versionRow = await db.get<{ version: number | null }>(
     'SELECT MAX(version) AS version FROM schema_migrations'
   );
   const databaseVersion = versionRow?.version ?? 0;
   if (file.schemaVersion > databaseVersion) {
     throw new BackupSchemaTooNewError(file.schemaVersion, databaseVersion);
+  }
+
+  if (Array.isArray(file.tables.txn)) {
+    assertBackupTxnDates(file.tables.txn, options.today ?? todayLocalISO());
   }
 
   let clearedProjectRefs = 0;

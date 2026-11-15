@@ -921,6 +921,10 @@
   font-size: 12.5px;
 }
 
+.categories-screen--v1 .action-menu__item:disabled {
+  opacity: 0.45;
+}
+
 .categories-screen--v1 .action-menu__item--danger,
 .categories-screen--v1 .category-menu__danger {
   color: var(--v1-err);
@@ -958,6 +962,24 @@
   background: transparent;
   color: var(--v1-ink);
 }
+
+.categories-screen--v1 .sheet__primary {
+  min-height: 46px;
+  border: 0;
+  border-radius: 13px;
+  background: var(--v1-ink);
+  color: var(--v1-card);
+  font: inherit;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+
+.categories-screen--v1 .category-row__note {
+  color: var(--v1-t3);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* ---------- 标签 ---------- */
 
 .tags-screen--v1 {

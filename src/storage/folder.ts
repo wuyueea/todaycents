@@ -1,10 +1,12 @@
 /**
  * The owner-chosen storage folder.
  *
- * On Android the app asks for 「所有文件访问」 (MANAGE_EXTERNAL_STORAGE) and then
- * writes with java.io.File into a normal directory that any file manager can
- * see. The native FolderPlugin owns the permission, the remembered path and
- * the writes; this module is the only JS code that names that bridge.
+ * On Android 11+ the app asks for 「所有文件访问」 (MANAGE_EXTERNAL_STORAGE); on
+ * API 29 and below it requests the READ/WRITE runtime permission instead, and
+ * Android 10 also needs the legacy storage model. Either way it then writes
+ * with java.io.File into a normal directory that any file manager can see. The
+ * native FolderPlugin owns the permission, the remembered path and the writes;
+ * this module is the only JS code that names that bridge.
  *
  * Like src/db/index.ts and src/backup/device.ts, the native plugin is imported
  * with a dynamic import() inside the function that needs it. A Node/Vitest
@@ -23,8 +25,11 @@ export interface StoredFolder {
 /** Whether the system-wide file permission is held. */
 export interface StorageAccessState {
   granted: boolean;
-  /** Present when the answer lives in system settings rather than a dialog. */
-  reason?: 'settings';
+  /**
+   * Where the answer lives while access is missing: the system settings page
+   * on Android 11+, or a runtime permission dialog on API 29 and below.
+   */
+  reason?: 'settings' | 'permission';
 }
 
 /** One directory in the in-app browser. */
@@ -112,9 +117,11 @@ function toAccess(result: StorageAccessState | null | undefined): StorageAccessS
   if (result !== null && result !== undefined && result.granted === true) {
     return { granted: true };
   }
-  return result?.reason === 'settings'
-    ? { granted: false, reason: 'settings' }
-    : { granted: false };
+  const reason = result?.reason;
+  if (reason === 'settings' || reason === 'permission') {
+    return { granted: false, reason };
+  }
+  return { granted: false };
 }
 
 /** Defensive shape of one bridge listing; the native side returns these fields. */

@@ -16,7 +16,7 @@
  */
 import type { Db, DbParam } from '../driver';
 import { newId } from '../id';
-import { assertTxnDate, createExpense } from './txns';
+import { assertTxnWritableDate, createExpense } from './txns';
 
 /** One retained slot of the day-grid model. */
 export interface Template {
@@ -248,7 +248,7 @@ function assertDayCells(cells: readonly FilledDayCell[]): void {
  * here needs it.
  */
 export async function submitDay(db: Db, dateISO: string, cells: DayCell[]): Promise<number> {
-  assertTxnDate(dateISO);
+  assertTxnWritableDate(dateISO);
 
   const filled = cells.filter(isFilledCell);
   assertDayCells(filled);

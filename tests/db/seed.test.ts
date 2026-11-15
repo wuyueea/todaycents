@@ -2,8 +2,12 @@ import { describe, expect, it } from 'vitest';
 import type { Db } from '../../src/db/driver';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults, seedInto } from '../../src/db/seed';
-import { listAccounts } from '../../src/db/repos/accounts';
-import { listCategories } from '../../src/db/repos/categories';
+import { archiveAccount, createAccount, listAccounts } from '../../src/db/repos/accounts';
+import {
+  archiveCategory,
+  listCategories,
+  purgeCategory,
+} from '../../src/db/repos/categories';
 import { UNCATEGORIZED_CATEGORY_ID } from '../../src/db/schema';
 
 /**
@@ -64,6 +68,80 @@ describe('seedInto', () => {
     // 未分类 is written by the migration, not by the seed: it is still there.
     expect(
       await db.all('SELECT id FROM category WHERE id <> ?', [UNCATEGORIZED_CATEGORY_ID])
+    ).toEqual([]);
+  });
+});
+
+describe('seedDefaults guard', () => {
+  it('does not seed again after every user category was purged', async () => {
+    const db = await createTestDb();
+    await seedDefaults(db);
+
+    const userCategories = (await listCategories(db)).filter(
+      category => category.id !== UNCATEGORIZED_CATEGORY_ID
+    );
+    expect(userCategories).toHaveLength(12);
+    for (const category of userCategories) {
+      await archiveCategory(db, category.id);
+      await purgeCategory(db, category.id);
+    }
+    expect(
+      (await listCategories(db)).filter(category => category.id !== UNCATEGORIZED_CATEGORY_ID)
+    ).toEqual([]);
+    expect((await listAccounts(db)).map(account => account.name)).toEqual([
+      '微信',
+      '支付宝',
+      '银行卡',
+    ]);
+
+    // A restart calls seedDefaults again on the same database.
+    await seedDefaults(db);
+
+    expect((await listAccounts(db)).map(account => account.name)).toEqual([
+      '微信',
+      '支付宝',
+      '银行卡',
+    ]);
+    expect(
+      (await listCategories(db)).filter(category => category.id !== UNCATEGORIZED_CATEGORY_ID)
+    ).toEqual([]);
+  });
+
+  it('treats a ledger with accounts but no user categories as already seeded', async () => {
+    const db = await createTestDb();
+    await createAccount(db, { name: '现金', type: 'cash' });
+
+    await seedDefaults(db);
+
+    expect((await listAccounts(db)).map(account => account.name)).toEqual(['现金']);
+    expect(
+      (await listCategories(db)).filter(category => category.id !== UNCATEGORIZED_CATEGORY_ID)
+    ).toEqual([]);
+  });
+
+  it('treats a ledger whose accounts are all archived as already seeded', async () => {
+    const db = await createTestDb();
+    await seedDefaults(db);
+    for (const account of await listAccounts(db)) {
+      await archiveAccount(db, account.id);
+    }
+    const userCategories = (await listCategories(db)).filter(
+      category => category.id !== UNCATEGORIZED_CATEGORY_ID
+    );
+    for (const category of userCategories) {
+      await archiveCategory(db, category.id);
+      await purgeCategory(db, category.id);
+    }
+    // Accounts are only ever archived — their rows stay — so the guard must
+    // count them without filtering on archived_at.
+    expect(await listAccounts(db)).toEqual([]);
+    expect(await listAccounts(db, { includeArchived: true })).toHaveLength(3);
+
+    await seedDefaults(db);
+
+    expect(await listAccounts(db, { includeArchived: true })).toHaveLength(3);
+    expect(
+      (await listCategories(db)).filter(category => category.id !== UNCATEGORIZED_CATEGORY_ID)
     ).toEqual([]);
   });
 });

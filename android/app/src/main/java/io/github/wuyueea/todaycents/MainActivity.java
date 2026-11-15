@@ -17,7 +17,7 @@ import com.getcapacitor.BridgeActivity;
 /**
  * The shell. Besides the bridge it owns the one system trip the app needs:
  * the 「所有文件访问」 settings page on Android 11+, or the storage runtime
- * dialog on API 28 and below.
+ * dialog on API 29 and below.
  *
  * The launcher lives on the activity, not in the plugin. Capacitor can also
  * start an activity for a plugin and call an annotated method back, but that

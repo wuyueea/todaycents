@@ -18,7 +18,7 @@ import type { BackupFileWriter } from '../../src/backup/flow';
 import { beforeBackupFileName, utf8ByteLength } from '../../src/backup/format';
 
 const NOW = new Date(2026, 9, 23, 13, 5, 7);
-const LEDGER_NAME = '记账本-20261023-1305.ledger';
+const LEDGER_NAME = '记账本-20261023-130507.ledger';
 
 interface WrittenFile {
   fileName: string;
@@ -141,6 +141,20 @@ describe('prepareImport', () => {
     const db = await createTestDb();
     await seedDefaults(db);
     await expect(prepareImport(db, '{', 'broken.ledger', 1)).rejects.toThrow(/JSON/);
+    expect(await countTxnRows(db)).toBe(0);
+  });
+
+  it('rejects a file carrying a future day before the confirmation sheet', async () => {
+    const db = await createTestDb();
+    await seedDefaults(db);
+    const raw = JSON.parse((await sourceBackupText()).text) as {
+      tables: { txn: Array<{ occurred_date: string }> };
+    };
+    raw.tables.txn[0].occurred_date = '2999-01-01';
+
+    await expect(
+      prepareImport(db, JSON.stringify(raw), 'future.ledger', 10)
+    ).rejects.toThrow(/晚于今天/);
     expect(await countTxnRows(db)).toBe(0);
   });
 

@@ -29,13 +29,19 @@ function meta(overrides: Partial<BackupMeta> = {}): BackupMeta {
 }
 
 describe('backup file names', () => {
-  it('stamps the local date and minute, never the UTC day', () => {
-    expect(backupFileName(NOW)).toBe('记账本-20261023-1305.ledger');
-    expect(backupFileName(new Date(2026, 0, 2, 3, 4))).toBe('记账本-20260102-0304.ledger');
+  it('stamps the local date and second, never the UTC day', () => {
+    expect(backupFileName(NOW)).toBe('记账本-20261023-130507.ledger');
+    expect(backupFileName(new Date(2026, 0, 2, 3, 4, 5))).toBe('记账本-20260102-030405.ledger');
+  });
+
+  it('keeps two exports in the same minute apart', () => {
+    expect(backupFileName(new Date(2026, 9, 23, 13, 5, 7))).not.toBe(
+      backupFileName(new Date(2026, 9, 23, 13, 5, 8))
+    );
   });
 
   it('marks the automatic before-copy without losing the .ledger extension', () => {
-    expect(beforeBackupFileName(NOW)).toBe('记账本-20261023-1305-before.ledger');
+    expect(beforeBackupFileName(NOW)).toBe('记账本-20261023-130507-before.ledger');
   });
 });
 

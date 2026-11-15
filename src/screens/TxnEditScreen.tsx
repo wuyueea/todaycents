@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AmountText } from '../components/AmountText';
@@ -8,6 +8,8 @@ import {
   formatAmountDraft,
 } from '../components/AmountKeypad';
 import { Sheet } from '../components/Sheet';
+import { registerBackHandler } from '../components/backButton';
+import { createSaveExit } from '../components/saveExit';
 import { useDb, useQuery } from '../store/useDb';
 import { listAccounts } from '../db/repos/accounts';
 import { listCategories } from '../db/repos/categories';
@@ -312,6 +314,15 @@ export default function TxnEditScreen() {
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [amountPristine, setAmountPristine] = useState(false);
 
+  const exit = createSaveExit(busy, () => navigate('/ledger', { replace: true }));
+
+  // While a save is in flight, swallow the hardware back gesture: the write is
+  // still landing, and leaving now would hide a commit or invite a duplicate.
+  useEffect(() => {
+    if (exit.canLeave) return;
+    return registerBackHandler(() => true);
+  }, [exit.canLeave]);
+
   const data = query.data;
   const row = data?.row ?? null;
 
@@ -454,7 +465,16 @@ export default function TxnEditScreen() {
   return (
     <div className="txn-edit-screen txn-edit-screen--v1">
       <header className="add-header">
-        <Link className="add-back" to="/ledger" aria-label="返回流水">
+        <Link
+          className="add-back"
+          to="/ledger"
+          aria-label="返回流水"
+          aria-disabled={exit.canLeave ? undefined : true}
+          tabIndex={exit.canLeave ? undefined : -1}
+          onClick={event => {
+            if (!exit.canLeave) event.preventDefault();
+          }}
+        >
           ‹
         </Link>
         <h1>编辑流水</h1>

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
 import { listTemplates, upsertTemplate, submitDay } from '../../src/db/repos/templates';
@@ -78,6 +78,21 @@ describe('templates', () => {
     await submitDay(db, '2026-10-20', [cell]);
     await submitDay(db, '2026-10-20', [cell]);
     expect((await listTxnsByMonth(db, '2026-10')).length).toBe(1);
+  });
+  it('rejects a future day before writing any cell', async () => {
+    const { db, card } = await fixture();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 20, 12));
+      await expect(
+        submitDay(db, '2026-10-21', [
+          { slotKey: 'lunch', amountCents: 1230, accountId: card.id, categoryId: null },
+        ])
+      ).rejects.toThrow(/future/);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await txnCount(db)).toEqual({ n: 0 });
   });
 });
 

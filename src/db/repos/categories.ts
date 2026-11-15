@@ -221,17 +221,47 @@ export async function renameCategory(db: Db, id: string, name: string): Promise<
 }
 
 /**
- * Hides a category from pickers without deleting it or any transaction. The
- * first archive timestamp is kept, so a second call is a no-op rather than a
- * rewrite. No transaction is opened: it is one statement, matching
- * archiveAccount.
+ * Hides a category and every live direct child from pickers without deleting
+ * them or any transaction. The tree is two levels by contract, so the direct
+ * children are the whole subtree.
+ *
+ * One transaction: a root archive that left a live child behind would hide
+ * that child from every picker while giving the owner no row to act on. A live
+ * child archived here takes the fresh timestamp; an already-archived child
+ * keeps its first timestamp, and an already-archived root keeps its first
+ * timestamp too (a second call only catches up any live children). Restoring
+ * the root is intentionally not recursive: it must not resurrect a child the
+ * owner archived separately.
  */
-export async function archiveCategory(db: Db, id: string): Promise<void> {
+export async function archiveCategory(
+  db: Db,
+  id: string
+): Promise<{ archivedChildCount: number }> {
   assertNotSystem(id, '归档');
-  await db.run('UPDATE category SET archived_at = COALESCE(archived_at, ?) WHERE id = ?', [
-    new Date().toISOString(),
-    id,
-  ]);
+
+  return db.transaction(async tx => {
+    const existing = await tx.get<{ id: string }>('SELECT id FROM category WHERE id = ?', [id]);
+    if (existing === undefined) {
+      throw new Error(`分类不存在：${id}`);
+    }
+
+    const children = await tx.get<{ n: number }>(
+      'SELECT COUNT(*) AS n FROM category WHERE parent_id = ? AND archived_at IS NULL',
+      [id]
+    );
+    const at = new Date().toISOString();
+
+    await tx.run('UPDATE category SET archived_at = COALESCE(archived_at, ?) WHERE id = ?', [
+      at,
+      id,
+    ]);
+    await tx.run('UPDATE category SET archived_at = ? WHERE parent_id = ? AND archived_at IS NULL', [
+      at,
+      id,
+    ]);
+
+    return { archivedChildCount: children?.n ?? 0 };
+  });
 }
 
 /** Restores a category to the live list; its id, sort and history are untouched. */

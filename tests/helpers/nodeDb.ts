@@ -2,6 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import type { Db, DbParam } from '../../src/db/driver';
 import { TransactionRunner } from '../../src/db/transaction';
 import { migrate } from '../../src/db/migrate';
+import { SerialDb } from '../../src/db/serial';
 
 /**
  * Node-side Db driver. Test-only: product code must never import
@@ -49,14 +50,20 @@ class NodeDb implements Db {
   }
 }
 
-/** A migrated in-memory database for tests. */
+/**
+ * A migrated in-memory database for tests.
+ *
+ * It is wrapped in the same SerialDb as the on-device driver so tests exercise
+ * the write ordering the app actually runs with.
+ */
 export async function createTestDb(): Promise<Db> {
   const raw = new DatabaseSync(':memory:');
   // SQLite leaves foreign keys off per connection by default. Turn them on
   // before migrating so every REFERENCES in the schema is enforced here,
   // matching the on-device driver instead of accepting dangling ids.
   raw.exec('PRAGMA foreign_keys = ON');
-  const db = new NodeDb(raw);
+  // Wrap before migrating so tests run through the same write queue as the app.
+  const db = new SerialDb(new NodeDb(raw));
   await migrate(db);
   return db;
 }

@@ -39,12 +39,17 @@ export interface Db {
    * Two limits worth knowing. There are no savepoints, so a nested call whose
    * error its caller catches does not undo itself — the outer transaction then
    * commits what that call had already written. And "already open" is tracked
-   * per connection, not per call chain: this exists for nesting inside one
-   * logical save, not for two saves running at once, which would end up
-   * sharing a transaction.
+   * per connection, not per call chain: for a raw driver, two top-level saves
+   * started at once would share one transaction. Application code hands the
+   * driver to SerialDb, which serializes top-level writes so that no longer
+   * happens.
    *
-   * The callback receives the same Db so a transaction body can be written
-   * explicitly against its scope; `() => ...` callbacks are equally valid.
+   * The callback receives the Db handle for this transaction. Write through
+   * `tx` only: a decorating driver such as SerialDb passes its inner driver
+   * here, and a write sent through the outer `db` from inside the body would
+   * queue behind the transaction it is part of and never return. Callbacks
+   * that ignore the handle (`() => ...`) are still valid as long as they do
+   * not write through an outer Db this way.
    */
   transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
 }

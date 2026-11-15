@@ -14,6 +14,7 @@ import type { TxnRow } from '../../src/db/repos/txns';
 import { createAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
 import { createTestDb } from '../helpers/nodeDb';
+import { failingDb } from '../helpers/failingDb';
 import { seedDefaults } from '../../src/db/seed';
 
 /**
@@ -202,28 +203,14 @@ describe('writeProjectEdit', () => {
   it('keeps the old name when the budget write fails', async () => {
     const { db, project, id } = await fixture(null);
 
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('UPDATE project SET budget_cents')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
+    const failing = failingDb(db, sql => sql.includes('UPDATE project SET budget_cents'));
+    await expect(
+      writeProjectEdit(failing, project, { name: '国庆去重庆', budgetCents: 250000 })
+    ).rejects.toThrow('injected failure');
 
-    try {
-      injected = true;
-      await expect(
-        writeProjectEdit(db, project, { name: '国庆去重庆', budgetCents: 250000 })
-      ).rejects.toThrow('injected failure');
-
-      const stored = (await listProjects(db)).find(candidate => candidate.id === id)!;
-      expect(stored.name).toBe('国庆去成都');
-      expect(stored.budgetCents).toBeNull();
-    } finally {
-      db.run = originalRun;
-    }
+    const stored = (await listProjects(db)).find(candidate => candidate.id === id)!;
+    expect(stored.name).toBe('国庆去成都');
+    expect(stored.budgetCents).toBeNull();
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import { createAccount, accountBalance } from '../../src/db/repos/accounts';
 import { createTransfer, deleteTransfer, monthExpenseTotal } from '../../src/db/repos/transfers';
@@ -104,6 +104,23 @@ describe('transfer atomicity', () => {
 
     const count = await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn');
     expect(count?.n).toBe(0);
+    expect(await accountBalance(db, a)).toBe(10000);
+  });
+
+  it('rejects a future day before either leg is written', async () => {
+    const db = await createTestDb();
+    const a = await createAccount(db, { name: 'A', type: 'cash', initialBalanceCents: 10000 });
+    const b = await createAccount(db, { name: 'B', type: 'cash' });
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 20, 12));
+      await expect(
+        createTransfer(db, { date: '2026-10-21', fromAccountId: a, toAccountId: b, amountCents: 100 })
+      ).rejects.toThrow(/future/);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn')).toEqual({ n: 0 });
     expect(await accountBalance(db, a)).toBe(10000);
   });
 

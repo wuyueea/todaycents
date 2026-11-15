@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createFolderAccess, folderLabel } from '../../src/storage/folder';
-import type { FolderListing, FolderPlugin, NativeBridge } from '../../src/storage/folder';
+import type { FolderListing, FolderPlugin, NativeBridge, StorageAccessState } from '../../src/storage/folder';
 
 const ROOT = '/storage/emulated/0';
 const FOLDER = { path: ROOT + '/Documents/Books', name: 'Books' };
@@ -90,6 +90,25 @@ describe('createFolderAccess', () => {
     );
 
     expect(await access.getAccess()).toEqual({ granted: false, reason: 'settings' });
+  });
+
+  it('passes the runtime permission reason through for Android 10 and below', async () => {
+    const access = createFolderAccess(async () =>
+      fakePlugin({ getAccess: async () => ({ granted: false, reason: 'permission' }) })
+    );
+
+    expect(await access.getAccess()).toEqual({ granted: false, reason: 'permission' });
+  });
+
+  it('drops an unknown reason instead of showing the wrong instruction', async () => {
+    const access = createFolderAccess(async () =>
+      fakePlugin({
+        getAccess: async () =>
+          ({ granted: false, reason: 'elsewhere' } as unknown as StorageAccessState),
+      })
+    );
+
+    expect(await access.getAccess()).toEqual({ granted: false });
   });
 
   it('requests access and returns the re-checked state', async () => {

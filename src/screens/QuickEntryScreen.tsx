@@ -5,6 +5,7 @@ import {
   formatAmountDraft,
 } from '../components/AmountKeypad';
 import { Sheet } from '../components/Sheet';
+import { createSaveExit } from '../components/saveExit';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createTagForPicker } from '../components/createTagForPicker';
@@ -443,6 +444,7 @@ export default function QuickEntryScreen({
   }, []);
 
   const close = onClose ?? (() => navigate('/'));
+  const exit = createSaveExit(submitting, close);
   const data = query.data;
   const isTransfer = direction === 'transfer';
 
@@ -695,7 +697,9 @@ export default function QuickEntryScreen({
       variant="entry"
       open={active}
       titleId="entry-sheet-title"
-      onClose={close}
+      onClose={exit.requestLeave}
+      canClose={() => exit.canLeave}
+      scrimDismiss={exit.canLeave}
       initialFocus="panel"
       restoreFocus={() => active}
       focusableFilter={element => element.offsetParent !== null}
@@ -719,7 +723,13 @@ export default function QuickEntryScreen({
               </button>
             ))}
           </div>
-          <button className="entry-sheet__close" type="button" data-entry-close onClick={close}>
+          <button
+            className="entry-sheet__close"
+            type="button"
+            data-entry-close
+            onClick={exit.requestLeave}
+            disabled={!exit.canLeave}
+          >
             收起
           </button>
         </header>
@@ -1035,7 +1045,15 @@ export default function QuickEntryScreen({
               />
             </div>
 
-            <Link className="entry-ledger-link" to="/ledger">
+            <Link
+              className="entry-ledger-link"
+              to="/ledger"
+              aria-disabled={exit.canLeave ? undefined : true}
+              tabIndex={exit.canLeave ? undefined : -1}
+              onClick={event => {
+                if (!exit.canLeave) event.preventDefault();
+              }}
+            >
               记错了？去流水里改
             </Link>
             </div>

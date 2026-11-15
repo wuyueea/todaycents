@@ -2,11 +2,13 @@
  * Starter taxonomy and accounts, written once the first time the app opens.
  *
  * Idempotency is an up-front guard, not conflict handling: as soon as one
- * user category row exists the database counts as seeded, and a second call
- * reads nothing further and writes nothing at all. The system 未分类 row that
- * migration v2 writes does not count: it exists before the first seed, so
- * including it would make a fresh database look seeded and permanently skip
- * the starter taxonomy.
+ * user category row or one account row exists the database counts as seeded,
+ * and a second call reads nothing further and writes nothing at all. Both
+ * tables must be checked because seedInto writes both: checking only the
+ * categories used to re-seed the accounts after the owner had deliberately
+ * purged every user category. The system 未分类 row that migration v2 writes does not count: it
+ * exists before the first seed, so including it would make a fresh database
+ * look seeded and permanently skip the starter taxonomy.
  *
  * The body and the unit of work are split on purpose. seedDefaults is the first
  * launch's entry point: guard plus ONE transaction. seedInto is only the body,
@@ -78,15 +80,25 @@ export async function seedInto(db: Db): Promise<void> {
  * Seeds the first launch, at most once.
  *
  * Safe to call on every launch: the first call seeds, every later call returns
- * before opening a transaction. Called from inside another unit of work, its
- * transaction joins the caller's instead of opening a second one.
+ * before opening a transaction. A ledger counts as a first launch only when it
+ * has neither a user category nor an account. seedInto writes both, so checking
+ * just one of them would seed again after the owner deliberately cleared the
+ * other — purging every user category used to bring back the default accounts
+ * as duplicates on the next launch. Once either table has a row the ledger is
+ * left exactly as the owner left it: missing starter rows are not topped up,
+ * because that would undo a deletion the owner meant.
+ *
+ * Called from inside another unit of work, its transaction joins the caller's
+ * instead of opening a second one.
  */
 export async function seedDefaults(db: Db): Promise<void> {
-  const existing = await db.get<{ n: number }>(
-    'SELECT COUNT(*) AS n FROM category WHERE id <> ?',
+  const existing = await db.get<{ userCategories: number; accounts: number }>(
+    `SELECT
+       (SELECT COUNT(*) FROM category WHERE id <> ?) AS userCategories,
+       (SELECT COUNT(*) FROM account) AS accounts`,
     [UNCATEGORIZED_CATEGORY_ID]
   );
-  if ((existing?.n ?? 0) > 0) return;
+  if ((existing?.userCategories ?? 0) > 0 || (existing?.accounts ?? 0) > 0) return;
 
   await db.transaction(seedInto);
 }

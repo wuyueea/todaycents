@@ -34,9 +34,10 @@ import org.json.JSONObject;
  * java.io.File under the 「所有文件访问」 permission.
  *
  * Android 11+ grants MANAGE_EXTERNAL_STORAGE from a system settings page; on
- * API 28 and below, READ/WRITE_EXTERNAL_STORAGE is a runtime permission. API 29
- * is the known gap between the two models. Once held, any ordinary directory
- * under shared storage can be written. SharedPreferences
+ * API 29 and below, READ/WRITE_EXTERNAL_STORAGE is a runtime permission, and
+ * Android 10 additionally needs the manifest's requestLegacyExternalStorage to
+ * keep the pre-scoped-storage java.io.File model. Once held, any ordinary
+ * directory under shared storage can be written. SharedPreferences
  * remembers one path; with none remembered the default is
  * /storage/emulated/0/Documents/记账本, created on demand.
  *
@@ -75,8 +76,8 @@ public class FolderPlugin extends Plugin {
     }
 
     /**
-     * True on API 30+ while the all-files switch is on; below it the runtime
-     * WRITE permission is the gate, and READ comes with it in the same group.
+     * True on API 30+ while the all-files switch is on; on API 29 and below the
+     * runtime WRITE permission is the gate, and READ comes with it in the same group.
      */
     private boolean hasAccess() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -299,10 +300,7 @@ public class FolderPlugin extends Plugin {
             }
 
             byte[] bytes = Base64.decode(base64, Base64.DEFAULT);
-            try (FileOutputStream output = new FileOutputStream(target, false)) {
-                output.write(bytes);
-                output.flush();
-            }
+            FolderWriter.writeAtomically(target, bytes);
             call.resolve(saved(name));
         } catch (Exception error) {
             call.reject("写入「" + name + "」失败。");
@@ -395,8 +393,13 @@ public class FolderPlugin extends Plugin {
         boolean granted = hasAccess();
         JSObject result = new JSObject();
         result.put("granted", granted);
-        if (!granted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            result.put("reason", "settings");
+        if (!granted) {
+            // 答案所在的系统界面不同：Android 11+ 是设置页，API 29 及以下是
+            // 运行时权限对话框。UI 用 reason 选择对应文案。
+            result.put(
+                "reason",
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.R ? "settings" : "permission"
+            );
         }
         return result;
     }

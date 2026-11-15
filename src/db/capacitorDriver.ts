@@ -13,6 +13,7 @@ import { Capacitor } from '@capacitor/core';
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite';
 import type { Db } from './driver';
 import { CapacitorDb } from './capacitorDb';
+import { SerialDb } from './serial';
 
 /** One database per install; there is no account or profile concept. */
 const DATABASE_NAME = 'ledger';
@@ -48,5 +49,8 @@ export async function openCapacitorDb(): Promise<Db> {
 
   // Passing the plugin's own connection is also the compile-time check that
   // it still fits SQLiteConnectionPort: a signature drift fails the build here.
-  return new CapacitorDb(connection);
+  // SerialDb is what makes one write wait for the previous one: everything
+  // shares this connection, and the transaction runner tracks openness per
+  // connection rather than per call chain.
+  return new SerialDb(new CapacitorDb(connection));
 }

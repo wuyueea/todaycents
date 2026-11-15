@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    离线是产品承诺：账本只留在本机，备份靠用户导出的 .ledger 文件。
+    allowBackup="false" 关闭云备份；Android 12+ 还会做设备到设备迁移（D2D），
+    不受 allowBackup 影响，因此这里把两个通道的应用数据域全部排除。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

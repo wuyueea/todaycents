@@ -9,7 +9,7 @@
  */
 import type { Db } from '../driver';
 import { newId } from '../id';
-import { assertTxnDate, monthSummary } from './txns';
+import { assertTxnWritableDate, monthSummary } from './txns';
 
 /** Everything createTransfer needs; the amount is a positive integer. */
 export interface CreateTransferInput {
@@ -34,12 +34,12 @@ const INSERT_LEG = `INSERT INTO txn
 
 /**
  * Rejects bad input before any statement runs, so a failed validation cannot
- * leave rows behind. The date must be a real YYYY-MM-DD day (the same rule the
- * transaction repository applies), and amounts are integer cents only:
- * fractional money never reaches SQL.
+ * leave rows behind. The date must be a real YYYY-MM-DD day that is not in the
+ * future (the same rule the transaction repository applies), and amounts are
+ * integer cents only: fractional money never reaches SQL.
  */
 function assertTransferable(input: CreateTransferInput): void {
-  assertTxnDate(input.date);
+  assertTxnWritableDate(input.date);
   const { amountCents, fromAccountId, toAccountId } = input;
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
     throw new RangeError(

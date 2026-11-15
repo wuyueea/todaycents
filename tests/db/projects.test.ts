@@ -107,6 +107,14 @@ describe('createProject', () => {
       createProject(db, { name: '旅行', startedDate: '2026-02-30' })
     ).rejects.toThrow(/date must be YYYY-MM-DD/);
   });
+
+  it('allows a future start date because it is a plan, not a booking', async () => {
+    const db = await createTestDb();
+    const startedDate = `${new Date().getFullYear() + 1}-01-01`;
+    const id = await createProject(db, { name: '明年旅行', startedDate });
+    const project = (await listProjects(db)).find(candidate => candidate.id === id);
+    expect(project).toMatchObject({ startedDate });
+  });
 });
 
 describe('listProjects', () => {

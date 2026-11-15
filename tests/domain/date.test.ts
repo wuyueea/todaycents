@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   assertDateISO,
+  assertNotFutureDate,
   daysBetweenISO,
   formatMonthDay,
   formatMonthLabel,
@@ -155,5 +156,28 @@ describe('daysBetweenISO', () => {
     expect(() => daysBetweenISO('2026-02-30', '2026-03-01')).toThrow(RangeError);
     expect(() => daysBetweenISO('2026-10-01', '2026-13-01')).toThrow(RangeError);
     expect(() => daysBetweenISO('', '2026-10-01')).toThrow(RangeError);
+  });
+});
+
+describe('assertNotFutureDate', () => {
+  it('rejects a day later than the pinned today, accepting today itself', () => {
+    expect(() => assertNotFutureDate('2026-10-21', '2026-10-20')).toThrow(/future/);
+    expect(() => assertNotFutureDate('2026-10-20', '2026-10-20')).not.toThrow();
+    expect(() => assertNotFutureDate('2026-10-19', '2026-10-20')).not.toThrow();
+    expect(() => assertNotFutureDate('2026-02-30', '2026-10-20')).toThrow(/YYYY-MM-DD/);
+    expect(() => assertNotFutureDate('2026-10-21', 'today')).toThrow(/YYYY-MM-DD/);
+  });
+
+  it('uses the local calendar day when today is not pinned', () => {
+    vi.useFakeTimers();
+    try {
+      // 00:30 local is still the previous UTC day in UTC+8: an implementation
+      // that used UTC here would reject today instead of accepting it.
+      vi.setSystemTime(new Date(2026, 9, 20, 0, 30));
+      expect(() => assertNotFutureDate('2026-10-21')).toThrow(/future/);
+      expect(() => assertNotFutureDate('2026-10-20')).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

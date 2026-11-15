@@ -134,7 +134,14 @@ describe('monthReport', () => {
   it('flags future months without inventing or erasing their cents', async () => {
     const { db, card, food } = await fixture();
     await createExpense(db, { date: '2026-10-01', accountId: card, amountCents: 100, categoryId: food });
-    await createExpense(db, { date: '2026-12-01', accountId: card, amountCents: 700, categoryId: food });
+    // Writes now refuse a future day, but a legacy row can still exist. Insert
+    // it directly so the report's "isFuture" handling stays covered.
+    await db.run(
+      `INSERT INTO txn
+         (id, occurred_date, account_id, amount_cents, direction, category_id, note, created_at)
+       VALUES (?, ?, ?, ?, 'expense', ?, '', ?)`,
+      ['legacy-future', '2026-12-01', card, -700, food, '2026-12-01T00:00:00']
+    );
 
     const report = await monthReport(db, '2026-10', { today: '2026-10-20' });
 

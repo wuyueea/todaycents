@@ -1,11 +1,15 @@
 node_modules/
 dist/
-.gradle-home/
-.android/
 .superpowers/
 *.log
-.pnpm-store/
 *.tsbuildinfo
+
+# Local build caches (kept inside the workspace so builds/tests stay in-sandbox)
+.gradle-home/
+.android/
+.pnpm-store/
+.pnpm-cache/
+android/.kotlin/
 
 # Local secrets / signing / environment
 .env

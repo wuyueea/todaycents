@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Db } from '../../src/db/driver';
+import type { Db, DbParam } from '../../src/db/driver';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
 import { createAccount } from '../../src/db/repos/accounts';
@@ -254,6 +254,52 @@ describe('backup codec', () => {
     expect((error as Error).message).toMatch(/升级 App/);
 
     expect(await tableCounts(db)).toEqual(before);
+  });
+
+  it('refuses impossible or future txn days, including soft-deleted rows', async () => {
+    const db = await createTestDb();
+    await seedRichLedger(db);
+    const before = await snapshot(db);
+    const good = await buildBackup(db);
+
+    const future = JSON.parse(serializeBackup(good)) as BackupFile;
+    future.tables.txn[0].occurred_date = '2026-10-24';
+    expect(() => parseBackup(JSON.stringify(future), { today: '2026-10-23' })).toThrow(
+      /晚于今天/
+    );
+
+    const deleted = JSON.parse(serializeBackup(good)) as BackupFile;
+    const deletedRow = deleted.tables.txn.find(row => row.deleted_at !== null);
+    if (deletedRow === undefined) throw new Error('fixture has no soft-deleted row');
+    deletedRow.occurred_date = '2026-10-24';
+    expect(() => parseBackup(JSON.stringify(deleted), { today: '2026-10-23' })).toThrow(
+      /晚于今天/
+    );
+
+    const impossible = JSON.parse(serializeBackup(good)) as BackupFile;
+    impossible.tables.txn[0].occurred_date = '2026-02-30';
+    expect(() => parseBackup(JSON.stringify(impossible), { today: '2026-10-23' })).toThrow(
+      /日历日/
+    );
+
+    const direct = await buildBackup(db);
+    direct.tables.txn[0].occurred_date = '2026-10-24';
+    await expect(restoreBackup(db, direct, { today: '2026-10-23' })).rejects.toThrow(
+      /晚于今天/
+    );
+    expect(await snapshot(db)).toEqual(before);
+  });
+
+  it('accepts today and a future project plan', async () => {
+    const db = await createTestDb();
+    await seedRichLedger(db);
+    const good = await buildBackup(db);
+
+    expect(() => parseBackup(serializeBackup(good), { today: '2026-10-23' })).not.toThrow();
+
+    const planned = JSON.parse(serializeBackup(good)) as BackupFile;
+    planned.tables.project[0].started_date = '2027-01-01';
+    expect(() => parseBackup(JSON.stringify(planned), { today: '2026-10-23' })).not.toThrow();
   });
 
   it('rolls the whole import back when a table count disagrees with counts', async () => {
@@ -653,3 +699,127 @@ describe('backup compatibility: recurring_hint', () => {
     expect(await listCandidates(target)).toEqual([]);
   });
 });
+
+/**
+ * Wraps a Db and records every call, so a test can see whether buildBackup
+ * actually held one transaction while it read. `onRead` fires on the first
+ * `all` statement, which is where the backup is already inside its transaction.
+ */
+type RecordedCall = {
+  method: 'exec' | 'run' | 'all' | 'get' | 'transaction';
+  sql: string;
+  inTransaction: boolean;
+};
+
+function recordingDb(
+  inner: Db,
+  calls: RecordedCall[],
+  state = { depth: 0 },
+  onRead?: () => void
+): Db {
+  return {
+    async exec(sql: string): Promise<void> {
+      calls.push({ method: 'exec', sql, inTransaction: state.depth > 0 });
+      return inner.exec(sql);
+    },
+    async run(sql: string, params?: readonly DbParam[]): Promise<void> {
+      calls.push({ method: 'run', sql, inTransaction: state.depth > 0 });
+      return inner.run(sql, params);
+    },
+    async all<T>(sql: string, params?: readonly DbParam[]): Promise<T[]> {
+      calls.push({ method: 'all', sql, inTransaction: state.depth > 0 });
+      onRead?.();
+      return inner.all<T>(sql, params);
+    },
+    async get<T>(sql: string, params?: readonly DbParam[]): Promise<T | undefined> {
+      calls.push({ method: 'get', sql, inTransaction: state.depth > 0 });
+      return inner.get<T>(sql, params);
+    },
+    async transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T> {
+      calls.push({ method: 'transaction', sql: '', inTransaction: state.depth > 0 });
+      state.depth += 1;
+      try {
+        return await inner.transaction(tx => fn(recordingDb(tx, calls, state, onRead)));
+      } finally {
+        state.depth -= 1;
+      }
+    },
+  };
+}
+
+describe('backup consistency snapshot', () => {
+  it('reads the schema version and every table inside one transaction', async () => {
+    const db = await createTestDb();
+    await seedRichLedger(db);
+    const calls: RecordedCall[] = [];
+
+    const file = await buildBackup(recordingDb(db, calls));
+
+    const transactions = calls.filter(call => call.method === 'transaction');
+    expect(transactions).toHaveLength(1);
+    expect(transactions[0].inTransaction).toBe(false);
+
+    // MAX(version) plus every backup table, all inside that one transaction.
+    const reads = calls.filter(call => call.method !== 'transaction');
+    expect(reads).toHaveLength(TABLES.length + 1);
+    expect(reads.every(call => call.inTransaction)).toBe(true);
+    expect(file.counts.txn).toBeGreaterThan(0);
+  });
+
+  it('does not read a write issued while the backup is being taken', async () => {
+    const db = await createTestDb();
+    await seedRichLedger(db);
+    const account = await db.get<{ id: string }>("SELECT id FROM account WHERE name = '饭卡'");
+    if (account === undefined) throw new Error('fixture is incomplete');
+
+    const before = await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn');
+    const beforeTxnTags = await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn_tag');
+    const calls: RecordedCall[] = [];
+    let concurrentWrite: Promise<void> | undefined;
+    let fired = false;
+
+    // A save that touches two tables, started mid-read: with no snapshot it
+    // could land between the txn and txn_tag queries and produce a file that
+    // only fails at import time.
+    const hooked = recordingDb(db, calls, { depth: 0 }, () => {
+      if (fired) return;
+      fired = true;
+      concurrentWrite = db.transaction(async tx => {
+        const txnId = await createExpense(tx, {
+          date: '2026-10-24',
+          accountId: account.id,
+          amountCents: 4321,
+          categoryId: null,
+          note: '备份期间写入',
+        });
+        await tx.run('INSERT INTO txn_tag (txn_id, tag_id) VALUES (?, ?)', [txnId, 'tag-1']);
+      });
+    });
+
+    const file = await buildBackup(hooked);
+    if (concurrentWrite === undefined) throw new Error('the write was never issued');
+    await concurrentWrite;
+
+    // The file is the database as it was when the backup started.
+    expect(file.counts.txn).toBe(before?.n ?? 0);
+    expect(file.counts.txn_tag).toBe(beforeTxnTags?.n ?? 0);
+    expect(file.tables.txn.some(row => row.note === '备份期间写入')).toBe(false);
+    // No tag may point at a txn the same file does not carry.
+    expect(
+      file.tables.txn_tag.every(row => file.tables.txn.some(txn => txn.id === row.txn_id))
+    ).toBe(true);
+
+    // The write itself is not lost: it waited for the snapshot and then landed.
+    expect(await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn')).toEqual({
+      n: (before?.n ?? 0) + 1,
+    });
+
+    // And the file is self-consistent: it parses and imports cleanly.
+    const parsed = parseBackup(serializeBackup(file));
+    expect(parsed).toEqual(file);
+    const target = await createTestDb();
+    await restoreBackup(target, parsed);
+    expect(await tableCounts(target)).toEqual(file.counts);
+  });
+});
+

@@ -11,7 +11,7 @@
  */
 import type { Db, DbParam } from '../driver';
 import { newId } from '../id';
-import { assertDateISO, monthRange } from '../../domain/date';
+import { assertDateISO, assertNotFutureDate, monthRange } from '../../domain/date';
 import { UNCATEGORIZED_CATEGORY_ID } from '../schema';
 import type { Direction } from '../../domain/types';
 
@@ -104,13 +104,25 @@ interface RawTxnRow {
 /**
  * Rejects anything that is not a real calendar day written YYYY-MM-DD.
  *
- * The rule itself lives in domain/date (assertDateISO) so every write in the
- * ledger — a transaction, a transfer leg, a project start date, a fixed-cost
- * bill — applies one calendar definition. This alias keeps the name the
- * repositories already import.
+ * This is the shape guard only. The rule itself lives in domain/date
+ * (assertDateISO) so every date-taking write applies one calendar definition;
+ * this alias keeps the name the repositories already import. A project start
+ * date is a plan, so it uses this shape check and may be in the future.
  */
 export function assertTxnDate(date: string): void {
   assertDateISO(date);
+}
+
+/**
+ * The date guard for every row written into txn: a real calendar day that has
+ * already happened. Transfers use it for both legs and submitDay uses it for
+ * the whole evening, so no path can book tomorrow from the repository layer.
+ *
+ * `todayISO` is a test seam; production leaves it to todayLocalISO().
+ */
+export function assertTxnWritableDate(date: string, todayISO?: string): void {
+  assertTxnDate(date);
+  assertNotFutureDate(date, todayISO);
 }
 
 /** Guards the positive, integer-cents invariant at the repository boundary. */
@@ -183,7 +195,7 @@ async function insertTxn(
  * before the INSERT, so a rejected amount or date writes nothing.
  */
 export async function createExpense(db: Db, input: CreateExpenseInput): Promise<string> {
-  assertTxnDate(input.date);
+  assertTxnWritableDate(input.date);
   assertPositiveCents(input.amountCents);
   return insertTxn(db, {
     date: input.date,
@@ -198,7 +210,7 @@ export async function createExpense(db: Db, input: CreateExpenseInput): Promise<
 
 /** Creates an income row and returns its id. Same rules as createExpense. */
 export async function createIncome(db: Db, input: CreateIncomeInput): Promise<string> {
-  assertTxnDate(input.date);
+  assertTxnWritableDate(input.date);
   assertPositiveCents(input.amountCents);
   return insertTxn(db, {
     date: input.date,
@@ -244,7 +256,7 @@ export async function recordAdjustment(
   db: Db,
   input: RecordAdjustmentInput
 ): Promise<string> {
-  assertTxnDate(input.date);
+  assertTxnWritableDate(input.date);
   if (!Number.isSafeInteger(input.deltaCents) || input.deltaCents === 0) {
     throw new RangeError(
       `deltaCents must be a non-zero integer number of cents, received ${input.deltaCents}`

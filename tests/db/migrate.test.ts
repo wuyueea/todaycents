@@ -208,8 +208,8 @@ describe('migration v2: system 未分类 category', () => {
 describe('transaction', () => {
   it('commits when the callback resolves', async () => {
     const db = await createTestDb();
-    await db.transaction(async () => {
-      await db.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['k', 'v']);
+    await db.transaction(async tx => {
+      await tx.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['k', 'v']);
     });
 
     const row = await db.get<{ value: string }>('SELECT value FROM app_meta WHERE key = ?', ['k']);

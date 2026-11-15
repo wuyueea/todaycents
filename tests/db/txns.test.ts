@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import { accountBalance, createAccount } from '../../src/db/repos/accounts';
 import { createCategory } from '../../src/db/repos/categories';
@@ -80,11 +80,44 @@ describe('txns validation', () => {
     expect((await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn'))?.n).toBe(0);
   });
 
+  it('rejects a future day on every writer, writing nothing', async () => {
+    const { db, card, food, income } = await fixture();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 20, 12));
+      await expect(
+        createExpense(db, { date: '2026-10-21', accountId: card, amountCents: 100, categoryId: food })
+      ).rejects.toThrow(/future/);
+      await expect(
+        createIncome(db, { date: '2026-10-21', accountId: card, amountCents: 100, categoryId: income })
+      ).rejects.toThrow(/future/);
+      await expect(
+        recordAdjustment(db, { date: '2026-10-21', accountId: card, deltaCents: 1 })
+      ).rejects.toThrow(/future/);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await db.get<{ n: number }>('SELECT COUNT(*) AS n FROM txn'))?.n).toBe(0);
+  });
+
+  it('accepts today and past days', async () => {
+    const { db, card, food } = await fixture();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 9, 20, 12));
+      await createExpense(db, { date: '2026-10-20', accountId: card, amountCents: 1, categoryId: food });
+      await createExpense(db, { date: '2026-10-19', accountId: card, amountCents: 2, categoryId: food });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await listTxnsByMonth(db, '2026-10')).length).toBe(2);
+  });
+
   it('accepts leap days and month edges', async () => {
     const { db, card, food } = await fixture();
-    await createExpense(db, { date: '2028-02-29', accountId: card, amountCents: 1, categoryId: food });
+    await createExpense(db, { date: '2024-02-29', accountId: card, amountCents: 1, categoryId: food });
     await createExpense(db, { date: '2026-10-31', accountId: card, amountCents: 2, categoryId: food });
-    expect(await listTxnsByMonth(db, '2028-02')).toHaveLength(1);
+    expect(await listTxnsByMonth(db, '2024-02')).toHaveLength(1);
     expect(await listTxnsByMonth(db, '2026-10')).toHaveLength(1);
   });
 

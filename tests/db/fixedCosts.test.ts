@@ -585,11 +585,13 @@ describe('listFixedCosts and monthlyTotalCents', () => {
     expect(item).toMatchObject({ dayOfMonth: 31, nextDate: '2026-02-28' });
 
     const leap = await fixture();
-    for (const date of ['2027-11-30', '2027-12-31', '2028-01-31']) {
+    // A past leap cycle keeps these bill writes legal now that future days are
+    // refused at the repository boundary.
+    for (const date of ['2023-11-30', '2023-12-31', '2024-01-31']) {
       await bill(leap.db, { date, cents: 5988, categoryId: leap.phone, accountId: leap.card, payee: '话费' });
     }
     const [leapCandidate] = await detectCandidates(leap.db);
-    expect(leapCandidate).toMatchObject({ lastDate: '2028-01-31', nextDate: '2028-02-29' });
+    expect(leapCandidate).toMatchObject({ lastDate: '2024-01-31', nextDate: '2024-02-29' });
   });
 
   it('keeps a confirmed item after its category is archived', async () => {

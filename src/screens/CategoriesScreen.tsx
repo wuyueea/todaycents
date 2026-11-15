@@ -156,9 +156,20 @@ export function CategoryMenuSheet({
         )}
         {category.archivedAt === null ? (
           <>
-            <button className="action-menu__item" type="button" onClick={onArchive}>
+            <button
+              className="action-menu__item"
+              type="button"
+              onClick={onArchive}
+              disabled={busy}
+            >
               归档
-              <span>从记账选择里收起</span>
+              <span>
+                {inspection === null
+                  ? '正在数二级分类…'
+                  : inspection.liveChildCount > 0
+                    ? '连同 ' + inspection.liveChildCount + ' 个二级分类一起收起'
+                    : '从记账选择里收起'}
+              </span>
             </button>
             <button
               className="action-menu__item action-menu__item--danger category-menu__danger"
@@ -245,6 +256,51 @@ export function CategoryRetireSheet({
 
       <button className="sheet__danger" type="button" onClick={onConfirm} disabled={busy}>
         断联并归档
+      </button>
+      <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
+        取消
+      </button>
+    </Sheet>
+  );
+}
+
+export interface CategoryArchiveSheetProps {
+  categoryName: string;
+  liveChildCount: number;
+  busy: boolean;
+  onConfirm(): void;
+  onCancel(): void;
+}
+
+/**
+ * 归档一级分类: the direct children that are still live go with it. Restoring
+ * the parent later does not restore those children, so the copy says so before
+ * the owner confirms.
+ */
+export function CategoryArchiveSheet({
+  categoryName,
+  liveChildCount,
+  busy,
+  onConfirm,
+  onCancel,
+}: CategoryArchiveSheetProps) {
+  return (
+    <Sheet
+      titleId="category-archive-title"
+      title="归档分类"
+      meta={<span className="sheet__version num">{liveChildCount} 个二级分类</span>}
+      onClose={onCancel}
+      initialFocus="last"
+      canClose={() => !busy}
+    >
+      <p className="sheet__text">
+        「{categoryName}」下还有 {liveChildCount} 个未归档的二级分类。归档会连同它们一起收进「已归档」，历史流水不受影响。
+      </p>
+      <p className="sheet__note">
+        恢复一级分类时，这些二级分类不会自动回来；需要时可在「已归档」里逐个恢复。
+      </p>
+      <button className="sheet__primary" type="button" onClick={onConfirm} disabled={busy}>
+        归档
       </button>
       <button className="sheet__secondary" type="button" onClick={onCancel} disabled={busy}>
         取消
@@ -342,6 +398,11 @@ interface RetireSheetState {
   inspection: CategoryPurgeInspection;
 }
 
+interface ArchiveSheetState {
+  category: Category;
+  liveChildCount: number;
+}
+
 interface PurgeDialogState {
   category: Category;
   inspection: CategoryPurgeInspection;
@@ -385,6 +446,7 @@ export default function CategoriesScreen() {
   const [menuId, setMenuId] = useState<string | null>(null);
   const [menuInspection, setMenuInspection] = useState<CategoryPurgeInspection | null>(null);
   const [retireSheet, setRetireSheet] = useState<RetireSheetState | null>(null);
+  const [archiveSheet, setArchiveSheet] = useState<ArchiveSheetState | null>(null);
   const [purgeDialog, setPurgeDialog] = useState<PurgeDialogState | null>(null);
   const [renaming, setRenaming] = useState<RenameState | null>(null);
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -401,6 +463,19 @@ export default function CategoriesScreen() {
       category => category.archivedAt !== null && category.id !== UNCATEGORIZED_CATEGORY_ID
     )
     .sort(bySort);
+  const liveChildCountByParent = new Map<string, number>();
+  for (const category of categories) {
+    if (category.archivedAt === null && category.parentId !== null) {
+      liveChildCountByParent.set(
+        category.parentId,
+        (liveChildCountByParent.get(category.parentId) ?? 0) + 1
+      );
+    }
+  }
+  const visibleLiveCount =
+    buildCategoryRows(categories, 'expense').length +
+    buildCategoryRows(categories, 'income').length;
+
   const parentOptions = live.filter(
     category => category.parentId === null && category.kind === kind
   );
@@ -525,15 +600,31 @@ export default function CategoriesScreen() {
     if (db === null || busy) return;
     setBusy(true);
     try {
-      await archiveCategory(db, category.id);
+      const result = await archiveCategory(db, category.id);
       setMenuId(null);
+      setArchiveSheet(null);
       bump();
-      showToast(`已归档「${category.name}」：记账选择里不再出现，历史流水还在。`);
+      const childPart =
+        result.archivedChildCount > 0 ? '及 ' + result.archivedChildCount + ' 个二级分类' : '';
+      showToast('已归档「' + category.name + '」' + childPart + '：记账选择里不再出现，历史流水还在。');
     } catch (reason) {
+      // Close the confirmation before the toast: the sheet is above the toast
+      // layer, and leaving it open would hide the only failure feedback.
+      setArchiveSheet(null);
       showToast(`归档失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
     }
+  };
+
+  const startArchive = (category: Category) => {
+    if (menuInspection === null) return;
+    setMenuId(null);
+    if (menuInspection.liveChildCount > 0) {
+      setArchiveSheet({ category, liveChildCount: menuInspection.liveChildCount });
+      return;
+    }
+    void handleArchive(category);
   };
 
   const handleUnarchive = async (category: Category) => {
@@ -543,7 +634,17 @@ export default function CategoriesScreen() {
       await unarchiveCategory(db, category.id);
       setMenuId(null);
       bump();
-      showToast(`已恢复「${category.name}」，它重新出现在记账选择里。`);
+      // A live child under an archived parent is still hidden everywhere, so
+      // the generic copy would promise visibility that does not exist yet.
+      const parent =
+        category.parentId === null
+          ? undefined
+          : categories.find(candidate => candidate.id === category.parentId);
+      showToast(
+        parent !== undefined && parent.archivedAt !== null
+          ? `已恢复「${category.name}」，但一级分类「${parent.name}」还在已归档；恢复「${parent.name}」后它才会重新出现在记账选择里。`
+          : `已恢复「${category.name}」，它重新出现在记账选择里。`
+      );
     } catch (reason) {
       showToast(`恢复失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
@@ -732,13 +833,20 @@ export default function CategoriesScreen() {
     );
   };
 
-  const renderArchived = (category: Category) => (
+  const renderArchived = (category: Category) => {
+    const liveChildCount = liveChildCountByParent.get(category.id) ?? 0;
+    return (
     <li className="category-row category-row--archived" key={category.id} data-category-id={category.id}>
       <div className="category-row__main">
         <span className="category-row__name">{category.name}</span>
         <span className="category-row__meta">
           {KIND_LABELS[category.kind]} · 已归档
         </span>
+        {liveChildCount > 0 && (
+          <span className="category-row__note">
+            还有 {liveChildCount} 个二级分类未归档；恢复本分类后会重新出现。
+          </span>
+        )}
       </div>
       <button
         className="category-row__restore"
@@ -758,7 +866,8 @@ export default function CategoriesScreen() {
         ⋯
       </button>
     </li>
-  );
+    );
+  };
 
   return (
     <div className="categories-screen categories-screen--v1">
@@ -767,7 +876,9 @@ export default function CategoriesScreen() {
           ‹
         </Link>
         <h1>分类</h1>
-        {data !== null && <span className="settings-header__meta">{live.length} 个</span>}
+        {data !== null && (
+          <span className="settings-header__meta">{visibleLiveCount} 个</span>
+        )}
       </header>
 
       <div className="categories-seg" role="group" aria-label="分类类型">
@@ -953,11 +1064,23 @@ export default function CategoriesScreen() {
           inspection={menuInspection}
           onRename={() => startRename(menuCategory)}
           onAddChild={() => startAddChild(menuCategory)}
-          onArchive={() => handleArchive(menuCategory)}
+          onArchive={() => startArchive(menuCategory)}
           onUnarchive={() => handleUnarchive(menuCategory)}
           onRetire={() => startRetire(menuCategory)}
           onPurge={() => startPurge(menuCategory)}
           onCancel={() => setMenuId(null)}
+        />
+      )}
+
+      {archiveSheet !== null && (
+        <CategoryArchiveSheet
+          categoryName={archiveSheet.category.name}
+          liveChildCount={archiveSheet.liveChildCount}
+          busy={busy}
+          onConfirm={() => handleArchive(archiveSheet.category)}
+          onCancel={() => {
+            if (!busy) setArchiveSheet(null);
+          }}
         />
       )}
 

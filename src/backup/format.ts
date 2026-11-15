@@ -43,12 +43,12 @@ function dateStamp(date: Date): string {
   return `${date.getFullYear()}${pad2(date.getMonth() + 1)}${pad2(date.getDate())}`;
 }
 
-/** HHmm in local wall-clock time. */
+/** HHmmss in local wall-clock time, so two exports in one minute never collide. */
 function timeStamp(date: Date): string {
-  return `${pad2(date.getHours())}${pad2(date.getMinutes())}`;
+  return `${pad2(date.getHours())}${pad2(date.getMinutes())}${pad2(date.getSeconds())}`;
 }
 
-/** 记账本-YYYYMMDD-HHmm.ledger — local time, never the UTC day. */
+/** 记账本-YYYYMMDD-HHmmss.ledger — local time, never the UTC day. */
 export function backupFileName(date: Date): string {
   return `记账本-${dateStamp(date)}-${timeStamp(date)}.ledger`;
 }

@@ -125,6 +125,28 @@ describe('CategoriesScreen', () => {
     expect(html).not.toContain('历史流水还在');
   });
 
+  it('warns that an archived parent still has a live child', () => {
+    const parent = category({
+      id: 'c-legacy-parent',
+      name: '旧运动',
+      sort: 7,
+      archivedAt: '2026-09-01T00:00:00.000Z',
+    });
+    const child = category({
+      id: 'c-legacy-child',
+      name: '旧羽毛球',
+      sort: 1,
+      parentId: parent.id,
+    });
+    store.data = { categories: [parent, child, SYSTEM], undo: null };
+    const html = renderScreen();
+
+    expect(html).toContain('还有 1 个二级分类未归档');
+    expect(html).toContain('恢复本分类后会重新出现');
+    expect(html).toContain('settings-header__meta">0 个</span>');
+    store.data = categoriesData();
+  });
+
   it('restores the purge undo toast saved before the app restarted', () => {
     store.data = {
       categories: categoriesData().categories,
@@ -248,6 +270,39 @@ describe('CategoryMenuSheet', () => {
 
     expect(html).toContain('没有在用的流水，分类收进已归档');
     expect(html).toContain('0 笔');
+  });
+
+  it('waits for the child count before offering 归档', () => {
+    const html = render(
+      <CategoryMenuSheet
+        category={SPORT}
+        inspection={null}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('正在数二级分类…');
+    expect(html).toMatch(/<button[^>]*disabled[^>]*>归档/);
+  });
+
+  it('says how many live children an archive would take with it', () => {
+    const html = render(
+      <CategoryMenuSheet
+        category={SPORT}
+        inspection={inspection({ archived: false, liveChildCount: 2 })}
+        onRename={() => {}}
+        onArchive={() => {}}
+        onRetire={() => {}}
+        onPurge={() => {}}
+        onCancel={() => {}}
+      />
+    );
+
+    expect(html).toContain('连同 2 个二级分类一起收起');
   });
 
   it('disables 断联并归档 while the counts are still loading', () => {

@@ -151,7 +151,8 @@ export interface DeviceWriters {
  * Builds both writers around the same folder-first rule.
  *
  * The folder is only consulted on a native platform, and only after a folder
- * exists. A bridge that answers { saved: false } is treated like "no folder":
+ * exists. A bridge that answers { saved: false } — or rejects, because the
+ * folder became unwritable after it was read — is treated like "no folder":
  * the cache + share sheet still gets the file, so an export is never lost to
  * a folder that silently declined.
  */
@@ -162,8 +163,20 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
   ): Promise<StoredFolder | null> {
     const folder = await deps.folder.current();
     if (folder === null) return null;
-    const result = await deps.folder.write(fileName, bytesToBase64(bytes));
-    return result.saved ? folder : null;
+
+    const base64 = bytesToBase64(bytes);
+    try {
+      const result = await deps.folder.write(fileName, base64);
+      return result.saved ? folder : null;
+    } catch {
+      // A folder can turn unwritable between current() and write(): permission
+      // revoked, directory deleted, read-only, or full. The native writer is
+      // atomic, so the old file is untouched; this is the same fallback path as
+      // a bridge that answered { saved: false }. Only the folder write is
+      // caught — if the cache itself then fails, that error still reaches the
+      // screen instead of inventing a successful export.
+      return null;
+    }
   }
 
   return {

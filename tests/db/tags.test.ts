@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
+import { failingDb } from '../helpers/failingDb';
 import { createAccount } from '../../src/db/repos/accounts';
 import { createCategory } from '../../src/db/repos/categories';
 import { createExpense, listTxnsByMonth, softDeleteTxn } from '../../src/db/repos/txns';
@@ -231,25 +232,11 @@ describe('purgeTag', () => {
     const tag = await createTag(db, '夜宵');
     await archiveTag(db, tag);
 
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('INSERT INTO purge_undo')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
+    const failing = failingDb(db, sql => sql.includes('INSERT INTO purge_undo'));
+    await expect(purgeTag(failing, tag)).rejects.toThrow('injected failure');
 
-    try {
-      injected = true;
-      await expect(purgeTag(db, tag)).rejects.toThrow('injected failure');
-
-      expect(await db.all('SELECT id FROM tag WHERE id = ?', [tag])).toHaveLength(1);
-      expect(await purgeUndoCount(db)).toBe(0);
-    } finally {
-      db.run = originalRun;
-    }
+    expect(await db.all('SELECT id FROM tag WHERE id = ?', [tag])).toHaveLength(1);
+    expect(await purgeUndoCount(db)).toBe(0);
   });
 
   it('refuses a live tag and a tag that still has links', async () => {
@@ -382,23 +369,9 @@ describe('setTxnTags', () => {
 
     // Fail the INSERT after the DELETE has already run. Only a real
     // transaction restores the old link; an autocommit pair would lose it.
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('INSERT INTO txn_tag')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
-
-    try {
-      injected = true;
-      await expect(setTxnTags(db, txn, [b])).rejects.toThrow('injected failure');
-      expect((await getTxnTags(db, txn)).map(tag => tag.name)).toEqual(['a']);
-    } finally {
-      db.run = originalRun;
-    }
+    const failing = failingDb(db, sql => sql.includes('INSERT INTO txn_tag'));
+    await expect(setTxnTags(failing, txn, [b])).rejects.toThrow('injected failure');
+    expect((await getTxnTags(db, txn)).map(tag => tag.name)).toEqual(['a']);
   });
 
   it('rejects a missing or soft-deleted transaction and writes nothing', async () => {

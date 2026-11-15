@@ -7,8 +7,9 @@ import type { FolderAccess, FolderListing, StoredFolder } from '../storage/folde
  * 设置 › 存储: where backups and exported workbooks go.
  *
  * The app holds 「所有文件访问」 and writes with java.io.File into an ordinary,
- * visible directory. Until that permission is granted the page offers exactly
- * one action: the system page where the switch lives. Once it is granted the
+ * visible directory; on Android 10 and below it requests the storage runtime
+ * permission instead. Until that permission is granted the page offers exactly
+ * one action, named for wherever the answer lives. Once it is granted the
  * page shows the remembered location, a 更改位置 browser built from
  * FolderPlugin.listDirs, and 打开文件夹 for the system file manager.
  *
@@ -24,6 +25,17 @@ export const PLUGIN_MISSING = '这台设备不支持存储设置。';
 
 /** The short explanation under the one permission button. */
 export const ACCESS_NEEDED = '需要「所有文件访问」，备份才能写进手机目录。';
+
+/** The same explanation on API 29 and below, where a runtime dialog grants it. */
+export const ACCESS_NEEDED_PERMISSION = '需要存储权限，备份才能写进手机目录。';
+
+/** Which system surface answers the missing permission. */
+export type StorageAccessReason = 'settings' | 'permission';
+
+/** Picks the sentence that matches the surface the button will open. */
+export function accessNeededText(reason?: StorageAccessReason | null): string {
+  return reason === 'permission' ? ACCESS_NEEDED_PERMISSION : ACCESS_NEEDED;
+}
 
 /** The owner came back from settings without switching the permission on. */
 export const ACCESS_STILL_DENIED = '还没有允许访问存储。';
@@ -53,6 +65,8 @@ export interface StorageViewProps {
   error: string | null;
   /** False in a browser, and on a device where the plugin did not register. */
   available?: boolean;
+  /** How the missing permission is granted; null when the bridge is absent. */
+  accessReason?: StorageAccessReason | null;
   /** The one line that says which layer is stuck while the check runs. */
   probe?: string;
   onRequestAccess(): void;
@@ -73,6 +87,7 @@ export function StorageView({
   note,
   error,
   available = true,
+  accessReason = null,
   probe = '',
   onRequestAccess,
   onChange,
@@ -115,7 +130,7 @@ export function StorageView({
             <p className="backup-state__label">存储权限</p>
             <p className="backup-state__value">未允许</p>
           </section>
-          <p className="backup-note">{ACCESS_NEEDED}</p>
+          <p className="backup-note">{accessNeededText(accessReason)}</p>
           {available && (
             <div className="backup-actions">
               <button
@@ -260,6 +275,7 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
   const [note, setNote] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [available, setAvailable] = useState(true);
+  const [accessReason, setAccessReason] = useState<StorageAccessReason | null>(null);
   const [probe, setProbe] = useState('插件：检查中…');
 
   useEffect(() => {
@@ -286,6 +302,7 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
       setAvailable(reachable);
       if (!reachable) {
         setProbe('插件：没有找到');
+        setAccessReason(null);
         setAccess('denied');
         return;
       }
@@ -295,15 +312,18 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
       if (!live) return;
       if (!state.granted) {
         setProbe('插件：已找到，未授权');
+        setAccessReason(state.reason ?? null);
         setAccess('denied');
         return;
       }
 
+      setAccessReason(null);
       setAccess('granted');
       const current = await step('读取目录', () => folder.current());
       if (live) setStored(current);
     })().catch(reason => {
       if (!live) return;
+      setAccessReason(null);
       setAccess('denied');
       setError(`读取失败：${reasonText(reason)}`);
     });
@@ -329,10 +349,12 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
         state = await folder.getAccess();
       }
       if (!state.granted) {
+        setAccessReason(state.reason ?? null);
         setAccess('denied');
         setNote(ACCESS_STILL_DENIED);
         return;
       }
+      setAccessReason(null);
       setAccess('granted');
       setStored(await folder.current());
     } catch (reason) {
@@ -354,10 +376,11 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
       // A revoked permission is the one failure with its own screen state.
       const state = await folder.getAccess().catch(() => null);
       if (state !== null && !state.granted) {
+        setAccessReason(state.reason ?? null);
         setAccess('denied');
         setStored(null);
         setBrowser(null);
-        setNote(ACCESS_NEEDED);
+        setNote(accessNeededText(state.reason));
         return;
       }
       setError(`打开失败：${reasonText(reason)}`);
@@ -430,6 +453,7 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
       note={note}
       error={error}
       available={available}
+      accessReason={accessReason}
       probe={probe}
       onRequestAccess={request}
       onChange={change}

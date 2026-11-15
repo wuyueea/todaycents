@@ -66,6 +66,17 @@ describe('StorageView', () => {
     expect(html).not.toContain('打开文件夹');
   });
 
+  // Android 10 and below grant storage through a runtime dialog, not the
+  // all-files settings page: the one button must be named for that dialog.
+  it('names the runtime permission while Android 10 storage access is missing', () => {
+    const html = render(<StorageView access="denied" accessReason="permission" {...base} />);
+
+    expect(html).toContain('允许访问存储');
+    expect(html).toContain('需要存储权限');
+    expect(html).not.toContain('所有文件访问');
+    expect(html.match(/<button/g)).toHaveLength(1);
+  });
+
   it('shows the current location and both granted actions', () => {
     const html = render(<StorageView {...base} access="granted" folder={FOLDER} />);
 

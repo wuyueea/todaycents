@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
+import { failingDb } from '../helpers/failingDb';
 import {
   archiveCategory,
   archiveCategoryWithUnlink,
@@ -100,6 +101,76 @@ describe('category management: rename and archive', () => {
     ).toBeNull();
   });
 
+  it('archives a live root together with its live children and reports how many followed', async () => {
+    const { db, sport, badminton } = await managementFixture();
+
+    const result = await archiveCategory(db, sport);
+
+    expect(result).toEqual({ archivedChildCount: 1 });
+    const rows = await db.all<{ id: string; archived_at: string | null }>(
+      'SELECT id, archived_at FROM category WHERE id IN (?, ?)',
+      [sport, badminton]
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every(row => row.archived_at !== null)).toBe(true);
+    expect(new Set(rows.map(row => row.archived_at)).size).toBe(1);
+  });
+
+  it('restores only the root, not the children it archived with', async () => {
+    const { db, sport, badminton } = await managementFixture();
+    await archiveCategory(db, sport);
+
+    await unarchiveCategory(db, sport);
+
+    const rows = await db.all<{ id: string; archived_at: string | null }>(
+      'SELECT id, archived_at FROM category WHERE id IN (?, ?)',
+      [sport, badminton]
+    );
+    expect(rows.find(row => row.id === sport)?.archived_at).toBeNull();
+    expect(rows.find(row => row.id === badminton)?.archived_at).not.toBeNull();
+  });
+
+  it('keeps an older archived_at on a child that was already archived', async () => {
+    const { db, sport, badminton } = await managementFixture();
+    await archiveCategory(db, badminton);
+    const before = await db.get<{ archived_at: string | null }>(
+      'SELECT archived_at FROM category WHERE id = ?',
+      [badminton]
+    );
+
+    const result = await archiveCategory(db, sport);
+
+    expect(result).toEqual({ archivedChildCount: 0 });
+    expect(
+      (await db.get<{ archived_at: string | null }>(
+        'SELECT archived_at FROM category WHERE id = ?',
+        [badminton]
+      ))?.archived_at
+    ).toBe(before?.archived_at);
+  });
+
+  it('rolls the parent archive back when archiving a child fails', async () => {
+    const { db, sport, badminton } = await managementFixture();
+    const failing = failingDb(db, sql => sql.includes('parent_id'));
+
+    await expect(archiveCategory(failing, sport)).rejects.toThrow('injected failure');
+
+    expect(
+      await db.all('SELECT id FROM category WHERE id IN (?, ?) AND archived_at IS NOT NULL', [
+        sport,
+        badminton,
+      ])
+    ).toEqual([]);
+  });
+
+  it('rejects a missing category when archiving', async () => {
+    const db = await createTestDb();
+
+    await expect(archiveCategory(db, 'missing-category')).rejects.toThrow(
+      '分类不存在：missing-category'
+    );
+  });
+
   it('refuses to archive the system category', async () => {
     const db = await createTestDb();
 
@@ -171,7 +242,9 @@ describe('category management: inspect before a purge', () => {
 
   it('treats a live child as history but lets an archived child be purged with its parent', async () => {
     const { db, sport, badminton } = await managementFixture();
+    // Legacy state: the parent is archived while the child was restored later.
     await archiveCategory(db, sport);
+    await unarchiveCategory(db, badminton);
 
     expect(await inspectCategoryPurge(db, sport)).toMatchObject({
       purgeable: false,
@@ -275,33 +348,19 @@ describe('category management: 断联并归档', () => {
     const { db, sport } = await managementFixture();
     const txn = await spendIn(db, sport, '2026-10-01');
 
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('UPDATE category SET archived_at')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
+    const failing = failingDb(db, sql => sql.includes('UPDATE category SET archived_at'));
+    await expect(archiveCategoryWithUnlink(failing, sport)).rejects.toThrow('injected failure');
 
-    try {
-      injected = true;
-      await expect(archiveCategoryWithUnlink(db, sport)).rejects.toThrow('injected failure');
-
-      const txnRow = await db.get<{ category_id: string | null }>(
-        'SELECT category_id FROM txn WHERE id = ?',
-        [txn]
-      );
-      const categoryRow = await db.get<{ archived_at: string | null }>(
-        'SELECT archived_at FROM category WHERE id = ?',
-        [sport]
-      );
-      expect(txnRow?.category_id).toBe(sport);
-      expect(categoryRow?.archived_at).toBeNull();
-    } finally {
-      db.run = originalRun;
-    }
+    const txnRow = await db.get<{ category_id: string | null }>(
+      'SELECT category_id FROM txn WHERE id = ?',
+      [txn]
+    );
+    const categoryRow = await db.get<{ archived_at: string | null }>(
+      'SELECT archived_at FROM category WHERE id = ?',
+      [sport]
+    );
+    expect(txnRow?.category_id).toBe(sport);
+    expect(categoryRow?.archived_at).toBeNull();
   });
 
   it('rejects the system category and a missing category without writing anything', async () => {
@@ -418,25 +477,11 @@ describe('category management: 彻底删除', () => {
     const { db, food } = await managementFixture();
     await archiveCategory(db, food);
 
-    const originalRun = db.run.bind(db);
-    let injected = false;
-    db.run = async (sql, params = []) => {
-      if (injected && sql.includes('INSERT INTO purge_undo')) {
-        injected = false;
-        throw new Error('injected failure');
-      }
-      return originalRun(sql, params);
-    };
+    const failing = failingDb(db, sql => sql.includes('INSERT INTO purge_undo'));
+    await expect(purgeCategory(failing, food)).rejects.toThrow('injected failure');
 
-    try {
-      injected = true;
-      await expect(purgeCategory(db, food)).rejects.toThrow('injected failure');
-
-      expect(await db.all('SELECT id FROM category WHERE id = ?', [food])).toHaveLength(1);
-      expect(await purgeUndoCount(db)).toBe(0);
-    } finally {
-      db.run = originalRun;
-    }
+    expect(await db.all('SELECT id FROM category WHERE id = ?', [food])).toHaveLength(1);
+    expect(await purgeUndoCount(db)).toBe(0);
   });
 
   it('refuses a live category and leaves it in place', async () => {
@@ -459,8 +504,10 @@ describe('category management: 彻底删除', () => {
   });
 
   it('refuses a parent with a live child', async () => {
-    const { db, sport } = await managementFixture();
+    const { db, sport, badminton } = await managementFixture();
+    // Legacy state: the parent is archived while the child was restored later.
     await archiveCategory(db, sport);
+    await unarchiveCategory(db, badminton);
 
     await expect(purgeCategory(db, sport)).rejects.toThrow('这个分类还有历史，不能彻底删除');
     expect(await db.all('SELECT id FROM category WHERE id IN (?, ?)', [sport, 'missing'])).toHaveLength(1);
