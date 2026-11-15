@@ -1,8 +1,15 @@
-import { DatabaseSync } from 'node:sqlite';
+import { createRequire } from 'node:module';
+import type { DatabaseSync } from 'node:sqlite';
 import type { Db, DbParam } from '../../src/db/driver';
 import { TransactionRunner } from '../../src/db/transaction';
 import { migrate } from '../../src/db/migrate';
 import { SerialDb } from '../../src/db/serial';
+
+// Load node:sqlite through Node's own require instead of a static ESM import.
+// Node 22 does not treat it as a builtin in Vite's resolver, so a static import
+// makes Vite try to bundle it in jsdom tests. Test-only helper.
+const nodeRequire = createRequire(import.meta.url);
+const { DatabaseSync: DatabaseSyncCtor } = nodeRequire('node:sqlite') as typeof import('node:sqlite');
 
 /**
  * Node-side Db driver. Test-only: product code must never import
@@ -57,7 +64,7 @@ class NodeDb implements Db {
  * the write ordering the app actually runs with.
  */
 export async function createTestDb(): Promise<Db> {
-  const raw = new DatabaseSync(':memory:');
+  const raw = new DatabaseSyncCtor(':memory:');
   // SQLite leaves foreign keys off per connection by default. Turn them on
   // before migrating so every REFERENCES in the schema is enforced here,
   // matching the on-device driver instead of accepting dangling ids.
