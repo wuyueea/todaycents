@@ -15,6 +15,10 @@
  *
  * The format version stays 1: a project key is an additive table, and a file
  * written before it must still import (see OPTIONAL_TABLES).
+ *
+ * template and txn.slot_key remain legacy data contracts after the day-grid
+ * APIs retired. Preserve nonempty imported templates and their references;
+ * the absence of a template UI does not make these rows disposable.
  */
 import type { Db, DbParam } from './driver';
 import { assertDateISO, assertNotFutureDate, todayLocalISO } from '../domain/date';

@@ -131,7 +131,8 @@
   }
 
   /* 项目页：新建/编辑表单 */
-  .projects-screen--v1 .projects-create__input {
+  .projects-screen--v1 .projects-create__input,
+  .project-detail-screen--v1 .project-input {
     min-height: 44px;
   }
 

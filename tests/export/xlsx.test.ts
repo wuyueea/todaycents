@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildXlsx, numberLiteral } from '../../src/export/xlsx';
+import { buildXlsx, formulaCell, moneyLiteral, numberLiteral } from '../../src/export/xlsx';
 import { readZipStrict } from './zipReader';
 
 const utf8 = new TextDecoder();
@@ -32,6 +32,57 @@ const SHEETS = [
 ];
 
 describe('buildXlsx', () => {
+  it('writes explicit formulas with exact cached results and requests recalculation', () => {
+    const bytes = buildXlsx([{ name: '汇总', rows: [
+      [formulaCell('SUM(C2:C3)', numberLiteral('30')),
+       formulaCell('ROUND(C4/100,2)', moneyLiteral('0.30'))],
+    ] }]);
+    const xml = part(bytes, 'xl/worksheets/sheet1.xml');
+    expect(xml).toContain('<c r="A1"><f>SUM(C2:C3)</f><v>30</v></c>');
+    expect(xml).toContain('<c r="B1" s="1"><f>ROUND(C4/100,2)</f><v>0.30</v></c>');
+    expect(part(bytes, 'xl/workbook.xml')).toContain('fullCalcOnLoad="1" forceFullCalc="1"');
+  });
+
+  it('keeps formula-looking user strings literal and rejects unsupported explicit formulas', () => {
+    for (const text of ['=SUM(C2:C3)', '+1+1', '-2+3', '@SUM(A1)', '=HYPERLINK("https://example.com")']) {
+      const xml = part(buildXlsx([{ name: 'S', rows: [[text]] }]), 'xl/worksheets/sheet1.xml');
+      expect(xml).toContain('t="inlineStr"');
+      expect(xml).not.toContain('<f>');
+    }
+    expect(() => formulaCell('HYPERLINK("https://example.com")', numberLiteral('0'))).toThrow();
+    expect(() => buildXlsx([{ name: 'S', rows: [[{ formula: '0', cached: { numberText: 'NaN' } }]] }])).toThrow();
+  });
+
+  it('combines report header, total, numeric and wrapping styles without losing number formats', () => {
+    const bytes = buildXlsx([{ name: 'S', reportStyle: { wrapColumns: [0], totalRow: 3 },
+      rows: [['分类', '元', '分'], ['长分类', moneyLiteral('0.30'), 30],
+        ['总计', formulaCell('ROUND(C3/100,2)', moneyLiteral('0.30')), formulaCell('SUM(C2:C2)', numberLiteral('30'))]],
+    }]);
+    const xml = part(bytes, 'xl/worksheets/sheet1.xml');
+    expect(xml).toContain('<c r="A1" s="4" t="inlineStr">');
+    expect(xml).toContain('<c r="A2" s="3" t="inlineStr">');
+    expect(xml).toContain('<c r="C2" s="2"><v>30</v></c>');
+    expect(xml).toContain('<c r="A3" s="5" t="inlineStr">');
+    expect(xml).toContain('<c r="B3" s="6"><f>');
+    expect(xml).toContain('<c r="C3" s="7"><f>');
+    const styles = part(bytes, 'xl/styles.xml');
+    expect(styles).toContain('rgb="FFF7DFC4"');
+    expect(styles).toContain('rgb="FFFFF1DD"');
+    expect(styles).toContain('horizontal="right"');
+    expect(styles).toContain('wrapText="1"');
+    expect(styles).toContain('formatCode="#,##0;&quot;−&quot;#,##0;0"');
+  });
+
+  it('makes wrapped CJK and multiline rows taller and caps excessive text at the Excel height limit', () => {
+    const xml = part(buildXlsx([{ name: 'S', columnWidths: [12], reportStyle: { wrapColumns: [0] },
+      rows: [['备注'], ['一二三四五六七八九十'], ['a\nb\nc'], ['长'.repeat(3000)]],
+    }]), 'xl/worksheets/sheet1.xml');
+    expect(xml).toContain('<row r="2" ht="40" customHeight="1">');
+    expect(xml).toContain('<row r="3" ht="56" customHeight="1">');
+    expect(xml).toContain('<row r="4" ht="409" customHeight="1">');
+    expect(xml).toContain('长'.repeat(3000));
+  });
+
   it('emits the minimal SpreadsheetML package with no shared-string table', () => {
     const bytes = buildXlsx(SHEETS);
     const entries = readZipStrict(bytes);
@@ -82,7 +133,7 @@ describe('buildXlsx', () => {
     expect(workbookRels).toContain('Target="styles.xml"');
 
     const styles = part(bytes, 'xl/styles.xml');
-    expect(styles).toContain('<numFmt numFmtId="164" formatCode="#,##0.00"/>');
+    expect(styles).toContain('<numFmt numFmtId="164" formatCode="#,##0.00;&quot;−&quot;#,##0.00;0.00"/>');
     expect(styles).toContain('numFmtId="164"');
   });
 

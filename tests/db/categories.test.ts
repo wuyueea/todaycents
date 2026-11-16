@@ -142,8 +142,8 @@ describe('seedDefaults content', () => {
     const db = await createTestDb();
     await seedDefaults(db);
 
-    // The template table and its repository remain for a future feature, but
-    // nothing seeds the retired day grid any more.
+    // The table remains for imported legacy data, not for a future grid.
+    // A new ledger must not invent template rows.
     expect(await db.all('SELECT id FROM template')).toEqual([]);
   });
 });

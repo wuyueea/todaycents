@@ -5,8 +5,8 @@
  * numbers and the numbers on screen cannot disagree. The detail sheet is every
  * live row of the period, including income, transfers and adjustments: a
  * "流水明细" that silently dropped rows would be a different document. Money
- * stays integer cents; the yuan column is a decimal string produced by
- * formatCents, never a division, and the cents column is an integer.
+ * stays integer cents. Yuan literals/cached results come from formatCents;
+ * summary formulas sum cents first and convert only for display.
  */
 import type { Db } from '../db/driver';
 import { isMonthKey } from '../domain/date';
@@ -16,7 +16,7 @@ import { listTxnsByMonth } from '../db/repos/txns';
 import type { TxnRow } from '../db/repos/txns';
 import { monthReport, yearReport } from '../db/repos/reports';
 import type { ReportCategory } from '../db/repos/reports';
-import { buildXlsx, moneyLiteral } from './xlsx';
+import { buildXlsx, formulaCell, moneyLiteral, numberLiteral } from './xlsx';
 import type { XlsxCellValue } from './xlsx';
 import { XLSX_MIME_TYPE } from './writer';
 import type { BinaryFileWriter } from './writer';
@@ -47,8 +47,8 @@ export interface ReportExportResult {
   detailRows: number;
 }
 
-const DETAIL_WIDTHS = [12, 12, 12, 12, 12, 16, 18, 32] as const;
-const SUMMARY_WIDTHS = [18, 14, 14] as const;
+const DETAIL_WIDTHS = [14, 18, 18, 22, 18, 22, 26, 44] as const;
+const SUMMARY_WIDTHS = [28, 20, 20] as const;
 const TAG_BATCH_SIZE = 400;
 
 function pad2(value: number): string {
@@ -114,12 +114,19 @@ function summaryRows(
 ): XlsxCellValue[][] {
   return [
     ['分类', '金额（元）', '金额（分）'],
-    ...categories.map(category => [
+    ...categories.map((category, index) => [
       category.name,
-      moneyLiteral(formatCents(category.cents)),
+      formulaCell(`ROUND(C${index + 2}/100,2)`, moneyLiteral(formatCents(category.cents))),
       category.cents,
     ]),
-    ['总计', moneyLiteral(formatCents(expenseCents)), expenseCents],
+    [
+      '总计',
+      formulaCell(`ROUND(C${categories.length + 2}/100,2)`, moneyLiteral(formatCents(expenseCents))),
+      formulaCell(
+        categories.length === 0 ? '0' : `SUM(C2:C${categories.length + 1})`,
+        numberLiteral(String(expenseCents))
+      ),
+    ],
   ];
 }
 
@@ -164,12 +171,14 @@ export function buildReportWorkbook(input: ReportWorkbookInput): Uint8Array {
       rows: detail,
       columnWidths: DETAIL_WIDTHS,
       freezeHeader: true,
+      reportStyle: { wrapColumns: [3, 4, 5, 6, 7] },
     },
     {
       name: '汇总',
       rows: summaryRows(input.categories, input.expenseCents),
       columnWidths: SUMMARY_WIDTHS,
       freezeHeader: true,
+      reportStyle: { wrapColumns: [0], totalRow: input.categories.length + 2 },
     },
   ]);
 }

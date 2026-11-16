@@ -55,7 +55,7 @@ export interface CreateExpenseInput {
   amountCents: number;
   categoryId: string | null;
   note?: string;
-  /** Retained slot this row came from, when submitDay wrote it. */
+  /** Legacy day-grid source. Retained for old transactions and backup compatibility. */
   slotKey?: string;
 }
 
@@ -115,8 +115,8 @@ export function assertTxnDate(date: string): void {
 
 /**
  * The date guard for every row written into txn: a real calendar day that has
- * already happened. Transfers use it for both legs and submitDay uses it for
- * the whole evening, so no path can book tomorrow from the repository layer.
+ * already happened. Transfers use it for both legs, so no path can book
+ * tomorrow from the repository layer.
  *
  * `todayISO` is a test seam; production leaves it to todayLocalISO().
  */
@@ -345,25 +345,34 @@ export async function updateTxn(db: Db, id: string, patch: UpdateTxnPatch): Prom
 /**
  * Soft-deletes one row. The row is never physically removed, and the first
  * deletion timestamp is kept, so calling this twice is a no-op rather than a
- * rewrite. No transaction: it is one statement.
+ * rewrite. Existence, the transfer guard and the update share one transaction;
+ * a missing id or an update that affects no row must not report success.
  *
  * A live transfer leg is rejected: deleting one side would move money out of
  * thin air, and a transfer must be removed through deleteTransfer so both
  * legs go together.
  */
 export async function softDeleteTxn(db: Db, id: string): Promise<void> {
-  const row = await db.get<{ direction: Direction }>(
-    'SELECT direction FROM txn WHERE id = ? AND deleted_at IS NULL',
-    [id]
-  );
-  if (row?.direction === 'transfer') {
-    throw new Error('softDeleteTxn cannot delete a transfer leg; use deleteTransfer for the whole group');
-  }
+  await db.transaction(async (tx) => {
+    const row = await tx.get<{ direction: Direction; deleted_at: string | null }>(
+      'SELECT direction, deleted_at FROM txn WHERE id = ?',
+      [id]
+    );
+    if (row === undefined) throw new Error('流水不存在，请刷新后重试。');
+    if (row.deleted_at !== null) return;
+    if (row.direction === 'transfer') {
+      throw new Error('softDeleteTxn cannot delete a transfer leg; use deleteTransfer for the whole group');
+    }
 
-  await db.run('UPDATE txn SET deleted_at = COALESCE(deleted_at, ?) WHERE id = ?', [
-    new Date().toISOString(),
-    id,
-  ]);
+    await tx.run('UPDATE txn SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL', [
+      new Date().toISOString(),
+      id,
+    ]);
+    // Db.run deliberately has no return value. Read the affected count on
+    // this transaction's connection before another write can replace it.
+    const changed = await tx.get<{ n: number }>('SELECT changes() AS n');
+    if (changed?.n !== 1) throw new Error('删除流水失败，记录未更新，请重试。');
+  });
 }
 
 const TXN_COLUMNS = `t.id, t.occurred_date, t.account_id, a.name AS account_name,

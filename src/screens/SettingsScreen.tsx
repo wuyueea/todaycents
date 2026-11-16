@@ -225,9 +225,9 @@ export default function SettingsScreen() {
         <h1>设置</h1>
       </header>
 
-      <section className="settings-group" aria-labelledby="settings-structure">
-        <h2 className="settings-group__title" id="settings-structure">
-          结构
+      <section className="settings-group" aria-labelledby="settings-accounts">
+        <h2 className="settings-group__title" id="settings-accounts">
+          账户管理
         </h2>
         <div className="settings-card">
           <Link className="settings-row" to="/accounts">
@@ -236,6 +236,14 @@ export default function SettingsScreen() {
               ›
             </span>
           </Link>
+        </div>
+      </section>
+
+      <section className="settings-group" aria-labelledby="settings-organize">
+        <h2 className="settings-group__title" id="settings-organize">
+          记账整理
+        </h2>
+        <div className="settings-card">
           <Link className="settings-row" to="/settings/categories">
             <span className="settings-row__title">分类</span>
             <span className="settings-row__chev" aria-hidden="true">
@@ -248,14 +256,6 @@ export default function SettingsScreen() {
               ›
             </span>
           </Link>
-        </div>
-      </section>
-
-      <section className="settings-group" aria-labelledby="settings-ledger">
-        <h2 className="settings-group__title" id="settings-ledger">
-          账本
-        </h2>
-        <div className="settings-card">
           <Link className="settings-row" to="/settings/projects">
             <span className="settings-row__title">项目</span>
             <span className="settings-row__chev" aria-hidden="true">
@@ -278,16 +278,21 @@ export default function SettingsScreen() {
 
       <section className="settings-group" aria-labelledby="settings-data">
         <h2 className="settings-group__title" id="settings-data">
-          数据
+          数据与备份
         </h2>
         <div className="settings-card">
-          <StorageRow />
           <Link className="settings-row" to="/settings/backup">
             <span className="settings-row__title">备份与恢复</span>
             <span className="settings-row__chev" aria-hidden="true">
               ›
             </span>
           </Link>
+          <StorageRow />
+        </div>
+      </section>
+
+      <section className="settings-group settings-reset" aria-label="清除数据">
+        <div className="settings-card">
           {/*
             Danger as text only, no red fill: the row reads like every other
             row until the sheet asks a second time.
@@ -296,11 +301,14 @@ export default function SettingsScreen() {
             className="settings-row settings-row--danger"
             type="button"
             onClick={openReset}
-            disabled={busy}
+            // Keep the trigger focused while counts load, so the sheet can
+            // restore focus after cancel. openReset already guards busy calls.
+            aria-disabled={busy || undefined}
           >
             <span className="settings-row__title">清除所有数据</span>
           </button>
         </div>
+        <p className="settings-reset__note">清除前会先备份，清除后不可撤销。</p>
       </section>
 
       {resetError !== null && (

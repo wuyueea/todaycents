@@ -111,12 +111,10 @@ public class FolderPlugin extends Plugin {
             return;
         }
 
-        boolean launched = ((MainActivity) getActivity()).requestStorageAccess(
-            () -> call.resolve(accessJson())
+        ((MainActivity) getActivity()).requestStorageAccess(
+            () -> call.resolve(accessJson()),
+            call::reject
         );
-        if (!launched) {
-            call.reject("打不开系统的权限设置。");
-        }
     }
 
     /**

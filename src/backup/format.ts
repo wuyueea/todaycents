@@ -177,7 +177,7 @@ export function exportToast(result: {
     return `已保存到「${result.folderName}」 · ${result.fileName} · ${size}`;
   }
   return result.recorded === true
-    ? `已记下这次备份 · 「${result.fileName}」 · ${size}`
+    ? `已按你的确认记下这次备份 · 「${result.fileName}」 · ${size}`
     : `已导出「${result.fileName}」 · ${size}`;
 }
 

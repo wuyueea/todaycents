@@ -332,6 +332,10 @@ describe('isShareCanceled', () => {
 });
 
 describe('createCachedBackupStore', () => {
+  const unusedWrites = {
+    writeFile: async () => { throw new Error('unexpected write'); },
+    deleteFile: async () => { throw new Error('unexpected delete'); },
+  };
   const files: CachedFileInfo[] = [
     {
       name: 'old.ledger',
@@ -386,6 +390,7 @@ describe('createCachedBackupStore', () => {
 
   it('lists only .ledger files, newest first, with the fields the sheet draws', async () => {
     const store = createCachedBackupStore({
+      ...unusedWrites,
       isNativePlatform: async () => true,
       listFiles: async () => files,
       share: async () => 'shared',
@@ -410,6 +415,7 @@ describe('createCachedBackupStore', () => {
   it('returns nothing off-device without touching the filesystem', async () => {
     let listed = false;
     const store = createCachedBackupStore({
+      ...unusedWrites,
       isNativePlatform: async () => false,
       listFiles: async () => {
         listed = true;
@@ -425,6 +431,7 @@ describe('createCachedBackupStore', () => {
   it('hands the chosen cache file to the share sheet', async () => {
     const calls: { fileName: string; uri: string }[] = [];
     const store = createCachedBackupStore({
+      ...unusedWrites,
       isNativePlatform: async () => true,
       listFiles: async () => files,
       share: async (fileName, uri) => {

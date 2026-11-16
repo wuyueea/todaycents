@@ -205,8 +205,8 @@ export interface ReconcileAccountResult {
  * displays, and the delta is computed here rather than in a component. A zero
  * delta writes nothing and is reported so the screen can say the balance
  * already matches. Anything else becomes one dated 'adjust' row with the
- * standard 对账差额 note. No transaction is opened: recordAdjustment is a
- * single INSERT, and a caller that needs more than that one row wraps this.
+ * standard 对账差额 note. Read and write share a transaction so SerialDb
+ * orders the whole calculation against other saves and reconciliations.
  */
 export async function reconcileAccountBalance(
   db: Db,
@@ -224,17 +224,19 @@ export async function reconcileAccountBalance(
     );
   }
 
-  const currentCents = await accountBalance(db, input.accountId);
-  const deltaCents = input.actualBalanceCents - currentCents;
-  if (deltaCents === 0) return { deltaCents: 0, adjustmentId: null };
+  return db.transaction(async (tx) => {
+    const currentCents = await accountBalance(tx, input.accountId);
+    const deltaCents = input.actualBalanceCents - currentCents;
+    if (deltaCents === 0) return { deltaCents: 0, adjustmentId: null };
 
-  const adjustmentId = await recordAdjustment(db, {
-    date: input.date,
-    accountId: input.accountId,
-    deltaCents,
-    note: input.note ?? '对账差额',
+    const adjustmentId = await recordAdjustment(tx, {
+      date: input.date,
+      accountId: input.accountId,
+      deltaCents,
+      note: input.note ?? '对账差额',
+    });
+    return { deltaCents, adjustmentId };
   });
-  return { deltaCents, adjustmentId };
 }
 
 export async function accountBalance(db: Db, accountId: string): Promise<number> {

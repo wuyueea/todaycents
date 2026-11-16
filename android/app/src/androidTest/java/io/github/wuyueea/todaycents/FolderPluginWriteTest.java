@@ -299,6 +299,7 @@ public class FolderPluginWriteTest {
 
     @Test
     public void requestStorageAccessLaunchesSettingsAndRunsTheCallbackAfterReturning() throws Exception {
+        Assume.assumeTrue(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R);
         // Android kills the target process when MANAGE_EXTERNAL_STORAGE changes,
         // so requestAccess's denied branch cannot be exercised in-process. This
         // covers the activity-result plumbing that requestAccess uses instead.
@@ -320,12 +321,14 @@ public class FolderPluginWriteTest {
             };
             instrumentation.addMonitor(monitor);
 
-            scenario.onActivity(activity -> activity.requestStorageAccess(() -> callbackRan.set(true)));
+            final List<String> failures = new ArrayList<>();
+            scenario.onActivity(activity -> activity.requestStorageAccess(() -> callbackRan.set(true), failures::add));
             for (int i = 0; i < 40 && !callbackRan.get(); i++) {
                 SystemClock.sleep(50);
             }
 
             assertTrue("callback should run when the settings page returns", callbackRan.get());
+            assertTrue("request must not fail", failures.isEmpty());
             assertEquals("settings page should be intercepted once", 1, monitor.getHits());
             assertNotNull("settings intent was not started", launched[0]);
             assertEquals(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, launched[0].getAction());

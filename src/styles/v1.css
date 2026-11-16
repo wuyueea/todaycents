@@ -1751,6 +1751,17 @@ body {
   letter-spacing: 0.12em;
 }
 
+.settings-screen--v1 .settings-reset {
+  margin-top: 24px;
+}
+
+.settings-reset__note {
+  margin: 8px 14px 0;
+  color: var(--v1-t2);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
 .settings-card {
   overflow: hidden;
   border-radius: 20px;

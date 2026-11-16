@@ -131,7 +131,7 @@ describe('backup copy', () => {
         bytes: 46 * 1024,
         recorded: true,
       })
-    ).toBe('已记下这次备份 · 「记账本-20261023-1305.ledger」 · 46 KB');
+    ).toBe('已按你的确认记下这次备份 · 「记账本-20261023-1305.ledger」 · 46 KB');
   });
 
   it('states where the automatic before-copy will go before the owner confirms', () => {

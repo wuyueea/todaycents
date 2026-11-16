@@ -49,7 +49,7 @@ function downloadInBrowser(fileName: string, blob: Blob): void {
 }
 
 /** Writes UTF-8 text into the app cache and returns its file:// URI. */
-async function writeCacheFile(fileName: string, text: string): Promise<string> {
+async function writeNativeCacheFile(fileName: string, text: string): Promise<string> {
   const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
   const result = await Filesystem.writeFile({
     path: fileName,
@@ -226,7 +226,9 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
 const deviceWriters = createDeviceWriters({
   isNativePlatform,
   folder: deviceFolder,
-  writeCacheFile,
+  // Defer access until an action runs; the store is initialized below. All
+  // text cache writes share its queue with retention and cached-file sharing.
+  writeCacheFile: (fileName, text) => cachedBackups.write(fileName, text),
   writeCacheBytes,
   shareCacheFile,
   downloadInBrowser,
@@ -263,14 +265,30 @@ export interface CachedFileInfo {
 export interface CachedBackupPort {
   isNativePlatform(): Promise<boolean>;
   listFiles(): Promise<readonly CachedFileInfo[]>;
+  writeFile(fileName: string, text: string): Promise<string>;
+  /** Deletes a base name in Directory.Cache, never a caller-supplied URI. */
+  deleteFile(fileName: string): Promise<void>;
   share(fileName: string, uri: string): Promise<ShareOutcome>;
 }
 
 export interface CachedBackupStore {
-  /** Every .ledger in the cache, newest first. A browser has no native cache. */
+  /** Prunes old automatic copies, then lists remaining .ledger files newest first. */
   list(): Promise<CachedBackup[]>;
+  /** Writes first; best-effort retention can never turn a saved copy into failure. */
+  write(fileName: string, text: string): Promise<string>;
   /** Opens the share sheet for one of them; cancel is an outcome, not an error. */
   share(file: CachedBackup): Promise<ShareOutcome>;
+}
+
+export const AUTO_BEFORE_CACHE_LIMIT = 10;
+
+/** Only the app's automatic-copy names, including the old minute precision. */
+function isAutomaticBeforeCopy(name: string): boolean {
+  const match = /^记账本-(\d{4})(\d{2})(\d{2})-(?:[01]\d|2[0-3])[0-5]\d(?:[0-5]\d)?-before\.ledger$/.exec(name);
+  if (match === null) return false;
+  const date = new Date(`${match[1]}-${match[2]}-${match[3]}T12:00:00`);
+  return date.getFullYear() === Number(match[1]) &&
+    date.getMonth() + 1 === Number(match[2]) && date.getDate() === Number(match[3]);
 }
 
 /**
@@ -279,11 +297,19 @@ export interface CachedBackupStore {
  * a share that was never confirmed, so the screen has to make them reachable.
  */
 export function createCachedBackupStore(port: CachedBackupPort): CachedBackupStore {
-  return {
-    async list() {
-      if (!(await port.isNativePlatform())) return [];
-      const files = await port.listFiles();
-      return files
+  let tail: Promise<void> = Promise.resolve();
+  const sharedNames = new Set<string>();
+  let latestWrittenCopy: string | null = null;
+
+  function enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const result = tail.then(work);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  async function readFiles(): Promise<CachedBackup[]> {
+    const files = await port.listFiles();
+    return files
         .filter((file) => file.type === 'file' && file.name.endsWith('.ledger'))
         // FileInfo crosses the native bridge. An invalid size or mtime would
         // throw in fileSizeText/toISOString while the screen renders, so drop
@@ -301,11 +327,55 @@ export function createCachedBackupStore(port: CachedBackupPort): CachedBackupSto
           bytes: file.size,
           modifiedAt: file.mtime,
         }))
-        .sort((left, right) => right.modifiedAt - left.modifiedAt);
-    },
+        .sort((left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name));
+  }
 
-    async share(file) {
-      return port.share(file.name, file.uri);
+  async function prune(files: CachedBackup[]): Promise<CachedBackup[]> {
+    const copies = files.filter(file => isAutomaticBeforeCopy(file.name));
+    const keep = new Set(copies.slice(0, AUTO_BEFORE_CACHE_LIMIT).map(file => file.name));
+    for (const file of copies) {
+      if (sharedNames.has(file.name) || file.name === latestWrittenCopy) keep.add(file.name);
+    }
+    const removed = new Set<string>();
+    for (const file of copies) {
+      // Share requests can arrive while this pass awaits another deletion.
+      // Check the live protection set, not only the initial keep snapshot.
+      if (keep.has(file.name) || sharedNames.has(file.name)) continue;
+      try {
+        await port.deleteFile(file.name);
+        removed.add(file.name);
+      } catch {
+        // Keep failed deletions visible/recoverable; try again on a later pass.
+      }
+    }
+    return files.filter(file => !removed.has(file.name));
+  }
+
+  return {
+    list: () => enqueue(async () => {
+      if (!(await port.isNativePlatform())) return [];
+      return prune(await readFiles());
+    }),
+
+    write: (fileName, text) => enqueue(async () => {
+      const uri = await port.writeFile(fileName, text);
+      if (isAutomaticBeforeCopy(fileName)) latestWrittenCopy = fileName;
+      try {
+        await prune(await readFiles());
+      } catch {
+        // The new copy is already saved. A failed directory read must not
+        // block import/reset or misreport the successful write as a failure.
+      }
+      return uri;
+    }),
+
+    share(file) {
+      // A target app may read the URI after the chooser returns. Protect it
+      // for this app session, including ambiguous failures, rather than
+      // assuming that Share's result is a receipt or an end-of-read signal.
+      // Register at request time, before waiting behind an earlier prune.
+      if (isAutomaticBeforeCopy(file.name)) sharedNames.add(file.name);
+      return enqueue(() => port.share(file.name, file.uri));
     },
   };
 }
@@ -316,6 +386,11 @@ const nativeCachedBackupPort: CachedBackupPort = {
     const { Filesystem, Directory } = await import('@capacitor/filesystem');
     const result = await Filesystem.readdir({ path: '', directory: Directory.Cache });
     return result.files;
+  },
+  writeFile: writeNativeCacheFile,
+  async deleteFile(fileName) {
+    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    await Filesystem.deleteFile({ path: fileName, directory: Directory.Cache });
   },
   share: shareCacheFile,
 };

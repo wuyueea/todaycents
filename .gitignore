@@ -9,6 +9,7 @@ dist/
 .android/
 .pnpm-store/
 .pnpm-cache/
+.playwright-browsers/
 android/.kotlin/
 
 # Local secrets / signing / environment

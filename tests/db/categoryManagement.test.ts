@@ -14,7 +14,6 @@ import {
 import { readPurgeUndo, undoPurge } from '../../src/db/repos/purge';
 import { createAccount } from '../../src/db/repos/accounts';
 import { createExpense, softDeleteTxn } from '../../src/db/repos/txns';
-import { upsertTemplate } from '../../src/db/repos/templates';
 import { seedDefaults } from '../../src/db/seed';
 
 const SYSTEM_ID = 'uncategorized';
@@ -225,13 +224,11 @@ describe('category management: inspect before a purge', () => {
 
   it('counts a template as history even when no transaction points at the category', async () => {
     const { db, sport } = await managementFixture();
-    await upsertTemplate(db, {
-      slotKey: 'lunch',
-      label: '午餐',
-      categoryId: sport,
-      defaultAccountId: null,
-      defaultAmountCents: null,
-    });
+    // Legacy/imported data still protects the category after the grid API retires.
+    await db.run(
+      'INSERT INTO template(id, slot_key, label, category_id) VALUES (?, ?, ?, ?)',
+      ['legacy-lunch', 'lunch', '午餐', sport]
+    );
     await archiveCategory(db, sport);
 
     expect(await inspectCategoryPurge(db, sport)).toMatchObject({

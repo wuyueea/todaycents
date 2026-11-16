@@ -88,14 +88,27 @@ export async function createTransfer(db: Db, input: CreateTransferInput): Promis
 /**
  * Soft-deletes every live leg of the group. Rows are never removed, and the
  * first deletion timestamp is kept, so calling this twice is a no-op rather
- * than a rewrite. Only rows carrying this exact group id are touched.
+ * than a rewrite. A missing group is an error. Checking the affected count
+ * inside the transaction prevents a partially updated group from committing.
+ * Only rows carrying this exact group id are touched.
  */
 export async function deleteTransfer(db: Db, groupId: string): Promise<void> {
   await db.transaction(async (tx) => {
+    const rows = await tx.get<{ total: number; live: number }>(
+      `SELECT COUNT(*) AS total,
+         COUNT(CASE WHEN deleted_at IS NULL THEN 1 END) AS live
+       FROM txn WHERE transfer_group_id = ?`,
+      [groupId]
+    );
+    if (rows === undefined || rows.total === 0) throw new Error('转账不存在，请刷新后重试。');
+    if (rows.live === 0) return;
+
     await tx.run('UPDATE txn SET deleted_at = ? WHERE transfer_group_id = ? AND deleted_at IS NULL', [
       new Date().toISOString(),
       groupId,
     ]);
+    const changed = await tx.get<{ n: number }>('SELECT changes() AS n');
+    if (changed?.n !== rows.live) throw new Error('删除转账失败，转账记录未完整更新，请重试。');
   });
 }
 

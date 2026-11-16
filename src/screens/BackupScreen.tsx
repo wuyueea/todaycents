@@ -17,7 +17,7 @@ import {
 import { confirmImport, exportBackup, exportMetaAction, prepareImport } from '../backup/flow';
 import type { ExportResult, PreparedImport } from '../backup/flow';
 import { countTxnRows, readBackupMeta, recordBackupMeta } from '../backup/meta';
-import { cachedBackups, deviceFileWriter } from '../backup/device';
+import { AUTO_BEFORE_CACHE_LIMIT, cachedBackups, deviceFileWriter } from '../backup/device';
 import type { CachedBackup } from '../backup/device';
 import { deviceFolder } from '../storage/folder';
 import { Toast, useToast } from '../components/Toast';
@@ -201,6 +201,7 @@ export function ExportConfirmSheet({
 
       <p className="sheet__text">文件已经交给系统分享面板。它保存好了吗？</p>
       <p className="sheet__note">
+        应用无法确认目标应用是否已保存。请先在目标应用中确认文件已保存。
         只有确认保存过，才会更新「上次备份」。没有保存的话，文件还在应用缓存里，可以在下面另存。
       </p>
 
@@ -210,7 +211,7 @@ export function ExportConfirmSheet({
         onClick={onSaved}
         disabled={busy}
       >
-        已保存
+        已保存，记下这次备份
       </button>
       <button
         className="sheet__secondary"
@@ -249,6 +250,10 @@ export function CachedBackupList({
       <h2 className="backup-cache__title" id="backup-cache-title">
         应用缓存中的备份
       </h2>
+      <p className="backup-cache__note">
+        导入/清除前的自动副本保留最近 {AUTO_BEFORE_CACHE_LIMIT} 份，旧副本会自动清理；普通导出不会自动清理。
+        这次打开应用后另存过的自动副本会暂时保留，清理失败时也可能超过 {AUTO_BEFORE_CACHE_LIMIT} 份。
+      </p>
       <p className="backup-cache__note">
         这些文件只在应用缓存里，系统可能清理。要留住，请点「另存」；另存只是把文件救出去，不会更新「上次备份」。
       </p>
@@ -437,7 +442,7 @@ export default function BackupScreen() {
       if (outcome === 'canceled') {
         setNotice('已取消分享，文件还在应用缓存里。');
       } else {
-        showToast(`已把「${file.name}」交给分享面板`);
+        setNotice(`已把「${file.name}」交给分享面板，不代表已保存；请在目标应用中确认。没有更新「上次备份」。`);
       }
     } catch (reason) {
       setStatus(`分享失败：${reason instanceof Error ? reason.message : String(reason)}`);

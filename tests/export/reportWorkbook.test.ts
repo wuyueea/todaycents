@@ -3,8 +3,8 @@ import type { Db } from '../../src/db/driver';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
 import { createAccount, listAccounts } from '../../src/db/repos/accounts';
-import { listCategories } from '../../src/db/repos/categories';
-import { createExpense, createIncome } from '../../src/db/repos/txns';
+import { createCategory, listCategories } from '../../src/db/repos/categories';
+import { createExpense, createIncome, recordAdjustment, softDeleteTxn } from '../../src/db/repos/txns';
 import { createTransfer } from '../../src/db/repos/transfers';
 import { createTag, setTxnTags } from '../../src/db/repos/tags';
 import { createProject, setTxnProject } from '../../src/db/repos/projects';
@@ -134,15 +134,15 @@ describe('buildMonthWorkbook', () => {
       '<c r="A5" t="inlineStr"><is><t xml:space="preserve">2026-10-03</t></is></c>'
     );
     expect(detail).toContain('<c r="B5" s="1"><v>-12.34</v></c>');
-    expect(detail).toContain('<c r="C5"><v>-1234</v></c>');
-    expect(detail).toContain('<c r="D5" t="inlineStr"><is><t xml:space="preserve">饮食</t></is></c>');
-    expect(detail).toContain('<c r="E5" t="inlineStr"><is><t xml:space="preserve">饭卡</t></is></c>');
-    expect(detail).toContain('<c r="F5" t="inlineStr"><is><t xml:space="preserve">杭州行</t></is></c>');
+    expect(detail).toContain('<c r="C5" s="2"><v>-1234</v></c>');
+    expect(detail).toContain('<c r="D5" s="3" t="inlineStr"><is><t xml:space="preserve">饮食</t></is></c>');
+    expect(detail).toContain('<c r="E5" s="3" t="inlineStr"><is><t xml:space="preserve">饭卡</t></is></c>');
+    expect(detail).toContain('<c r="F5" s="3" t="inlineStr"><is><t xml:space="preserve">杭州行</t></is></c>');
     expect(detail).toContain(
-      '<c r="G5" t="inlineStr"><is><t xml:space="preserve">旅行、日常</t></is></c>'
+      '<c r="G5" s="3" t="inlineStr"><is><t xml:space="preserve">旅行、日常</t></is></c>'
     );
     expect(detail).toContain(
-      '<c r="H5" t="inlineStr"><is><t xml:space="preserve">午饭 &amp; &quot;汤&quot;</t></is></c>'
+      '<c r="H5" s="3" t="inlineStr"><is><t xml:space="preserve">午饭 &amp; &quot;汤&quot;</t></is></c>'
     );
 
     // Income and both transfer legs are detail rows, not spending. The two
@@ -154,18 +154,18 @@ describe('buildMonthWorkbook', () => {
 
     const summary = summarySheet(workbook.bytes);
     expect(summary).toContain(
-      '<c r="A1" t="inlineStr"><is><t xml:space="preserve">分类</t></is></c>'
+      '<c r="A1" s="4" t="inlineStr"><is><t xml:space="preserve">分类</t></is></c>'
     );
     expect(summary).toContain(
-      '<c r="A2" t="inlineStr"><is><t xml:space="preserve">饮食</t></is></c>'
+      '<c r="A2" s="3" t="inlineStr"><is><t xml:space="preserve">饮食</t></is></c>'
     );
-    expect(summary).toContain('<c r="B2" s="1"><v>12.34</v></c>');
-    expect(summary).toContain('<c r="C2"><v>1234</v></c>');
+    expect(summary).toContain('<c r="B2" s="1"><f>ROUND(C2/100,2)</f><v>12.34</v></c>');
+    expect(summary).toContain('<c r="C2" s="2"><v>1234</v></c>');
     expect(summary).toContain(
-      '<c r="A3" t="inlineStr"><is><t xml:space="preserve">总计</t></is></c>'
+      '<c r="A3" s="5" t="inlineStr"><is><t xml:space="preserve">总计</t></is></c>'
     );
-    expect(summary).toContain('<c r="B3" s="1"><v>12.34</v></c>');
-    expect(summary).toContain('<c r="C3"><v>1234</v></c>');
+    expect(summary).toContain('<c r="B3" s="6"><f>ROUND(C3/100,2)</f><v>12.34</v></c>');
+    expect(summary).toContain('<c r="C3" s="7"><f>SUM(C2:C2)</f><v>1234</v></c>');
     expect(summary).not.toContain('50.00');
     expect(summary).not.toContain('20.00');
   });
@@ -182,7 +182,7 @@ describe('buildMonthWorkbook', () => {
 
     const detail = detailSheet((await buildMonthWorkbook(db, '2026-10')).bytes);
     expect(detail).toContain('<c r="B2" s="1"><v>12.34</v></c>');
-    expect(detail).toContain('<c r="C2"><v>1234</v></c>');
+    expect(detail).toContain('<c r="C2" s="2"><v>1234</v></c>');
     expect(detail).not.toContain('12.340000000000001');
   });
 
@@ -204,8 +204,8 @@ describe('buildMonthWorkbook', () => {
     });
 
     const summary = summarySheet((await buildMonthWorkbook(db, '2026-10')).bytes);
-    expect(summary).toContain('<c r="B3" s="1"><v>0.30</v></c>');
-    expect(summary).toContain('<c r="C3"><v>30</v></c>');
+    expect(summary).toContain('<c r="B3" s="6"><f>ROUND(C3/100,2)</f><v>0.30</v></c>');
+    expect(summary).toContain('<c r="C3" s="7"><f>SUM(C2:C2)</f><v>30</v></c>');
     expect(summary).not.toContain('0.30000000000000004');
   });
 
@@ -220,8 +220,8 @@ describe('buildMonthWorkbook', () => {
     expect(detail.match(/<row /g)).toHaveLength(1);
 
     const summary = summarySheet(workbook.bytes);
-    expect(summary).toContain('<c r="B2" s="1"><v>0.00</v></c>');
-    expect(summary).toContain('<c r="C2"><v>0</v></c>');
+    expect(summary).toContain('<c r="B2" s="6"><f>ROUND(C2/100,2)</f><v>0.00</v></c>');
+    expect(summary).toContain('<c r="C2" s="7"><f>0</f><v>0</v></c>');
   });
 
   it('is byte-for-byte deterministic for the same month', async () => {
@@ -248,6 +248,56 @@ describe('buildMonthWorkbook', () => {
 });
 
 describe('buildReportWorkbook', () => {
+  it.each(['month', 'year'] as const)('keeps %s formulas limited to category spending with exact cents and cached results', async period => {
+    const db = await seededDb();
+    const card = await account(db, '饭卡');
+    const wechat = await account(db, '微信');
+    const food = await category(db, '饮食');
+    const home = await category(db, '居住');
+    const child = await createCategory(db, { name: '早餐', kind: 'expense', parentId: food.id });
+    const note = '=SUM(C2:C999)\n' + '合成的长备注'.repeat(12);
+    for (const [amountCents, categoryId] of [[10, child], [20, food.id], [40, home.id]] as const) {
+      await createExpense(db, { date: '2026-10-01', accountId: card.id, amountCents, categoryId, note });
+    }
+    await createIncome(db, { date: '2026-10-01', accountId: card.id, amountCents: 8000, categoryId: null });
+    await createTransfer(db, { date: '2026-10-01', fromAccountId: card.id, toAccountId: wechat.id, amountCents: 4000 });
+    await recordAdjustment(db, { date: '2026-10-01', accountId: card.id, deltaCents: -100 });
+    const deleted = await createExpense(db, { date: '2026-10-01', accountId: card.id, amountCents: 9000, categoryId: food.id });
+    await softDeleteTxn(db, deleted);
+    const result = period === 'month' ? await buildMonthWorkbook(db, '2026-10') : await buildYearWorkbook(db, 2026);
+    expect(result.detailRows).toBe(7);
+    expect(result.summaryRows).toBe(3);
+    const detail = detailSheet(result.bytes);
+    expect(detail).not.toContain('<f>');
+    expect(detail).toContain('=SUM(C2:C999)');
+    expect(detail).toContain('调整');
+    expect(detail.match(/转账/g)).toHaveLength(2);
+    expect(detail).not.toContain('<v>-9000</v>');
+    expect(detail).toContain('width="44"');
+    expect(detail).toContain('topLeftCell="A2"');
+    expect(detail).not.toContain('>总计<');
+    const summary = summarySheet(result.bytes);
+    expect(summary).toContain('<c r="C2" s="2"><v>40</v></c>');
+    expect(summary).toContain('<c r="C3" s="2"><v>30</v></c>');
+    expect(summary).toContain('<c r="B4" s="6"><f>ROUND(C4/100,2)</f><v>0.70</v></c>');
+    expect(summary).toContain('<c r="C4" s="7"><f>SUM(C2:C3)</f><v>70</v></c>');
+    expect(summary.match(/<f>/g)).toHaveLength(4);
+    expect(summary).toContain('topLeftCell="A2"');
+    expect(summary).not.toContain('早餐');
+  });
+
+  it('exports an income-only period with a zero expense formula and no circular empty range', async () => {
+    const db = await seededDb();
+    const card = await account(db, '饭卡');
+    await createIncome(db, { date: '2026-10-01', accountId: card.id, amountCents: 5000, categoryId: null });
+    const workbook = await buildMonthWorkbook(db, '2026-10');
+    expect(workbook.detailRows).toBe(1);
+    const summary = summarySheet(workbook.bytes);
+    expect(summary).toContain('<f>0</f><v>0</v>');
+    expect(summary).toContain('<f>ROUND(C2/100,2)</f><v>0.00</v>');
+    expect(summary).not.toContain('SUM(');
+  });
+
   it('refuses a summary whose detail rows do not add up to it', () => {
     const expense: TxnRow = {
       id: 't-one',
@@ -307,10 +357,10 @@ describe('buildYearWorkbook', () => {
     expect(detail).toContain('2026-09-20');
 
     const summary = summarySheet(workbook.bytes);
-    expect(summary).toContain('<c r="B2" s="1"><v>62.34</v></c>');
-    expect(summary).toContain('<c r="C2"><v>6234</v></c>');
-    expect(summary).toContain('<c r="B3" s="1"><v>62.34</v></c>');
-    expect(summary).toContain('<c r="C3"><v>6234</v></c>');
+    expect(summary).toContain('<c r="B2" s="1"><f>ROUND(C2/100,2)</f><v>62.34</v></c>');
+    expect(summary).toContain('<c r="C2" s="2"><v>6234</v></c>');
+    expect(summary).toContain('<c r="B3" s="6"><f>ROUND(C3/100,2)</f><v>62.34</v></c>');
+    expect(summary).toContain('<c r="C3" s="7"><f>SUM(C2:C2)</f><v>6234</v></c>');
   });
 
   it('rejects a year that is not four digits', async () => {

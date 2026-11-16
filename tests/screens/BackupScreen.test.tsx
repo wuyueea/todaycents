@@ -159,6 +159,7 @@ describe('ExportConfirmSheet', () => {
     expect(html).toContain('46 KB');
     expect(html).toContain('它保存好了吗？');
     expect(html).toContain('只有确认保存过，才会更新「上次备份」');
+    expect(html).toContain('应用无法确认目标应用是否已保存');
     expect(html).toContain('已保存');
     expect(html).toContain('没有保存');
     expect(html).toContain('sheet__primary');
@@ -184,6 +185,8 @@ describe('CachedBackupList', () => {
 
     expect(html).toContain('应用缓存中的备份');
     expect(html).toContain('系统可能清理');
+    expect(html).toContain('自动副本保留最近 10 份');
+    expect(html).toContain('普通导出不会自动清理');
     expect(html).toContain('另存只是把文件救出去，不会更新「上次备份」');
     expect(html).toContain('记账本-20261023-1255.ledger');
     expect(html).toContain('46 KB');

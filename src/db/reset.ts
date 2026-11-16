@@ -19,6 +19,8 @@
  * Nothing here formats money or knows about files; the backup/factory-reset
  * flow in src/backup/flow.ts owns the safety copy, and backup/format.ts owns
  * the copy the sheet and the toast show.
+ * The retired day-grid's template rows are retained on ordinary upgrades,
+ * but an explicit full reset must still clear any imported legacy templates.
  */
 import type { Db } from './driver';
 import { seedInto } from './seed';

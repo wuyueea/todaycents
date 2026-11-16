@@ -4,12 +4,14 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "build:android": "pnpm build && cap sync android && cd android && gradlew.bat assembleDebug",
-    "build:android:release": "pnpm build && cap sync android && cd android && gradlew.bat assembleRelease"
+    "dev": "node --require ./scripts/dsh-vite-shim.cjs ./node_modules/vite/bin/vite.js",
+    "build": "tsc -b && node --require ./scripts/dsh-vite-shim.cjs ./node_modules/vite/bin/vite.js build",
+    "test": "node --require ./scripts/dsh-vite-shim.cjs ./node_modules/vitest/vitest.mjs run",
+    "test:watch": "node --require ./scripts/dsh-vite-shim.cjs ./node_modules/vitest/vitest.mjs",
+    "build:android": "pnpm build && cap sync android && node scripts/run-gradle.mjs assembleDebug",
+    "build:android:release": "pnpm build && cap sync android && node scripts/run-gradle.mjs assembleRelease",
+    "test:e2e": "node --require ./scripts/dsh-vite-shim.cjs scripts/run-playwright.mjs test",
+    "test:e2e:install": "node --require ./scripts/dsh-vite-shim.cjs scripts/run-playwright.mjs install chromium"
   },
   "dependencies": {
     "@capacitor-community/sqlite": "^8.1.1",
@@ -29,6 +31,7 @@
     "jsdom": "^31.0.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "@playwright/test": "1.65.1"
   }
 }

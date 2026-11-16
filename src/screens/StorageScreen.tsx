@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { deviceFolder, folderLabel } from '../storage/folder';
+import { requestStorageAccess, withStorageTimeout } from '../storage/access';
 import type { FolderAccess, FolderListing, StoredFolder } from '../storage/folder';
 
 /**
@@ -343,11 +344,7 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
     setNote(null);
     setError(null);
     try {
-      let state = await folder.getAccess();
-      if (!state.granted) {
-        await folder.requestAccess();
-        state = await folder.getAccess();
-      }
+      const state = await requestStorageAccess(folder);
       if (!state.granted) {
         setAccessReason(state.reason ?? null);
         setAccess('denied');
@@ -356,7 +353,7 @@ export default function StorageScreen({ folder = deviceFolder }: StorageScreenPr
       }
       setAccessReason(null);
       setAccess('granted');
-      setStored(await folder.current());
+      setStored(await withStorageTimeout(() => folder.current(), '读取存储目录超时，请重试。'));
     } catch (reason) {
       setError(`打开失败：${reasonText(reason)}`);
     } finally {

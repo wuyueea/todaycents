@@ -63,41 +63,23 @@ describe('SettingsScreen', () => {
     expect(html).not.toContain('条待确认');
   });
 
-  it('keeps the three groups and their links, in order', () => {
+  it('groups the approved B entries and keeps reset separate', () => {
     const html = renderSettings();
-
-    // The three groups, and which page opens each one.
-    for (const [group, firstLink] of [
-      ['结构', 'href="/accounts"'],
-      ['账本', 'href="/settings/projects"'],
-      ['数据', 'href="/settings/storage"'],
-    ] as const) {
-      expect(html.indexOf(group)).toBeLessThan(html.indexOf(firstLink));
-    }
-
-    // 结构: 账户 · 分类 · 标签
-    expect(html.indexOf('href="/accounts"')).toBeLessThan(
-      html.indexOf('href="/settings/categories"')
-    );
-    expect(html.indexOf('href="/settings/categories"')).toBeLessThan(
-      html.indexOf('href="/settings/tags"')
-    );
-
-    // 账本: 项目 · 固定支出
-    expect(html.indexOf('href="/settings/projects"')).toBeLessThan(
-      html.indexOf('href="/settings/fixed"')
-    );
-
-    // 数据: 存储 · 备份与恢复 · 清除所有数据
-    expect(html.indexOf('href="/settings/storage"')).toBeLessThan(
-      html.indexOf('href="/settings/backup"')
-    );
-    expect(html.indexOf('href="/settings/backup"')).toBeLessThan(
-      html.indexOf('settings-row--danger')
-    );
-
-    // 备份与恢复 moved out of 账本: it is below the 数据 heading now.
-    expect(html.indexOf('数据')).toBeLessThan(html.indexOf('href="/settings/backup"'));
+    const sections = [...html.matchAll(/<section\b[^>]*>[\s\S]*?<\/section>/g)].map(match => match[0]);
+    expect(sections).toHaveLength(4);
+    const expected = [
+      ['账户管理', ['/accounts']],
+      ['记账整理', ['/settings/categories', '/settings/tags', '/settings/projects', '/settings/fixed']],
+      ['数据与备份', ['/settings/backup', '/settings/storage']],
+    ] as const;
+    expected.forEach(([title, paths], index) => {
+      expect(sections[index]).toContain(`>${title}<`);
+      expect([...sections[index]!.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(paths);
+      expect(sections[index]).not.toContain('清除所有数据');
+    });
+    expect(sections[3]).toContain('settings-row--danger');
+    expect(sections[3]).toContain('清除前会先备份，清除后不可撤销。');
+    expect(sections[3]).not.toContain('href=');
   });
 
   it('has no back chevron and no report row: it is a tab, 报表 is another', () => {
@@ -183,7 +165,7 @@ describe('SettingsScreen', () => {
     expect(html).not.toContain('class="toast"');
   });
 });
-describe('数据 group', () => {
+describe('数据与备份 and reset', () => {
   it('holds 存储 above 清除所有数据, and both are names only', () => {
     const html = renderSettings();
 
@@ -195,7 +177,7 @@ describe('数据 group', () => {
     expect(html.indexOf('href="/settings/storage"')).toBeLessThan(
       html.indexOf('清除所有数据')
     );
-    // The group is below 结构 and 账本, and carries no second lines.
+    // Data follows account management and entry organization; storage stays name-only.
     expect(html.indexOf('数据')).toBeGreaterThan(html.indexOf('href="/settings/categories"'));
     expect(html.indexOf('数据')).toBeGreaterThan(html.indexOf('href="/settings/projects"'));
     expect(html).not.toContain('settings-row__value');

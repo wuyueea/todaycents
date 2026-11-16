@@ -8,3 +8,8 @@ nodeLinker: hoisted
 # Keep the content-addressable store inside the project, so installs work
 # even when the global store location is not writable.
 storeDir: .pnpm-store
+
+# pnpm's metadata cache also defaults to a location outside the workspace;
+# keep it local so installs do not need a sandbox escalation.
+# (stateDir cannot be set per-project in pnpm 11; it is only ~0 MB.)
+cacheDir: .pnpm-cache

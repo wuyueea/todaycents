@@ -5,6 +5,8 @@ import android.content.Intent;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.provider.Settings;
 
 import androidx.activity.OnBackPressedCallback;
@@ -14,31 +16,32 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeActivity;
 
+import java.util.UUID;
+import java.util.function.Consumer;
+
 /**
  * The shell. Besides the bridge it owns the one system trip the app needs:
  * the 「所有文件访问」 settings page on Android 11+, or the storage runtime
  * dialog on API 29 and below.
  *
- * The launcher lives on the activity, not in the plugin. Capacitor can also
- * start an activity for a plugin and call an annotated method back, but that
- * path runs through the bridge's own registry and reflection. The old folder
- * picker used it and never came back on the owner's device, leaving the JS
- * promise pending forever. A launcher registered on the activity is created
- * before the bridge exists and cannot be lost.
+ * Permission trips belong to the activity, not the bridge's reflection-based
+ * plugin launcher. Each trip has its own registry key, so a late result from
+ * an expired trip cannot complete a newer one. Destroying the activity rejects
+ * its old callers; a recreated WebView reads the actual permission afresh.
  */
 public class MainActivity extends BridgeActivity {
 
-    /** The plugin's callback; runs on the UI thread after the owner returns. */
-    private Runnable pendingAccess;
-
-    private final ActivityResultLauncher<Intent> accessSettings = registerForActivityResult(
-        new ActivityResultContracts.StartActivityForResult(),
-        result -> finishAccessRequest()
-    );
-
-    private final ActivityResultLauncher<String[]> accessPermission = registerForActivityResult(
-        new ActivityResultContracts.RequestMultiplePermissions(),
-        result -> finishAccessRequest()
+    private final Handler accessHandler = new Handler(Looper.getMainLooper());
+    private final String accessKeyPrefix = "todaycents-storage-" + UUID.randomUUID();
+    private final StorageAccessRequests accessRequests = new StorageAccessRequests(
+        this::launchStorageAccess,
+        (action, delay) -> {
+            if (!accessHandler.postDelayed(action, delay)) {
+                throw new IllegalStateException("Permission timer unavailable");
+            }
+            return () -> accessHandler.removeCallbacks(action);
+        },
+        120_000L
     );
 
     @Override
@@ -88,15 +91,24 @@ public class MainActivity extends BridgeActivity {
      * Opens the system page that holds the 「所有文件访问」 switch, or requests
      * READ/WRITE_EXTERNAL_STORAGE below Android 11.
      *
-     * Returns false when no activity can handle the request, so the plugin can
-     * reject immediately instead of waiting for a callback that never arrives.
-     * The callback fires only after the owner comes back; the plugin then reads
-     * the permission again and resolves the call with the fresh answer.
+     * Joins duplicate calls, rejects launch/timeout/destruction failures, and
+     * dispatches from Capacitor's plugin thread onto the UI thread. Completion
+     * only means "returned"; the plugin must read the real permission again.
      */
-    public boolean requestStorageAccess(Runnable after) {
-        pendingAccess = after;
+    public void requestStorageAccess(Runnable after, Consumer<String> failure) {
+        runOnUiThread(() -> {
+            if (isFinishing() || isDestroyed()) accessRequests.close();
+            accessRequests.request(after, failure);
+        });
+    }
 
+    private StorageAccessRequests.Cancellable launchStorageAccess(long requestId) {
+        String key = accessKeyPrefix + "-" + requestId;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            ActivityResultLauncher<Intent> launcher = getActivityResultRegistry().register(
+                key, new ActivityResultContracts.StartActivityForResult(),
+                result -> accessRequests.finish(requestId)
+            );
             Intent appPage = new Intent(
                 Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
                 Uri.parse("package:" + getPackageName())
@@ -104,35 +116,39 @@ public class MainActivity extends BridgeActivity {
             // No resolveActivity() gate: package visibility can hide a handler
             // that can still be started. Try, then fall back on failure.
             try {
-                accessSettings.launch(appPage);
-                return true;
-            } catch (Exception appPageError) {
-                Intent allApps = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
                 try {
-                    accessSettings.launch(allApps);
-                    return true;
-                } catch (Exception allAppsError) {
-                    pendingAccess = null;
-                    return false;
+                    launcher.launch(appPage);
+                } catch (RuntimeException appPageError) {
+                    launcher.launch(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
                 }
+                return launcher::unregister;
+            } catch (RuntimeException allAppsError) {
+                launcher.unregister();
+                throw allAppsError;
             }
         }
 
+        ActivityResultLauncher<String[]> launcher = getActivityResultRegistry().register(
+            key, new ActivityResultContracts.RequestMultiplePermissions(),
+            result -> accessRequests.finish(requestId)
+        );
         try {
-            accessPermission.launch(new String[] {
+            launcher.launch(new String[] {
                 Manifest.permission.READ_EXTERNAL_STORAGE,
                 Manifest.permission.WRITE_EXTERNAL_STORAGE
             });
-            return true;
-        } catch (Exception error) {
-            pendingAccess = null;
-            return false;
+            return launcher::unregister;
+        } catch (RuntimeException error) {
+            launcher.unregister();
+            throw error;
         }
     }
 
-    private void finishAccessRequest() {
-        Runnable callback = pendingAccess;
-        pendingAccess = null;
-        if (callback != null) callback.run();
+    @Override
+    public void onDestroy() {
+        // Settle calls while the old bridge still exists, before super tears
+        // down its WebView. No callbacks or timers survive this activity.
+        accessRequests.close();
+        super.onDestroy();
     }
 }

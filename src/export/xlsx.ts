@@ -27,8 +27,23 @@ export interface XlsxNumberLiteral {
 /** Style index 1 in styles.xml: the two-decimal money format. */
 const MONEY_STYLE = 1;
 
-/** A cell value: inline text, a JS number, or an exact numeric literal. */
-export type XlsxCellValue = string | number | XlsxNumberLiteral | null | undefined;
+/** Only program-generated report formulas use this explicit value type. */
+export interface XlsxFormula {
+  readonly formula: string;
+  readonly cached: XlsxNumberLiteral;
+}
+
+// Keep the supported formula language deliberately small; no links or user text.
+const REPORT_FORMULA = /^(?:0|SUM\([A-Z]{1,3}[1-9]\d*:[A-Z]{1,3}[1-9]\d*\)|ROUND\([A-Z]{1,3}[1-9]\d*\/100,2\))$/;
+
+export function formulaCell(formula: string, cached: XlsxNumberLiteral): XlsxFormula {
+  if (!REPORT_FORMULA.test(formula)) throw new RangeError('unsupported report formula');
+  numberLiteral(cached.numberText);
+  return { formula, cached };
+}
+
+/** A cell value: inline text, a number, or an explicit formula with its cache. */
+export type XlsxCellValue = string | number | XlsxNumberLiteral | XlsxFormula | null | undefined;
 
 /** One worksheet: a name, rows of cells, and optional presentation hints. */
 export interface XlsxSheet {
@@ -38,6 +53,8 @@ export interface XlsxSheet {
   columnWidths?: readonly number[];
   /** Freeze row 1 so the heading stays visible while scrolling. */
   freezeHeader?: boolean;
+  /** Report presentation; column indices are zero-based, totalRow is one-based. */
+  reportStyle?: { wrapColumns?: readonly number[]; totalRow?: number };
 }
 
 const EXACT_NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d{1,2})?$/;
@@ -109,20 +126,31 @@ function numberText(value: number): string {
   return Object.is(value, -0) ? '0' : String(value);
 }
 
-function cellXml(value: XlsxCellValue, reference: string): string {
+function isFormula(value: XlsxCellValue): value is XlsxFormula {
+  return typeof value === 'object' && value !== null && 'formula' in value;
+}
+
+function cellXml(value: XlsxCellValue, reference: string, overrideStyle?: number): string {
+  const numeric = isFormula(value) ? value.cached : value;
+  const defaultStyle = isNumberLiteral(numeric) && numeric.style === 'money' ? MONEY_STYLE : 0;
+  const styleIndex = overrideStyle ?? defaultStyle;
+  const style = styleIndex === 0 ? '' : ` s="${styleIndex}"`;
+  if (isFormula(value)) {
+    formulaCell(value.formula, value.cached);
+    return `<c r="${reference}"${style}><f>${xmlText(value.formula)}</f><v>${value.cached.numberText}</v></c>`;
+  }
   if (typeof value === 'string') {
-    return `<c r="${reference}" t="inlineStr"><is><t xml:space="preserve">${xmlText(
+    return `<c r="${reference}"${style} t="inlineStr"><is><t xml:space="preserve">${xmlText(
       value
     )}</t></is></c>`;
   }
   if (typeof value === 'number') {
-    return `<c r="${reference}"><v>${numberText(value)}</v></c>`;
+    return `<c r="${reference}"${style}><v>${numberText(value)}</v></c>`;
   }
   if (isNumberLiteral(value)) {
     // Revalidate at the boundary: an object can be produced by hand even
     // though numberLiteral is the documented constructor.
     numberLiteral(value.numberText);
-    const style = value.style === 'money' ? ` s="${MONEY_STYLE}"` : '';
     return `<c r="${reference}"${style}><v>${value.numberText}</v></c>`;
   }
   throw new TypeError(`unsupported cell value: ${String(value)}`);
@@ -163,11 +191,49 @@ function colsXml(widths: readonly number[] | undefined): string {
 function sheetXml(sheet: XlsxSheet): string {
   const rows = sheet.rows.map((row, rowIndex) => {
     const rowNumber = rowIndex + 1;
+    const presentation = sheet.reportStyle;
+    const header = presentation !== undefined && rowNumber === 1;
+    const total = presentation?.totalRow === rowNumber;
     const cells = row.map((value, columnIndex) => {
       if (value === null || value === undefined) return '';
-      return cellXml(value, `${columnName(columnIndex)}${rowNumber}`);
+      let style: number | undefined;
+      if (presentation !== undefined) {
+        const numeric = isFormula(value) ? value.cached : value;
+        const money = isNumberLiteral(numeric) && numeric.style === 'money';
+        const isNumeric = typeof numeric === 'number' || isNumberLiteral(numeric);
+        if (header) {
+          style = 4;
+        } else if (money) {
+          style = total ? 6 : MONEY_STYLE;
+        } else if (isNumeric) {
+          style = total ? 7 : 2;
+        } else if (total) {
+          style = 5;
+        } else {
+          style = presentation.wrapColumns?.includes(columnIndex) ? 3 : 0;
+        }
+      }
+      return cellXml(value, `${columnName(columnIndex)}${rowNumber}`, style);
     });
-    return `<row r="${rowNumber}">${cells.join('')}</row>`;
+    // Estimate a visible row height for wrapped text. Excel caps a row at 409pt;
+    // the full text remains in the cell even when it needs more than that.
+    let lines = 1;
+    for (const column of presentation?.wrapColumns ?? []) {
+      const value = row[column];
+      if (typeof value !== 'string') continue;
+      const width = Math.max(1, (sheet.columnWidths?.[column] ?? 12) - 2);
+      const wrapped = value.split(/\r\n|[\r\n]/).reduce((count, line) => {
+        const units = Array.from(line).reduce(
+          (sum, char) => sum + (/[^\x00-\xff]/.test(char) ? 2 : 1),
+          0
+        );
+        return count + Math.max(1, Math.ceil(units / width));
+      }, 0);
+      lines = Math.max(lines, wrapped);
+    }
+    const rowHeight = header ? 30 : Math.min(409, Math.max(24, lines * 16 + 8));
+    const height = presentation === undefined ? '' : ` ht="${rowHeight}" customHeight="1"`;
+    return `<row r="${rowNumber}"${height}>${cells.join('')}</row>`;
   });
 
   return (
@@ -223,7 +289,7 @@ function contentTypesXml(sheets: readonly XlsxSheet[]): string {
 }
 
 /**
- * The one style this writer needs: a money cell that shows two decimals.
+ * Shared number formats and the report's header/body/total styles.
  *
  * Excel demands the full five-part skeleton even when only one format is used —
  * without fills[gray125] some readers refuse the file, and a cellXfs entry must
@@ -233,15 +299,28 @@ function stylesXml(): string {
   return (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
     '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
-    '<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>' +
-    '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>' +
-    '<fills count="2"><fill><patternFill patternType="none"/></fill>' +
-    '<fill><patternFill patternType="gray125"/></fill></fills>' +
-    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>' +
+    '<numFmts count="2"><numFmt numFmtId="164" formatCode="#,##0.00;&quot;−&quot;#,##0.00;0.00"/>' +
+    '<numFmt numFmtId="165" formatCode="#,##0;&quot;−&quot;#,##0;0"/></numFmts>' +
+    '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>' +
+    '<font><b/><color rgb="FF653E23"/><sz val="11"/><name val="Calibri"/></font></fonts>' +
+    '<fills count="4"><fill><patternFill patternType="none"/></fill>' +
+    '<fill><patternFill patternType="gray125"/></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFF7DFC4"/><bgColor indexed="64"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF1DD"/><bgColor indexed="64"/></patternFill></fill></fills>' +
+    '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
+    '<border><left/><right/><top style="thin"><color rgb="FFD59860"/></top><bottom/><diagonal/></border></borders>' +
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
-    '<cellXfs count="2">' +
-    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
-    '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>' +
+    '<cellXfs count="8">' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top"/></xf>' +
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="top"/></xf>' +
+    '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="top"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="top" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+    [0, 164, 165].map(numFmt =>
+      `<xf numFmtId="${numFmt}" fontId="1" fillId="3" borderId="1" xfId="0" ` +
+      'applyFont="1" applyFill="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1">' +
+      `<alignment horizontal="${numFmt === 0 ? 'left' : 'right'}" vertical="top" wrapText="1"/></xf>`
+    ).join('') +
     '</cellXfs>' +
     // Excel and openpyxl both want the built-in Normal style declared; without
     // it a reader warns that the workbook has no default style.
@@ -270,7 +349,7 @@ function workbookXml(sheets: readonly XlsxSheet[]): string {
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' +
     '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" ' +
     'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
-    `<sheets>${sheetNodes}</sheets></workbook>`
+    `<sheets>${sheetNodes}</sheets><calcPr calcId="0" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>`
   );
 }
 
