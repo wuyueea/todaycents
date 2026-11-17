@@ -1,15 +1,13 @@
 package io.github.wuyueea.todaycents;
 
-import android.Manifest;
 import android.content.Intent;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.provider.Settings;
+import android.os.SystemClock;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.activity.result.ActivityResult;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 
@@ -19,25 +17,17 @@ import com.getcapacitor.BridgeActivity;
 import java.util.UUID;
 import java.util.function.Consumer;
 
-/**
- * The shell. Besides the bridge it owns the one system trip the app needs:
- * the 「所有文件访问」 settings page on Android 11+, or the storage runtime
- * dialog on API 29 and below.
- *
- * Permission trips belong to the activity, not the bridge's reflection-based
- * plugin launcher. Each trip has its own registry key, so a late result from
- * an expired trip cannot complete a newer one. Destroying the activity rejects
- * its old callers; a recreated WebView reads the actual permission afresh.
- */
+/** Android shell with an Activity-owned result round for the system folder picker. */
 public class MainActivity extends BridgeActivity {
 
     private final Handler accessHandler = new Handler(Looper.getMainLooper());
     private final String accessKeyPrefix = "todaycents-storage-" + UUID.randomUUID();
-    private final StorageAccessRequests accessRequests = new StorageAccessRequests(
+    private volatile boolean storageClosing;
+    private final StorageAccessRequests<ActivityResult> accessRequests = new StorageAccessRequests<>(
         this::launchStorageAccess,
         (action, delay) -> {
             if (!accessHandler.postDelayed(action, delay)) {
-                throw new IllegalStateException("Permission timer unavailable");
+                throw new IllegalStateException("Folder picker timer unavailable");
             }
             return () -> accessHandler.removeCallbacks(action);
         },
@@ -87,57 +77,26 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
-    /**
-     * Opens the system page that holds the 「所有文件访问」 switch, or requests
-     * READ/WRITE_EXTERNAL_STORAGE below Android 11.
-     *
-     * Joins duplicate calls, rejects launch/timeout/destruction failures, and
-     * dispatches from Capacitor's plugin thread onto the UI thread. Completion
-     * only means "returned"; the plugin must read the real permission again.
-     */
-    public void requestStorageAccess(Runnable after, Consumer<String> failure) {
+    public void requestStorageFolder(Consumer<ActivityResult> after, Consumer<String> failure) {
         runOnUiThread(() -> {
             if (isFinishing() || isDestroyed()) accessRequests.close();
             accessRequests.request(after, failure);
         });
     }
 
+    boolean canSaveStorageChoice(long deadline) {
+        return !storageClosing && SystemClock.elapsedRealtime() < deadline;
+    }
+
     private StorageAccessRequests.Cancellable launchStorageAccess(long requestId) {
         String key = accessKeyPrefix + "-" + requestId;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            ActivityResultLauncher<Intent> launcher = getActivityResultRegistry().register(
-                key, new ActivityResultContracts.StartActivityForResult(),
-                result -> accessRequests.finish(requestId)
-            );
-            Intent appPage = new Intent(
-                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
-                Uri.parse("package:" + getPackageName())
-            );
-            // No resolveActivity() gate: package visibility can hide a handler
-            // that can still be started. Try, then fall back on failure.
-            try {
-                try {
-                    launcher.launch(appPage);
-                } catch (RuntimeException appPageError) {
-                    launcher.launch(new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION));
-                }
-                return launcher::unregister;
-            } catch (RuntimeException allAppsError) {
-                launcher.unregister();
-                throw allAppsError;
-            }
-        }
-
-        ActivityResultLauncher<String[]> launcher = getActivityResultRegistry().register(
-            key, new ActivityResultContracts.RequestMultiplePermissions(),
-            result -> accessRequests.finish(requestId)
+        ActivityResultLauncher<Intent> launcher = getActivityResultRegistry().register(
+            key, new ActivityResultContracts.StartActivityForResult(),
+            result -> accessRequests.finish(requestId, result)
         );
         try {
-            launcher.launch(new String[] {
-                Manifest.permission.READ_EXTERNAL_STORAGE,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            });
-            return launcher::unregister;
+            launcher.launch(SafFolderStore.picker(this));
+            return () -> accessHandler.post(launcher::unregister);
         } catch (RuntimeException error) {
             launcher.unregister();
             throw error;
@@ -148,6 +107,7 @@ public class MainActivity extends BridgeActivity {
     public void onDestroy() {
         // Settle calls while the old bridge still exists, before super tears
         // down its WebView. No callbacks or timers survive this activity.
+        storageClosing = true;
         accessRequests.close();
         super.onDestroy();
     }

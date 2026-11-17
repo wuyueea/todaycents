@@ -32,7 +32,7 @@ import { countTxnRows } from './meta';
  * That is why the screen asks before recording a share as 上次备份.
  */
 export type ExportDestination =
-  | { kind: 'folder'; folderName: string }
+  | { kind: 'folder'; folderName: string; fileName?: string }
   | { kind: 'share' }
   | { kind: 'download' }
   | { kind: 'canceled' };
@@ -42,7 +42,7 @@ export type ExportDestination =
  * has no native filesystem; the app itself always gets a folder or the cache.
  */
 export type CopyDestination =
-  | { kind: 'folder'; folderName: string }
+  | { kind: 'folder'; folderName: string; fileName?: string }
   | { kind: 'cache'; uri: string }
   | { kind: 'none' };
 
@@ -109,7 +109,8 @@ export async function exportBackup(
   const bytes = utf8ByteLength(text);
   const meta: BackupMeta = { at: now.toISOString(), rows: file.counts.txn, bytes };
 
-  return { fileName, rows: meta.rows, bytes, meta, destination };
+  const savedName = destination.kind === 'folder' ? destination.fileName ?? fileName : fileName;
+  return { fileName: savedName, rows: meta.rows, bytes, meta, destination };
 }
 
 /** Everything the confirmation sheet needs, read before it opens. */
@@ -189,7 +190,7 @@ export async function confirmImport(
   return {
     fileName: prepared.fileName,
     rows: prepared.file.counts.txn,
-    beforeFileName,
+    beforeFileName: beforeDestination.kind === 'folder' ? beforeDestination.fileName ?? beforeFileName : beforeFileName,
     beforeDestination,
     clearedProjectRefs: restored.clearedProjectRefs,
   };
@@ -229,5 +230,6 @@ export async function resetWithBackup(
   const counts = await readResetCounts(db);
   await resetLedger(db);
 
-  return { beforeFileName, beforeDestination, counts };
+  const savedName = beforeDestination.kind === 'folder' ? beforeDestination.fileName ?? beforeFileName : beforeFileName;
+  return { beforeFileName: savedName, beforeDestination, counts };
 }

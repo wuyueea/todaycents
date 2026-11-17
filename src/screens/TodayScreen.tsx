@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { orderTransferLegs } from '../components/txnOrder';
+import { TxnDeleteRow } from '../components/TxnDelete';
 import { AmountText } from '../components/AmountText';
 import { ProjectMark, UncategorisedLabel, isUncategorised } from '../components/TxnMarks';
 import { useQuery } from '../store/useDb';
@@ -14,8 +15,7 @@ import { formatMonthDay, monthKeyOf, todayLocalISO } from '../domain/date';
  * The screen is deliberately not a dashboard: there is no month total, no
  * balance, no budget and no count. The rows share one white card, each row
  * carrying a rounded category mark, the category/note line and the signed
- * amount. A transfer leg is shown read-only, exactly as the ledger does,
- * because a single leg must never lead to updateTxn or softDeleteTxn.
+ * amount. A transfer leg has no editor and is deleted as part of the pair.
  */
 
 /** Everything the screen renders from, loaded as one snapshot. */
@@ -179,9 +179,9 @@ export default function TodayScreen() {
       ) : (
         <ul className="today-list">
           {rows.map(row => (
-            <li key={row.id}>
+            <TxnDeleteRow key={row.id} row={row} label={cardLabel(row)}>
               <TodayCard row={row} />
-            </li>
+            </TxnDeleteRow>
           ))}
         </ul>
       )}

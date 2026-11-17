@@ -53,11 +53,12 @@ export function importNoticeFromState(state: unknown): string | null {
   const imported = (state as { imported?: unknown }).imported;
   if (typeof imported !== 'object' || imported === null) return null;
 
-  const { fileName, rows, clearedProjectRefs, beforeDestination } = imported as {
+  const { fileName, rows, clearedProjectRefs, beforeDestination, beforeFileName } = imported as {
     fileName?: unknown;
     rows?: unknown;
     clearedProjectRefs?: unknown;
     beforeDestination?: unknown;
+    beforeFileName?: unknown;
   };
   if (typeof fileName !== 'string' || fileName.trim() === '') return null;
   if (typeof rows !== 'number' || !Number.isSafeInteger(rows) || rows < 0) return null;
@@ -75,6 +76,7 @@ export function importNoticeFromState(state: unknown): string | null {
     rows,
     clearedProjectRefs: cleared,
     beforeDestination: copyLocationFromState(beforeDestination),
+    beforeFileName: typeof beforeFileName === 'string' ? beforeFileName : undefined,
   });
 }
 
@@ -225,9 +227,9 @@ export default function SettingsScreen() {
         <h1>设置</h1>
       </header>
 
-      <section className="settings-group" aria-labelledby="settings-accounts">
-        <h2 className="settings-group__title" id="settings-accounts">
-          账户管理
+      <section className="settings-group" aria-labelledby="settings-management">
+        <h2 className="settings-group__title" id="settings-management">
+          记账管理
         </h2>
         <div className="settings-card">
           <Link className="settings-row" to="/accounts">
@@ -236,14 +238,6 @@ export default function SettingsScreen() {
               ›
             </span>
           </Link>
-        </div>
-      </section>
-
-      <section className="settings-group" aria-labelledby="settings-organize">
-        <h2 className="settings-group__title" id="settings-organize">
-          记账整理
-        </h2>
-        <div className="settings-card">
           <Link className="settings-row" to="/settings/categories">
             <span className="settings-row__title">分类</span>
             <span className="settings-row__chev" aria-hidden="true">

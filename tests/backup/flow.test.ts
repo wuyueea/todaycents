@@ -67,6 +67,13 @@ async function sourceBackupText(amountCents = 1230, note = 'source'): Promise<{ 
 }
 
 describe('exportBackup', () => {
+  it('reports the real folder filename when the system numbers a duplicate', async () => {
+    const db = await createTestDb();
+    const writer = memoryWriter();
+    writer.writeForShare = async () => ({ kind: 'folder', folderName: 'Books', fileName: '备份 (2).ledger' });
+    expect((await exportBackup(db, writer, NOW)).fileName).toBe('备份 (2).ledger');
+  });
+
   it('writes the same JSON it can parse back and reports where it went', async () => {
     const db = await createTestDb();
     await seedDefaults(db);

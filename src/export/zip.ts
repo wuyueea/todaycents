@@ -28,6 +28,20 @@ const DOS_TIME_MIDNIGHT = 0;
 /** The UTF-8 name flag; every name we write is UTF-8 by definition. */
 const FLAG_UTF8 = 0x0800;
 const VERSION = 20;
+const ZIP_END_SIGNATURE = 0x06054b50;
+export const ZIP_END_BYTES = 22;
+
+/** Detects a truncated app archive from its fixed-length, comment-free ZIP footer. */
+export function hasZipEnd(footer: Uint8Array, fileSize: number): boolean {
+  if (footer.length !== ZIP_END_BYTES) return false;
+  const view = new DataView(footer.buffer, footer.byteOffset, footer.byteLength);
+  const centralSize = view.getUint32(12, true);
+  const centralOffset = view.getUint32(16, true);
+  return view.getUint32(0, true) === ZIP_END_SIGNATURE &&
+    view.getUint16(20, true) === 0 &&
+    centralOffset > 0 && centralSize > 0 &&
+    centralOffset + centralSize + ZIP_END_BYTES === fileSize;
+}
 
 const CRC32_TABLE = new Uint32Array(256);
 for (let index = 0; index < 256; index += 1) {
@@ -109,8 +123,7 @@ export function storeZip(entries: readonly ZipEntryInput[]): Uint8Array {
     encoded.push({ nameBytes, data, crc: crc32(data), localOffset: 0 });
   }
 
-  const eocdSize = 22;
-  const totalSize = localSize + centralSize + eocdSize;
+  const totalSize = localSize + centralSize + ZIP_END_BYTES;
   if (totalSize > 0xffffffff) {
     throw new RangeError('ZIP is too large for the 32-bit format');
   }
@@ -164,7 +177,7 @@ export function storeZip(entries: readonly ZipEntryInput[]): Uint8Array {
     throw new Error('internal ZIP error: central directory size drifted');
   }
 
-  writeU32(view, offset, 0x06054b50);
+  writeU32(view, offset, ZIP_END_SIGNATURE);
   writeU16(view, offset + 4, 0); // this disk
   writeU16(view, offset + 6, 0); // disk with central directory
   writeU16(view, offset + 8, encoded.length);

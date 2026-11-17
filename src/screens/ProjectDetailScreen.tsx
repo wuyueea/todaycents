@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { TxnDeleteRow } from '../components/TxnDelete';
 import { AmountText } from '../components/AmountText';
 import { Sheet } from '../components/Sheet';
 import { CategoryBar } from '../components/CategoryBar';
@@ -280,16 +281,16 @@ export default function ProjectDetailScreen() {
 
     if (row.direction === 'transfer') {
       return (
-        <li key={row.id}>
+        <TxnDeleteRow key={row.id} row={row} label={title}>
           <div className="project-txn project-txn--readonly" data-txn-id={row.id}>
             {body}
           </div>
-        </li>
+        </TxnDeleteRow>
       );
     }
 
     return (
-      <li key={row.id}>
+      <TxnDeleteRow key={row.id} row={row} label={title}>
         <Link
           className="project-txn"
           to={`/txn/${encodeURIComponent(row.id)}`}
@@ -297,7 +298,7 @@ export default function ProjectDetailScreen() {
         >
           {body}
         </Link>
-      </li>
+      </TxnDeleteRow>
     );
   };
 

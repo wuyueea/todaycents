@@ -25,6 +25,7 @@ import './styles/v1-fixed.css';
 import './styles/v1-backup.css';
 import './styles/v1-keypad.css';
 import './styles/touch-targets.css';
+import './styles/txn-delete.css';
 
 // Hash routing keeps every screen reachable on a static file:// WebView, where
 // history-API paths would 404 after a reload.

@@ -415,28 +415,6 @@ a.ledger-row:focus-visible {
   cursor: default;
 }
 
-/* Whole-group transfer deletion: a small destructive action, never an edit. */
-.ledger-row__delete {
-  flex: 0 0 auto;
-  min-height: 32px;
-  padding: var(--space-1) var(--space-2);
-  border: var(--stroke) solid var(--danger);
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--danger);
-  font: inherit;
-  font-size: var(--fs-label);
-}
-
-.ledger-row__delete:disabled {
-  opacity: 0.6;
-}
-
-.ledger-row__delete:focus-visible {
-  outline: 2px solid var(--danger);
-  outline-offset: 1px;
-}
-
 .ledger-note {
   margin: var(--space-3) 0 0;
   color: var(--color-text-muted);
@@ -445,11 +423,6 @@ a.ledger-row:focus-visible {
 
 .ledger-note--error {
   color: var(--danger);
-}
-
-/* 成功提示不是方向色，保持墨色。 */
-.ledger-note--success {
-  color: var(--ink);
 }
 
 /* ---------- 编辑流水 screen ---------- */
@@ -473,33 +446,6 @@ a.ledger-row:focus-visible {
   letter-spacing: .03em;
 }
 
-/* 删除是页内次级动作：危险色文字 + 44px 点击区，不是一块实心红。
-   原型把它放在 nav 右端；这里也从表单末尾移到页头。 */
-.txn-edit-delete {
-  margin-left: auto;
-  min-width: var(--tap);
-  min-height: var(--tap);
-  padding: 0 var(--space-2);
-  border: 0;
-  border-radius: var(--radius);
-  background: transparent;
-  color: var(--danger);
-  font: inherit;
-  font-size: var(--fs-label);
-  font-weight: var(--font-weight-regular);
-  letter-spacing: .14em;
-}
-
-.txn-edit-delete:disabled {
-  opacity: 0.6;
-}
-
-.txn-edit-delete:focus-visible {
-  outline: 2px solid var(--danger);
-  outline-offset: 2px;
-}
-
-/* 转账腿只读：与表单同一张纸，不加卡片框。 */
 .txn-edit-readonly {
   margin-top: 20px;
   padding: 18px 0 20px;

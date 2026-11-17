@@ -21,13 +21,13 @@ public class StorageAccessRequestsTest {
         final List<Timer> timers = new ArrayList<>();
         final List<String> errors = new ArrayList<>();
         final AtomicInteger completed = new AtomicInteger();
-        final StorageAccessRequests requests;
+        final StorageAccessRequests<String> requests;
         boolean launchFails;
         boolean scheduleFails;
         boolean synchronousResult;
 
         Harness() {
-            requests = new StorageAccessRequests(id -> {
+            requests = new StorageAccessRequests<>(id -> {
                 launches.add(id);
                 if (launchFails) throw new IllegalStateException("missing settings");
                 if (synchronousResult) finish(id);
@@ -40,8 +40,8 @@ public class StorageAccessRequestsTest {
                 return timer;
             }, 120000);
         }
-        void finish(long id) { requests.finish(id); }
-        void request() { requests.request(completed::incrementAndGet, errors::add); }
+        void finish(long id) { requests.finish(id, "chosen"); }
+        void request() { requests.request(result -> { assertEquals("chosen", result); completed.incrementAndGet(); }, errors::add); }
     }
 
     @Test public void duplicateRequestsJoinOneLaunchAndAllCompleteOnce() {
@@ -110,7 +110,7 @@ public class StorageAccessRequestsTest {
 
     @Test public void oneThrowingCompletionCannotStrandOtherCallers() {
         Harness h = new Harness();
-        h.requests.request(() -> { throw new IllegalStateException("destroyed bridge"); }, h.errors::add);
+        h.requests.request(result -> { throw new IllegalStateException("destroyed bridge"); }, h.errors::add);
         h.request();
         h.finish(h.launches.get(0));
         assertEquals(1, h.completed.get());
@@ -121,7 +121,7 @@ public class StorageAccessRequestsTest {
 
     @Test public void oneThrowingRejectionCannotStrandOtherCallers() {
         Harness h = new Harness();
-        h.requests.request(() -> {}, message -> { throw new IllegalStateException("destroyed bridge"); });
+        h.requests.request(result -> {}, message -> { throw new IllegalStateException("destroyed bridge"); });
         h.request();
         h.timers.get(0).action.run();
         assertEquals(1, h.errors.size());
@@ -140,7 +140,7 @@ public class StorageAccessRequestsTest {
 
     @Test public void completionCanStartANewRequestWithoutOldCleanupCancellingIt() {
         Harness h = new Harness();
-        h.requests.request(h::request, h.errors::add);
+        h.requests.request(result -> h.request(), h.errors::add);
         h.finish(h.launches.get(0));
         assertEquals(2, h.launches.size());
         assertTrue(h.timers.get(0).cancelled);

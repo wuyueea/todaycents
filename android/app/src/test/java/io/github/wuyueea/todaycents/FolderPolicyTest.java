@@ -33,23 +33,15 @@ public class FolderPolicyTest {
     }
 
     @Test
-    public void insideSharedAcceptsRootAndChildren() throws Exception {
-        File root = temporary.newFolder("shared");
-        File child = new File(root, "Documents/记账本");
-        assertTrue(child.mkdirs());
-
-        assertEquals(root.getCanonicalFile(), FolderPolicy.insideShared(root, root));
-        assertEquals(child.getCanonicalFile(), FolderPolicy.insideShared(root, child));
-    }
-
-    @Test
-    public void insideSharedRejectsDotDotAndSiblingPrefix() throws Exception {
-        File root = temporary.newFolder("shared");
-        File outside = new File(root, "../outside");
-        File sibling = new File(root.getParentFile(), root.getName() + "-evil");
-
-        assertNull(FolderPolicy.insideShared(root, outside));
-        assertNull(FolderPolicy.insideShared(root, sibling));
+    public void onlyPrimaryOrdinarySubdirectoriesAreSelectable() {
+        assertTrue(FolderPolicy.isLocalFolderId("primary:Documents/记账本"));
+        assertTrue(FolderPolicy.isLocalFolderId("primary:Download/账本"));
+        assertFalse(FolderPolicy.isLocalFolderId("primary:"));
+        assertFalse(FolderPolicy.isLocalFolderId("1234-ABCD:Documents"));
+        assertFalse(FolderPolicy.isLocalFolderId("primary:Download"));
+        assertFalse(FolderPolicy.isLocalFolderId("primary:Android/data"));
+        assertFalse(FolderPolicy.isLocalFolderId("primary:Documents/../Android"));
+        assertFalse(FolderPolicy.isLocalFolderId("primary:Documents//账本"));
     }
 
     @Test
@@ -72,13 +64,4 @@ public class FolderPolicyTest {
         assertNull(FolderPolicy.documentId(root, sibling));
     }
 
-    @Test
-    public void displayNameUsesInternalStorageForTheRootAndFolderNameForChildren() throws Exception {
-        File root = temporary.newFolder("shared");
-        File child = new File(root, "记账本");
-        assertTrue(child.mkdirs());
-
-        assertEquals(FolderPolicy.INTERNAL_STORAGE, FolderPolicy.displayName(root, root));
-        assertEquals("记账本", FolderPolicy.displayName(root, child));
-    }
 }

@@ -22,6 +22,8 @@ import type { CachedBackup } from '../backup/device';
 import { deviceFolder } from '../storage/folder';
 import { Toast, useToast } from '../components/Toast';
 import { Sheet } from '../components/Sheet';
+import { CachedFileList } from '../components/CachedFileList';
+import type { CachedFileListProps } from '../components/CachedFileList';
 import { useDb, useQuery } from '../store/useDb';
 
 /**
@@ -225,31 +227,9 @@ export function ExportConfirmSheet({
   );
 }
 
-export interface CachedBackupListProps {
-  files: CachedBackup[];
-  now: Date;
-  busy: boolean;
-  onShare(file: CachedBackup): void;
-}
-
-/**
- * The rescue list for shares that were cancelled or never confirmed. These
- * files live in the app cache, which the system may clear at any time, so each
- * row offers the only exit that matters: hand it to the share sheet again.
- */
-export function CachedBackupList({
-  files,
-  now,
-  busy,
-  onShare,
-}: CachedBackupListProps) {
-  if (files.length === 0) return null;
-
+export function CachedBackupList(props: CachedFileListProps) {
   return (
-    <section className="backup-cache" aria-labelledby="backup-cache-title">
-      <h2 className="backup-cache__title" id="backup-cache-title">
-        应用缓存中的备份
-      </h2>
+    <CachedFileList {...props} title="应用缓存中的备份">
       <p className="backup-cache__note">
         导入/清除前的自动副本保留最近 {AUTO_BEFORE_CACHE_LIMIT} 份，旧副本会自动清理；普通导出不会自动清理。
         这次打开应用后另存过的自动副本会暂时保留，清理失败时也可能超过 {AUTO_BEFORE_CACHE_LIMIT} 份。
@@ -257,28 +237,7 @@ export function CachedBackupList({
       <p className="backup-cache__note">
         这些文件只在应用缓存里，系统可能清理。要留住，请点「另存」；另存只是把文件救出去，不会更新「上次备份」。
       </p>
-      <ul className="backup-cache__list">
-        {files.map((file) => (
-          <li className="backup-cache__row" key={file.uri === '' ? file.name : file.uri}>
-            <div className="backup-cache__body">
-              <div className="backup-cache__name">{file.name}</div>
-              <div className="backup-cache__meta">
-                {fileSizeText(file.bytes)} ·{' '}
-                {formatBackupTime(new Date(file.modifiedAt).toISOString(), now)}
-              </div>
-            </div>
-            <button
-              className="backup-cache__share"
-              type="button"
-              onClick={() => onShare(file)}
-              disabled={busy}
-            >
-              另存
-            </button>
-          </li>
-        ))}
-      </ul>
-    </section>
+    </CachedFileList>
   );
 }
 
@@ -502,6 +461,7 @@ export default function BackupScreen() {
             rows: result.rows,
             clearedProjectRefs: result.clearedProjectRefs,
             beforeDestination: result.beforeDestination,
+            beforeFileName: result.beforeFileName,
           },
         },
       });

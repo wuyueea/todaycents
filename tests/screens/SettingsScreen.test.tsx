@@ -63,13 +63,12 @@ describe('SettingsScreen', () => {
     expect(html).not.toContain('条待确认');
   });
 
-  it('groups the approved B entries and keeps reset separate', () => {
+  it('groups the A entries into two management cards and a separate reset card', () => {
     const html = renderSettings();
     const sections = [...html.matchAll(/<section\b[^>]*>[\s\S]*?<\/section>/g)].map(match => match[0]);
-    expect(sections).toHaveLength(4);
+    expect(sections).toHaveLength(3);
     const expected = [
-      ['账户管理', ['/accounts']],
-      ['记账整理', ['/settings/categories', '/settings/tags', '/settings/projects', '/settings/fixed']],
+      ['记账管理', ['/accounts', '/settings/categories', '/settings/tags', '/settings/projects', '/settings/fixed']],
       ['数据与备份', ['/settings/backup', '/settings/storage']],
     ] as const;
     expected.forEach(([title, paths], index) => {
@@ -77,9 +76,10 @@ describe('SettingsScreen', () => {
       expect([...sections[index]!.matchAll(/href="([^"]+)"/g)].map(match => match[1])).toEqual(paths);
       expect(sections[index]).not.toContain('清除所有数据');
     });
-    expect(sections[3]).toContain('settings-row--danger');
-    expect(sections[3]).toContain('清除前会先备份，清除后不可撤销。');
-    expect(sections[3]).not.toContain('href=');
+    const reset = sections[2];
+    expect(reset).toContain('settings-row--danger');
+    expect(reset).toContain('清除前会先备份，清除后不可撤销。');
+    expect(reset).not.toContain('href=');
   });
 
   it('has no back chevron and no report row: it is a tab, 报表 is another', () => {
@@ -177,7 +177,7 @@ describe('数据与备份 and reset', () => {
     expect(html.indexOf('href="/settings/storage"')).toBeLessThan(
       html.indexOf('清除所有数据')
     );
-    // Data follows account management and entry organization; storage stays name-only.
+    // Data follows ledger management; storage stays name-only.
     expect(html.indexOf('数据')).toBeGreaterThan(html.indexOf('href="/settings/categories"'));
     expect(html.indexOf('数据')).toBeGreaterThan(html.indexOf('href="/settings/projects"'));
     expect(html).not.toContain('settings-row__value');

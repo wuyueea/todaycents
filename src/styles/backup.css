@@ -95,56 +95,8 @@
   color: var(--danger);
 }
 
-/* 目录浏览：路径可以很长，按字符换行，不撑破页面。 */
 .storage-path {
-  word-break: break-all;
-  font-size: var(--fs-meta);
-  line-height: 1.6;
-  letter-spacing: .02em;
-}
-
-.storage-dirs {
-  margin: 10px 0 0;
-  padding: 0;
-  border-top: var(--stroke) solid var(--rule);
-  list-style: none;
-}
-
-.storage-dir {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  width: 100%;
-  min-height: var(--row-h);
-  padding: 11px 0 10px;
-  border: 0;
-  border-bottom: var(--stroke) solid var(--rule);
-  border-radius: 0;
-  background: transparent;
-  color: var(--ink);
-  font: inherit;
-  font-size: var(--fs-row);
-  letter-spacing: .045em;
-  text-align: left;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.storage-dir:disabled {
-  opacity: .6;
-}
-
-.storage-dir:focus-visible {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
-}
-
-.storage-dir__chev {
-  flex: none;
-  color: var(--ink-2);
-  font-family: var(--font-num);
-  font-size: 16px;
-  line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 /* ---------- 导入弹层（确认 / 失败） ---------- */

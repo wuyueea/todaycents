@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
+import { TxnDeleteProvider } from '../../src/components/TxnDelete';
 import LedgerScreen, {
   barHeightPx,
   dailyExpenseBars,
-  deleteTransferFromLedger,
   groupTxnsByDate,
   ledgerDayLabel,
   loadLedgerData,
@@ -12,7 +12,7 @@ import LedgerScreen, {
 import type { LedgerData } from '../../src/screens/LedgerScreen';
 import type { TxnRow } from '../../src/db/repos/txns';
 import { recordAdjustment, softDeleteTxn } from '../../src/db/repos/txns';
-import { createExpense, createIncome, listTxnsByMonth } from '../../src/db/repos/txns';
+import { createExpense, createIncome } from '../../src/db/repos/txns';
 import { createTransfer, deleteTransfer } from '../../src/db/repos/transfers';
 import { accountBalance, createAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
@@ -91,7 +91,9 @@ function ledgerData(overrides: Partial<LedgerData> = {}): LedgerData {
 function renderScreen(): string {
   return renderToString(
     <MemoryRouter>
-      <LedgerScreen />
+      <TxnDeleteProvider db={null} bump={() => {}} routeKey="ledger" onListPage dock stacked={false}>
+        <LedgerScreen />
+      </TxnDeleteProvider>
     </MemoryRouter>
   ).replace(/<!-- -->/g, '');
 }
@@ -377,7 +379,7 @@ describe('loadLedgerData', () => {
   });
 });
 
-describe('deleteTransferFromLedger', () => {
+describe('reload after transfer deletion', () => {
   async function seeded() {
     const db = await createTestDb();
     await seedDefaults(db);
@@ -405,8 +407,7 @@ describe('deleteTransferFromLedger', () => {
     expect(ledger.rows).toHaveLength(2);
     expect(ledger.rows.every(row => row.transferGroupId === groupId)).toBe(true);
 
-    const deleted = await deleteTransferFromLedger(db, ledger.rows[0]!);
-    expect(deleted).toBe(true);
+    await deleteTransfer(db, groupId);
 
     const after = await loadLedgerData(db, '2026-10');
     expect(after.rows).toEqual([]);
@@ -422,28 +423,7 @@ describe('deleteTransferFromLedger', () => {
     for (const row of rows) expect(row.deleted_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 
-  it('does nothing for a normal row or a leg without a group id', async () => {
-    const { db, card } = await seeded();
-    const expenseId = await createExpense(db, {
-      date: '2026-10-20',
-      accountId: card.id,
-      amountCents: 1230,
-      categoryId: null,
-    });
-    const expense = (await loadLedgerData(db, '2026-10')).rows.find(
-      row => row.id === expenseId
-    )!;
 
-    expect(await deleteTransferFromLedger(db, expense)).toBe(false);
-    expect(
-      await deleteTransferFromLedger(db, {
-        ...expense,
-        direction: 'transfer',
-        transferGroupId: null,
-      })
-    ).toBe(false);
-    expect(await listTxnsByMonth(db, '2026-10')).toHaveLength(1);
-  });
 });
 
 describe('LedgerScreen', () => {
@@ -572,10 +552,8 @@ describe('LedgerScreen', () => {
     // No path from the list to updateTxn / softDeleteTxn on a transfer leg;
     // the only action is deleting the whole group.
     expect(html).not.toContain('/txn/t-out');
-    const transferRow =
-      html.match(/<div class="ledger-row ledger-row--readonly"[\s\S]*?<\/div>/)?.[0] ?? '';
-    expect(transferRow).toContain('删除这笔转账');
-    expect(transferRow).not.toContain('编辑');
+    expect(html).toContain('data-transfer-group="g-1"');
+    expect(html).toContain('aria-label="删除转账，转账 · −600.00"');
     // A transfer is neither spending nor earning on the day card either.
     expect(dayCard(html, '2026-10-20')).toContain('出 0.00');
     expect(dayCard(html, '2026-10-20')).toContain('入 0.00');
@@ -599,7 +577,8 @@ describe('LedgerScreen', () => {
     });
     const html = renderScreen();
 
-    expect(html).not.toContain('删除这笔转账');
+    expect(html).not.toContain('data-txn-delete-action');
+    expect(html).not.toContain('data-txn-delete-id');
   });
 
   it('labels an adjustment as 调整 rather than as an uncategorised expense', () => {

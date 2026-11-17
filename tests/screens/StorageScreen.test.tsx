@@ -1,170 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
-import {
-  OPEN_FOLDER_UNAVAILABLE,
-  StorageView,
-  openFolderNote,
-} from '../../src/screens/StorageScreen';
-import type { FolderListing, StoredFolder } from '../../src/storage/folder';
+import { StorageView } from '../../src/screens/StorageScreen';
+import type { FolderStatus } from '../../src/storage/folder';
 
-function render(node: React.ReactElement): string {
-  return renderToString(<MemoryRouter>{node}</MemoryRouter>).replace(/<!-- -->/g, '');
+function render(status: FolderStatus | null, available = true) {
+  return renderToString(<MemoryRouter>
+    <StorageView status={status} available={available} busy={false} notice={null} error={null}
+      onChoose={() => {}} onOpen={() => {}} onClear={() => {}} />
+  </MemoryRouter>);
 }
 
-const FOLDER: StoredFolder = {
-  path: '/storage/emulated/0/Documents/账本备份',
-  name: '账本备份',
-};
-
-const BROWSER: FolderListing = {
-  path: '/storage/emulated/0/Documents',
-  parent: '/storage/emulated/0',
-  dirs: [
-    { name: '账本备份', path: '/storage/emulated/0/Documents/账本备份' },
-    { name: '收据', path: '/storage/emulated/0/Documents/收据' },
-  ],
-};
-
-const actions = {
-  onRequestAccess: () => {},
-  onChange: () => {},
-  onOpen: () => {},
-  onUp: () => {},
-  onEnter: () => {},
-  onChoose: () => {},
-  onCancelBrowse: () => {},
-};
-
-const base = {
-  folder: null,
-  browser: null,
-  busy: false,
-  note: null,
-  error: null,
-  ...actions,
-};
-
 describe('StorageView', () => {
-  it('shows only a checking line before the bridge answers', () => {
-    const html = render(<StorageView access="checking" {...base} />);
-
-    expect(html).toContain('<h1>存储</h1>');
-    expect(html).toContain('正在检查权限');
-    expect(html.match(/<button/g)).toBeNull();
+  it('shows no actions while checking the directory', () => {
+    const html = render(null);
+    expect(html).toContain('正在读取备份目录');
+    expect(html).not.toContain('<button');
   });
 
-  // The state the owner sees after a fresh install: one way forward, the
-  // system page where 「所有文件访问」 is switched on.
-  it('shows one access button while storage access is missing', () => {
-    const html = render(<StorageView access="denied" {...base} />);
-
-    expect(html).toContain('允许访问存储');
-    expect(html).toContain('需要「所有文件访问」');
+  it('offers one local directory picker and explains the cache fallback', () => {
+    const html = render({ folder: null, needsReselection: false });
+    expect(html).toContain('选择文件夹');
+    expect(html).toContain('自动副本只写入缓存');
     expect(html.match(/<button/g)).toHaveLength(1);
-    expect(html).not.toContain('更改位置');
+  });
+
+  it('asks an upgraded or revoked installation to select again', () => {
+    const html = render({ folder: null, needsReselection: true });
+    expect(html).toContain('请重新选择');
+    expect(html).toContain('已有备份留在原处');
     expect(html).not.toContain('打开文件夹');
   });
 
-  // Android 10 and below grant storage through a runtime dialog, not the
-  // all-files settings page: the one button must be named for that dialog.
-  it('names the runtime permission while Android 10 storage access is missing', () => {
-    const html = render(<StorageView access="denied" accessReason="permission" {...base} />);
-
-    expect(html).toContain('允许访问存储');
-    expect(html).toContain('需要存储权限');
-    expect(html).not.toContain('所有文件访问');
-    expect(html.match(/<button/g)).toHaveLength(1);
+  it('offers replace, open and revoke for a selected folder', () => {
+    const html = render({ folder: { name: '合成目录' }, needsReselection: false });
+    for (const word of ['合成目录', '更换文件夹', '打开文件夹', '取消目录授权']) expect(html).toContain(word);
   });
 
-  it('shows the current location and both granted actions', () => {
-    const html = render(<StorageView {...base} access="granted" folder={FOLDER} />);
-
-    expect(html).toContain('当前位置');
-    expect(html).toContain('账本备份');
-    expect(html).toContain(FOLDER.path);
-    expect(html).toContain('更改位置');
-    expect(html).toContain('打开文件夹');
-    expect(html.match(/<button[^>]*disabled/g)).toBeNull();
-  });
-
-  it('keeps the cache + share fallback when no folder can be used', () => {
-    const html = render(<StorageView {...base} access="granted" folder={null} />);
-
-    expect(html).toContain('当前位置');
-    expect(html).toContain('未设置');
-    expect(html).toContain('当前文件夹不可用，导出会放进应用缓存');
-    // 打开文件夹 has nothing to open; 更改位置 still does.
-    expect(html.match(/<button[^>]*disabled/g)).toHaveLength(1);
-  });
-
-  it('lists directories and the 上一级 + 选这个文件夹 pair', () => {
-    const html = render(
-      <StorageView {...base} access="granted" folder={FOLDER} browser={BROWSER} />
-    );
-
-    expect(html).toContain(BROWSER.path);
-    expect(html).toContain('上一级');
-    expect(html).toContain('选这个文件夹');
-    expect(html).toContain('账本备份');
-    expect(html).toContain('收据');
-    // Directories are in the order the bridge returned them.
-    expect(html.indexOf('账本备份')).toBeLessThan(html.indexOf('收据'));
-    expect(html.match(/<button[^>]*disabled/g)).toBeNull();
-  });
-
-  it('disables 上一级 at the shared-storage root', () => {
-    const html = render(
-      <StorageView
-        {...base}
-        access="granted"
-        folder={FOLDER}
-        browser={{ ...BROWSER, path: '/storage/emulated/0', parent: null }}
-      />
-    );
-
-    const up = html.match(/<button[^>]*>上一级<\/button>/)?.[0] ?? '';
-    expect(up).toContain('disabled');
-  });
-
-  it('shows the manual fallback sentence instead of crashing', () => {
-    const html = render(
-      <StorageView
-        {...base}
-        access="granted"
-        folder={FOLDER}
-        note={OPEN_FOLDER_UNAVAILABLE}
-      />
-    );
-
-    expect(html).toContain('没能打开文件夹，请在文件管理器里手动进入备份目录。');
-    expect(html).toMatch(/role="status"/);
-  });
-
-  it('shows a failed choice as an alert, not a toast', () => {
-    const html = render(
-      <StorageView
-        {...base}
-        access="granted"
-        folder={FOLDER}
-        error="选择失败：这个文件夹不能写，请换一个。"
-      />
-    );
-
-    expect(html).toContain('选择失败：这个文件夹不能写，请换一个。');
-    expect(html).toMatch(/role="alert"/);
-  });
-});
-
-describe('openFolderNote', () => {
-  it('is silent when the file manager opened and speaks up when none exists', () => {
-    expect(openFolderNote(true)).toBeNull();
-    expect(openFolderNote(false)).toBe(OPEN_FOLDER_UNAVAILABLE);
-  });
-
-  it('names the folder path when no app could open it', () => {
-    expect(openFolderNote(false, FOLDER.path)).toBe(
-      `没能打开文件夹，请在文件管理器里进入 ${FOLDER.path}。`
-    );
+  it('offers no fake folder control when the native plugin is missing', () => {
+    const html = render({ folder: null, needsReselection: false }, false);
+    expect(html).toContain('无法选择本机备份目录');
+    expect(html).not.toContain('<button');
   });
 });

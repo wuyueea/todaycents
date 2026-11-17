@@ -4,6 +4,7 @@ import { EXIT_WINDOW_MS, installBackHandler } from './components/backButton';
 import AppDock from './components/AppDock';
 import GlobalPurgeUndo from './components/GlobalPurgeUndo';
 import { Toast } from './components/Toast';
+import { TxnDeleteProvider } from './components/TxnDelete';
 import TodayScreen from './screens/TodayScreen';
 import QuickEntryScreen from './screens/QuickEntryScreen';
 import LedgerScreen from './screens/LedgerScreen';
@@ -38,7 +39,7 @@ export const LEGACY_TRANSFER_TARGET = '/add';
  * never involved; the only data path is the local SQLite singleton.
  */
 export default function App() {
-  const { db, error } = useDb();
+  const { db, error, bump } = useDb();
   const location = useLocation();
   const navigate = useNavigate();
   // Android's back key: the newest sheet closes itself first, then the page
@@ -112,6 +113,7 @@ export default function App() {
     baseLocation.pathname === '/settings/backup' ||
     baseLocation.pathname === '/settings/storage';
   const status = db ? null : error ? '数据层未就绪' : '正在加载数据…';
+  const onTxnList = /^(\/|\/ledger\/?|\/settings\/projects\/[^/]+\/?)$/.test(location.pathname);
 
   return (
     <div
@@ -130,25 +132,34 @@ export default function App() {
           </p>
         )}
 
-        <Routes location={baseLocation}>
-          <Route path="/" element={<TodayScreen />} />
-          <Route path="/ledger" element={<LedgerScreen />} />
-          <Route path="/reports" element={<ReportsScreen />} />
-          <Route path="/accounts" element={<AccountsScreen />} />
-          {/* The old transfer page is gone; its links land on 随手记. */}
-          <Route path="/transfer" element={<Navigate to={LEGACY_TRANSFER_TARGET} replace />} />
-          <Route path="/txn/:id" element={<TxnEditScreen />} />
-          <Route path="/settings" element={<SettingsScreen />} />
-          <Route path="/settings/backup" element={<BackupScreen />} />
-          <Route path="/settings/storage" element={<StorageScreen />} />
-          <Route path="/settings/tags" element={<TagsScreen />} />
-          <Route path="/settings/categories" element={<CategoriesScreen />} />
-          <Route path="/settings/projects" element={<ProjectsScreen />} />
-          <Route path="/settings/projects/:id" element={<ProjectDetailScreen />} />
-          <Route path="/settings/fixed" element={<FixedCostsScreen />} />
-          {/* Unknown paths go back to 今天 rather than rendering a blank page. */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <TxnDeleteProvider
+          db={db}
+          bump={bump}
+          routeKey={location.key}
+          onListPage={onTxnList}
+          dock={!isFullScreen}
+          stacked={undoVisible}
+        >
+          <Routes location={baseLocation}>
+            <Route path="/" element={<TodayScreen />} />
+            <Route path="/ledger" element={<LedgerScreen />} />
+            <Route path="/reports" element={<ReportsScreen />} />
+            <Route path="/accounts" element={<AccountsScreen />} />
+            {/* The old transfer page is gone; its links land on 随手记. */}
+            <Route path="/transfer" element={<Navigate to={LEGACY_TRANSFER_TARGET} replace />} />
+            <Route path="/txn/:id" element={<TxnEditScreen />} />
+            <Route path="/settings" element={<SettingsScreen />} />
+            <Route path="/settings/backup" element={<BackupScreen />} />
+            <Route path="/settings/storage" element={<StorageScreen />} />
+            <Route path="/settings/tags" element={<TagsScreen />} />
+            <Route path="/settings/categories" element={<CategoriesScreen />} />
+            <Route path="/settings/projects" element={<ProjectsScreen />} />
+            <Route path="/settings/projects/:id" element={<ProjectDetailScreen />} />
+            <Route path="/settings/fixed" element={<FixedCostsScreen />} />
+            {/* Unknown paths go back to 今天 rather than rendering a blank page. */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </TxnDeleteProvider>
       </main>
 
       {/* The category/tag purge's ten-second undo survives a restart in SQLite.

@@ -16,7 +16,7 @@ import { listCategories } from '../db/repos/categories';
 import type { Category } from '../db/repos/categories';
 import { getTxnTags, listTags, setTxnTags } from '../db/repos/tags';
 import type { Tag } from '../db/repos/tags';
-import { getTxnById, softDeleteTxn, updateTxn } from '../db/repos/txns';
+import { getTxnById, updateTxn } from '../db/repos/txns';
 import { listProjects, setTxnProject } from '../db/repos/projects';
 import type { Project } from '../db/repos/projects';
 import { setTxnFixedCost } from '../db/repos/fixedCosts';
@@ -41,10 +41,10 @@ import { formatCents, parseAmountToCents } from '../domain/money';
  * transaction as the row update, so an edit lands whole or not at all.
  *
  * Transfers are read-only here. A transfer leg is one half of a matched pair;
- * updateTxn and softDeleteTxn both throw on it, and deleting one leg would
+ * updateTxn rejects a single transfer leg. Editing one leg would
  * move money out of thin air. The screen therefore renders such a row as a
- * read-only summary without a save or delete control, and both commitTxnEdit
- * and deleteTxnRow refuse a transfer leg as a second line of defence.
+ * read-only summary without a save control. commitTxnEdit also refuses a
+ * transfer leg as a second line of defence.
  */
 
 /** Everything the screen renders from, loaded as one snapshot. */
@@ -242,42 +242,6 @@ export async function commitTxnEdit(
   return { ...plan, saved: true };
 }
 
-/**
- * The screen's only delete path: a soft delete for a normal row, and a refusal
- * for a transfer leg. softDeleteTxn itself also refuses a leg; checking here
- * keeps a transfer away from that call and keeps the error message about the
- * pair rather than about one row.
- */
-export async function deleteTxnRow(
-  db: Db,
-  row: Pick<TxnRow, 'id' | 'direction'>
-): Promise<void> {
-  if (row.direction === 'transfer') {
-    throw new Error('转账记录不能在这里删除，需要整组删除');
-  }
-  await softDeleteTxn(db, row.id);
-}
-
-/**
- * Soft-deletes one row only after the user confirms.
- *
- * The confirm is the second tap that stops a mis-tap from removing a row from
- * the ledger and every total. Passing it in makes the gate testable without a
- * browser; the screen uses window.confirm, which the WebView implements. A
- * declined confirmation writes nothing and reports false. A transfer leg still
- * goes through deleteTxnRow's refusal, never softDeleteTxn.
- */
-export async function deleteTxnWithConfirm(
-  db: Db,
-  row: Pick<TxnRow, 'id' | 'direction'>,
-  confirm: (message: string) => boolean = window.confirm
-): Promise<boolean> {
-  const confirmed = confirm('删除这笔流水？它会从流水和统计中消失，记录仍保留在本地，且不能撤销。');
-  if (!confirmed) return false;
-  await deleteTxnRow(db, row);
-  return true;
-}
-
 /** The first thing wrong, said plainly, for the alert above the buttons. */
 function problemText(problems: TxnEditProblems): string {
   return problems.amountInvalid
@@ -310,7 +274,6 @@ export default function TxnEditScreen() {
   const [problems, setProblems] = useState<TxnEditProblems>(noProblems);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [amountPristine, setAmountPristine] = useState(false);
 
@@ -446,22 +409,6 @@ export default function TxnEditScreen() {
     }
   };
 
-  const handleDelete = async () => {
-    if (db === null || row === null || busy) return;
-
-    setBusy(true);
-    try {
-      await deleteTxnRow(db, row);
-      bump();
-      navigate('/ledger', { replace: true });
-    } catch (reason) {
-      setConfirmDelete(false);
-      setErrorText(`删除失败：${reason instanceof Error ? reason.message : String(reason)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <div className="txn-edit-screen txn-edit-screen--v1">
       <header className="add-header">
@@ -482,18 +429,6 @@ export default function TxnEditScreen() {
           <span className="txn-edit-kind" data-direction={row.direction}>
             {KIND_LABELS[row.direction]}
           </span>
-        )}
-        {/* 原型把删除放在 nav 右端；它只对可编辑的普通流水出现。
-            危险色文字 + 44px 点击区，不做实心红块。 */}
-        {row !== null && row.direction !== 'transfer' && (
-          <button
-            className="txn-edit-delete"
-            type="button"
-            onClick={() => setConfirmDelete(true)}
-            disabled={busy || db === null}
-          >
-            删除
-          </button>
         )}
       </header>
 
@@ -775,37 +710,6 @@ export default function TxnEditScreen() {
         </Sheet>
       )}
 
-      {confirmDelete && row !== null && (
-        <Sheet
-          className="txn-delete-sheet"
-          titleId="txn-delete-title"
-          title="删除这笔流水"
-          onClose={() => setConfirmDelete(false)}
-          initialFocus="last"
-          canClose={() => !busy}
-          scrimDismiss={!busy}
-        >
-          <p className="sheet__text">
-            它会从流水和统计中消失，记录仍保留在本地，且不能撤销。
-          </p>
-          <button
-            className="sheet__danger"
-            type="button"
-            disabled={busy}
-            onClick={() => void handleDelete()}
-          >
-            {busy ? '正在删除…' : '删除'}
-          </button>
-          <button
-            className="sheet__secondary"
-            type="button"
-            disabled={busy}
-            onClick={() => setConfirmDelete(false)}
-          >
-            取消
-          </button>
-        </Sheet>
-      )}
     </div>
   );
 }

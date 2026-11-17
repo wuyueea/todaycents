@@ -50,7 +50,7 @@ describe('app shell', () => {
   it('renders 存储 as a pushed settings page', () => {
     const html = renderAt('/settings/storage');
     expect(html).toContain('<h1>存储</h1>');
-    expect(html).toContain('正在检查权限');
+    expect(html).toContain('正在读取备份目录');
     expect(html).not.toContain('class="dock"');
     expect(html).toContain('class="add-back"');
   });

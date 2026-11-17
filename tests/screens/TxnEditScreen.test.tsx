@@ -4,8 +4,6 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import TxnEditScreen, {
   accountOptionsFor,
   commitTxnEdit,
-  deleteTxnRow,
-  deleteTxnWithConfirm,
   loadTxnEditData,
   planTxnEdit,
 } from '../../src/screens/TxnEditScreen';
@@ -13,7 +11,7 @@ import type { TxnEditData, TxnEditDraft } from '../../src/screens/TxnEditScreen'
 import App from '../../src/App';
 import type { Category } from '../../src/db/repos/categories';
 import type { TxnRow } from '../../src/db/repos/txns';
-import { createExpense, getTxnById, listTxnsByMonth, monthSummary } from '../../src/db/repos/txns';
+import { createExpense, getTxnById, listTxnsByMonth, softDeleteTxn } from '../../src/db/repos/txns';
 import { createTransfer } from '../../src/db/repos/transfers';
 import { createAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
@@ -323,7 +321,7 @@ describe('loading and editing through the repository', () => {
       amountCents: 1230,
       categoryId: food.id,
     });
-    await deleteTxnRow(db, (await loadTxnEditData(db, id)).row!);
+    await softDeleteTxn(db, id);
 
     expect((await loadTxnEditData(db, id)).row).toBeNull();
   });
@@ -553,80 +551,6 @@ describe('loading and editing through the repository', () => {
   });
 });
 
-describe('deleteTxnRow', () => {
-  async function seeded() {
-    const db = await createTestDb();
-    await seedDefaults(db);
-    await createAccount(db, { name: '饭卡', type: 'prepaid', monthlyBudgetCents: 75000 });
-    const accounts = await listAccounts(db);
-    const categories = await listCategories(db);
-    return {
-      db,
-      card: accounts.find(account => account.name === '饭卡')!,
-      bank: accounts.find(account => account.name === '银行卡')!,
-      food: categories.find(category => category.name === '饮食')!,
-    };
-  }
-
-  it('soft-deletes a normal row so it leaves the list and the totals', async () => {
-    const { db, card, food } = await seeded();
-    const id = await createExpense(db, {
-      date: '2026-10-20',
-      accountId: card.id,
-      amountCents: 1230,
-      categoryId: food.id,
-    });
-    const row = (await loadTxnEditData(db, id)).row!;
-
-    await deleteTxnRow(db, row);
-
-    expect(await listTxnsByMonth(db, '2026-10')).toEqual([]);
-    expect((await monthSummary(db, '2026-10')).expenseCents).toBe(0);
-    expect((await loadTxnEditData(db, id)).row).toBeNull();
-  });
-
-  it('asks for confirmation and writes nothing when the second tap is declined', async () => {
-    const { db, card, food } = await seeded();
-    const id = await createExpense(db, {
-      date: '2026-10-20',
-      accountId: card.id,
-      amountCents: 1230,
-      categoryId: food.id,
-    });
-    const row = (await loadTxnEditData(db, id)).row!;
-    let asked = '';
-
-    const declined = await deleteTxnWithConfirm(db, row, message => {
-      asked = message;
-      return false;
-    });
-    expect(declined).toBe(false);
-    expect(asked).toContain('删除');
-    expect((await listTxnsByMonth(db, '2026-10')).some(candidate => candidate.id === id)).toBe(
-      true
-    );
-
-    const confirmed = await deleteTxnWithConfirm(db, row, () => true);
-    expect(confirmed).toBe(true);
-    expect(await listTxnsByMonth(db, '2026-10')).toEqual([]);
-  });
-
-  it('refuses a transfer leg and leaves both legs live', async () => {
-    const { db, card, bank } = await seeded();
-    await createTransfer(db, {
-      date: '2026-10-20',
-      fromAccountId: card.id,
-      toAccountId: bank.id,
-      amountCents: 60000,
-    });
-    const leg = (await listTxnsByMonth(db, '2026-10'))[0]!;
-
-    await expect(deleteTxnRow(db, leg)).rejects.toThrow(/转账/);
-    // Neither leg was soft-deleted by the refused call.
-    expect(await listTxnsByMonth(db, '2026-10')).toHaveLength(2);
-  });
-});
-
 describe('TxnEditScreen', () => {
   it('shows the row with editable amount, category, account and note, and a display-only date', () => {
     store.data = editData();
@@ -654,7 +578,7 @@ describe('TxnEditScreen', () => {
     expect(html).toContain('>夜宵</button>');
     expect(html).not.toContain('添加标签');
     expect(html).toContain('保存');
-    expect(html).toContain('删除');
+    expect(html).not.toContain('删除这笔流水');
   });
 
   it('shows the row project as an optional row after 标签', () => {

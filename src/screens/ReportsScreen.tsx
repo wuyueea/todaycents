@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { CachedFileList } from '../components/CachedFileList';
 import type { Db } from '../db/driver';
 import { monthReport, yearReport } from '../db/repos/reports';
 import type {
@@ -12,7 +13,8 @@ import { formatCentsDisplay } from '../components/AmountText';
 import { ReportPie, sliceShade } from '../components/ReportPie';
 import { Toast, useToast } from '../components/Toast';
 import { useDb, useQuery } from '../store/useDb';
-import { deviceBinaryFileWriter, ShareCanceledError } from '../backup/device';
+import { cachedReports, deviceBinaryFileWriter } from '../backup/device';
+import type { CachedFile, ShareOutcome } from '../backup/device';
 import { exportMonthWorkbook, exportYearWorkbook } from '../export/reportWorkbook';
 import { exportToast } from '../backup/format';
 import { formatMonthLabel, monthKeyOf, shiftMonthKey, todayLocalISO } from '../domain/date';
@@ -160,6 +162,8 @@ export function budgetFillPercent(spentCents: number, budgetCents: number): numb
   return spentCents > 0 ? 100 : 0;
 }
 
+type ExportFeedback = { kind: 'notice' | 'error'; text: string };
+
 export interface ReportsViewProps {
   mode: ReportMode;
   /** The month being described (YYYY-MM); also the month the series highlights. */
@@ -180,8 +184,11 @@ export interface ReportsViewProps {
   onExport?: () => void;
   /** True while the workbook is being built or shared. */
   exporting?: boolean;
-  /** A failed export, shown under the entry; never a success toast. */
-  exportError?: string | null;
+  feedback?: ExportFeedback | null;
+  cachedFiles?: readonly CachedFile[];
+  cacheReadFailed?: boolean;
+  sharing?: boolean;
+  onShareCached?(file: CachedFile): void;
   onModeChange(mode: ReportMode): void;
   onMonthChange(monthKey: string): void;
   onYearChange(year: number): void;
@@ -204,7 +211,11 @@ export function ReportsView({
   error,
   onExport,
   exporting = false,
-  exportError = null,
+  feedback = null,
+  cachedFiles = [],
+  cacheReadFailed = false,
+  sharing = false,
+  onShareCached,
   onModeChange,
   onMonthChange,
   onYearChange,
@@ -434,7 +445,7 @@ export function ReportsView({
             type="button"
             className="reports-export"
             onClick={onExport}
-            disabled={onExport === undefined || exporting}
+            disabled={onExport === undefined || exporting || sharing}
           >
             {exporting
               ? '正在导出…'
@@ -442,15 +453,41 @@ export function ReportsView({
                 ? '导出这个月为表格（.xlsx）'
                 : '导出全年为表格（.xlsx）'}
           </button>
-          {exportError !== null && (
-            <p className="reports-note reports-note--error" role="alert">
-              {exportError}
-            </p>
-          )}
         </>
+      )}
+      {feedback !== null && (
+        <p
+          className={feedback.kind === 'error' ? 'reports-note reports-note--error' : 'reports-note'}
+          role={feedback.kind === 'error' ? 'alert' : 'status'}
+        >
+          {feedback.text}
+        </p>
+      )}
+      {cacheReadFailed && <p className="reports-note" role="status">暂时无法读取缓存报表。</p>}
+      {onShareCached && (
+        <CachedFileList
+          files={cachedFiles}
+          now={new Date()}
+          busy={exporting || sharing}
+          onShare={onShareCached}
+          title="应用缓存中的报表"
+        >
+          <p className="backup-cache__note">
+            系统可能清理这些文件。点「另存」打开系统分享，在目标应用确认保存。
+          </p>
+        </CachedFileList>
       )}
     </div>
   );
+}
+
+function shareFeedback(name: string, outcome: ShareOutcome): ExportFeedback {
+  return {
+    kind: 'notice',
+    text: outcome === 'canceled'
+      ? `已取消分享「${name}」。文件若仍在应用缓存，可在下方另存。`
+      : `「${name}」已交给系统分享，请在目标应用确认是否保存。`,
+  };
 }
 
 export default function ReportsScreen() {
@@ -459,10 +496,31 @@ export default function ReportsScreen() {
   const [mode, setMode] = useState<ReportMode>('month');
   const [monthKey, setMonthKey] = useState(currentMonthKey);
   const [year, setYear] = useState(currentYear);
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [operation, setOperation] = useState<'export' | 'share' | null>(null);
+  const operating = useRef(false);
+  const [feedback, setFeedback] = useState<ExportFeedback | null>(null);
+  const [cachedFiles, setCachedFiles] = useState<CachedFile[]>([]);
+  const [cacheReadFailed, setCacheReadFailed] = useState(false);
+  const [cacheRevision, setCacheRevision] = useState(0);
   const { db } = useDb();
   const { toast, showToast, clearToast } = useToast();
+
+  useEffect(() => {
+    let current = true;
+    cachedReports.list().then(
+      files => {
+        if (!current) return;
+        setCachedFiles(files);
+        setCacheReadFailed(false);
+      },
+      () => {
+        if (!current) return;
+        setCachedFiles([]);
+        setCacheReadFailed(true);
+      }
+    );
+    return () => { current = false; };
+  }, [cacheRevision]);
 
   const query = useQuery<ReportsData>(
     database => loadReportsData(database, mode, monthKey, year),
@@ -477,34 +535,46 @@ export default function ReportsScreen() {
       ? query.data
       : null;
 
-  /**
-   * Builds the workbook from the repositories, then lets the device writer take
-   * it to the cache and share sheet. The success toast is raised only after the
-   * writer resolves; a rejection clears any older success line and puts the
-   * failure under the entry instead.
-   */
-  const handleExport = async () => {
-    if (db === null || exporting) return;
-    setExporting(true);
-    setExportError(null);
+  async function perform(kind: 'export' | 'share', action: () => Promise<void>) {
+    if (operating.current) return;
+    operating.current = true;
+    setOperation(kind);
+    setFeedback(null);
     clearToast();
     try {
-      const result =
-        mode === 'month'
-          ? await exportMonthWorkbook(db, deviceBinaryFileWriter, monthKey)
-          : await exportYearWorkbook(db, deviceBinaryFileWriter, year);
-      showToast(exportToast({ fileName: result.fileName, bytes: result.bytes }));
+      await action();
     } catch (reason) {
-      clearToast();
-      setExportError(
-        reason instanceof ShareCanceledError
-          ? '已取消导出，文件还在应用缓存里。'
-          : `导出失败：${reason instanceof Error ? reason.message : String(reason)}`
-      );
+      setFeedback({
+        kind: 'error',
+        text: `${kind === 'export' ? '导出失败' : '另存失败'}：${reason instanceof Error ? reason.message : String(reason)}`,
+      });
     } finally {
-      setExporting(false);
+      operating.current = false;
+      setOperation(null);
+      setCacheRevision(revision => revision + 1);
     }
-  };
+  }
+
+  function handleExport() {
+    if (db === null) return;
+    const database = db;
+    void perform('export', async () => {
+      const result = mode === 'month'
+        ? await exportMonthWorkbook(database, deviceBinaryFileWriter, monthKey)
+        : await exportYearWorkbook(database, deviceBinaryFileWriter, year);
+      if (result.kind === 'folder' || result.kind === 'download') {
+        showToast(exportToast(result));
+      } else {
+        setFeedback(shareFeedback(result.fileName, result.kind === 'canceled' ? 'canceled' : 'shared'));
+      }
+    });
+  }
+
+  function handleShareCached(file: CachedFile) {
+    void perform('share', async () => {
+      setFeedback(shareFeedback(file.name, await cachedReports.share(file.name)));
+    });
+  }
 
   return (
     <>
@@ -517,8 +587,12 @@ export default function ReportsScreen() {
         data={data}
         error={query.error}
         onExport={db === null ? undefined : handleExport}
-        exporting={exporting}
-        exportError={exportError}
+        exporting={operation === 'export'}
+        sharing={operation === 'share'}
+        feedback={feedback}
+        cachedFiles={cachedFiles}
+        cacheReadFailed={cacheReadFailed}
+        onShareCached={handleShareCached}
         onModeChange={setMode}
         onMonthChange={setMonthKey}
         onYearChange={setYear}

@@ -10,8 +10,12 @@
 export const XLSX_MIME_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
-/** Where an exported binary file goes. */
+export type BinaryExportDestination =
+  | { kind: 'folder'; fileName: string; folderName: string }
+  | { kind: 'download' }
+  | { kind: 'share' | 'canceled'; fileName: string };
+
+/** Where an exported binary file goes after the writer has accepted it. */
 export interface BinaryFileWriter {
-  /** Cache + system share sheet on device, a Blob download in a browser. */
-  writeForShare(fileName: string, bytes: Uint8Array, mimeType: string): Promise<void>;
+  writeForShare(fileName: string, bytes: Uint8Array, mimeType: string): Promise<BinaryExportDestination>;
 }

@@ -4,85 +4,91 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import StorageScreen from '../../src/screens/StorageScreen';
-import type { FolderAccess, StorageAccessState } from '../../src/storage/folder';
+import type { FolderAccess } from '../../src/storage/folder';
 
-let root: Root | null = null;
-let granted = false;
-const getAccess = vi.fn<() => Promise<StorageAccessState>>();
-const requestAccess = vi.fn<() => Promise<StorageAccessState>>();
-const current = vi.fn<FolderAccess['current']>();
+let root: Root;
+const empty = { folder: null, needsReselection: false };
+const selected = { folder: { name: '合成目录' }, needsReselection: false };
+const status = vi.fn<FolderAccess['status']>();
+const choose = vi.fn<FolderAccess['choose']>();
+const clear = vi.fn<FolderAccess['clear']>();
 const folder: FolderAccess = {
-  available: async () => true, getAccess, requestAccess, current,
-  list: async () => ({ path: '', parent: null, dirs: [] }), choose: async () => null,
-  clear: async () => {}, open: async () => false, write: async name => ({ name, saved: false }),
+  available: async () => true, status, choose, clear, current: async () => null,
+  open: async () => false, write: async name => ({ name, saved: false }),
 };
-async function mount() {
-  const host = document.createElement('div'); document.body.append(host);
-  root = createRoot(host);
-  await act(async () => { root!.render(<MemoryRouter><StorageScreen folder={folder} /></MemoryRouter>); });
+function button(label: string) {
+  return [...document.querySelectorAll('button')].find(item => item.textContent === label)!;
 }
-function button() { return [...document.querySelectorAll('button')].find(item => item.textContent?.includes('允许访问存储'))!; }
-async function click() { await act(async () => { button().click(); }); }
+async function mount() {
+  const host = document.createElement('div');
+  document.body.append(host);
+  root = createRoot(host);
+  await act(async () => { root.render(<MemoryRouter><StorageScreen folder={folder} /></MemoryRouter>); });
+}
+async function click(label = '选择文件夹') { await act(async () => { button(label).click(); }); }
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  vi.useFakeTimers(); granted = false;
-  getAccess.mockReset().mockImplementation(async () => ({ granted, reason: 'settings' }));
-  requestAccess.mockReset().mockResolvedValue({ granted: false, reason: 'settings' });
-  current.mockReset().mockResolvedValue(null);
+  vi.useFakeTimers();
+  status.mockReset().mockResolvedValue(empty);
+  choose.mockReset().mockResolvedValue(false);
+  clear.mockReset().mockResolvedValue(undefined);
 });
 afterEach(async () => {
-  if (root) await act(async () => root!.unmount());
-  root = null; document.body.innerHTML = ''; vi.useRealTimers();
+  await act(async () => root.unmount());
+  document.body.innerHTML = ''; vi.useRealTimers();
 });
 
-describe('storage permission request never stays busy forever', () => {
-  it('times out a silent native request, re-enables the button and can retry', async () => {
-    let late!: (value: StorageAccessState) => void;
-    requestAccess.mockImplementationOnce(() => new Promise(resolve => { late = resolve; }));
+describe('scoped folder selection', () => {
+  it('times out a silent picker and allows retry without a late result resuming the UI', async () => {
+    let late!: (value: boolean) => void;
+    choose.mockImplementationOnce(() => new Promise(resolve => { late = resolve; }));
     await mount(); await click();
-    expect(button().disabled).toBe(true);
+    expect(button('选择文件夹').disabled).toBe(true);
     await act(async () => { await vi.advanceTimersByTimeAsync(125000); });
-    expect(button().disabled).toBe(false);
-    expect(document.querySelector('[role="alert"]')!.textContent).toContain('超时');
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('超时');
+    expect(button('选择文件夹').disabled).toBe(false);
     await click();
-    expect(requestAccess).toHaveBeenCalledTimes(2);
-    expect(button().disabled).toBe(false);
-    expect(document.body.textContent).toContain('还没有允许访问存储');
-    await act(async () => { late({ granted: true }); });
-    expect(document.body.textContent).toContain('还没有允许访问存储');
-    expect(document.body.textContent).not.toContain('当前位置');
+    expect(choose).toHaveBeenCalledTimes(2);
+    await act(async () => { late(true); });
+    expect(status).toHaveBeenCalledTimes(2);
+    expect(document.body.textContent).toContain('未设置');
   });
 
-  it('times out a read before opening settings and allows retry', async () => {
+  it('keeps the previous directory when replacing is canceled', async () => {
+    status.mockResolvedValue(selected);
+    await mount(); await click('更换文件夹');
+    expect(document.body.textContent).toContain('合成目录');
+    expect(document.body.textContent).toContain('已取消选择');
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the real grant after a successful choice and after revocation', async () => {
+    choose.mockResolvedValue(true);
     await mount();
-    getAccess.mockImplementationOnce(() => new Promise(() => {}));
+    status.mockResolvedValue(selected);
     await click();
-    await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
-    expect(button().disabled).toBe(false);
-    expect(document.querySelector('[role="alert"]')!.textContent).toContain('读取存储权限超时');
-    expect(requestAccess).not.toHaveBeenCalled();
-    await click();
-    expect(requestAccess).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain('已选择「合成目录」');
+    status.mockResolvedValue(empty);
+    await click('取消目录授权');
+    expect(clear).toHaveBeenCalledOnce();
+    expect(button('选择文件夹')).toBeDefined();
   });
 
-  it('does not trust the system-return payload as proof that access was granted', async () => {
-    requestAccess.mockResolvedValue({ granted: true });
+  it('does not report success if the native choice cannot be read', async () => {
+    choose.mockResolvedValue(true);
     await mount(); await click();
-    expect(getAccess).toHaveBeenCalledTimes(3); // mount, pre-check, fresh read
-    expect(document.body.textContent).toContain('还没有允许访问存储');
-    expect(button().disabled).toBe(false);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('授权不可用');
+    expect(document.body.textContent).not.toContain('已选择');
   });
 
-  it('finishes busy if reading the folder stalls after permission was granted', async () => {
+  it('finishes a stalled read after the picker and permits another attempt', async () => {
+    choose.mockResolvedValue(true);
     await mount();
-    requestAccess.mockImplementation(async () => { granted = true; return { granted: true }; });
-    current.mockImplementation(() => new Promise(() => {}));
+    status.mockImplementationOnce(() => new Promise(() => {}));
     await click();
     await act(async () => { await vi.advanceTimersByTimeAsync(8000); });
-    expect(document.querySelector('[role="alert"]')!.textContent).toContain('读取存储目录超时');
-    const change = [...document.querySelectorAll('button')].find(item => item.textContent?.includes('更改位置'));
-    expect(change).toBeDefined();
-    expect(change!.disabled).toBe(false);
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('读取备份目录超时');
+    expect(button('选择文件夹').disabled).toBe(false);
   });
 });

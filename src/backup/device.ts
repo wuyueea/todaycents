@@ -2,11 +2,8 @@
  * The device edge of export: the owner's folder first, then the old cache +
  * share sheet, plus the browser fallback.
  *
- * When a folder is set through 设置 › 存储, both backups and report workbooks
- * are written into it with the FolderPlugin (java.io.File under
- * MANAGE_EXTERNAL_STORAGE). When no folder is usable, or the native write
- * declines, the path is exactly what it was: app cache, then the system share
- * sheet.
+ * FolderPlugin writes backups and workbooks through the chosen directory grant.
+ * If no usable folder exists, user exports use the app cache and share sheet.
  *
  * The Capacitor plugins are imported with a dynamic import() inside the
  * function that needs them, exactly as src/db/index.ts loads the SQLite driver.
@@ -14,15 +11,15 @@
  * native bridge code, and the web build does not pull the plugins into the
  * initial chunk.
  *
- * There is no network here: shared storage is reached only after the owner
- * grants 「所有文件访问」, Directory.Cache is the app's own sandbox, and Share
- * hands a cache file to whatever app the owner picks.
+ * Directory.Cache stays private to the app. Share hands one cache file to
+ * whichever app the owner picks.
  */
 import type { BackupFileWriter, CopyDestination, ExportDestination } from './flow';
 import { bytesToBase64 } from '../export/base64';
 import type { BinaryFileWriter } from '../export/writer';
+import { hasZipEnd, ZIP_END_BYTES } from '../export/zip';
 import { deviceFolder } from '../storage/folder';
-import type { FolderAccess, StoredFolder } from '../storage/folder';
+import type { FolderAccess } from '../storage/folder';
 
 /** True only inside the Android/iOS shell; false for pnpm dev in a browser. */
 async function isNativePlatform(): Promise<boolean> {
@@ -61,34 +58,46 @@ async function writeNativeCacheFile(fileName: string, text: string): Promise<str
 }
 
 /**
- * Writes bytes into the app cache. Capacitor expects base64 when no encoding
- * is passed, which is how a store-only .xlsx reaches the share sheet without a
- * text round trip corrupting it.
+ * Publishes the workbook after all bytes are written. A failed write leaves
+ * no .xlsx entry that could be offered again by the cache list.
  */
-async function writeCacheBytes(fileName: string, bytes: Uint8Array): Promise<string> {
+async function publishCacheWorkbook(fileName: string, bytes: Uint8Array): Promise<string> {
   const { Filesystem, Directory } = await import('@capacitor/filesystem');
-  const result = await Filesystem.writeFile({
-    path: fileName,
-    data: bytesToBase64(bytes),
-    directory: Directory.Cache,
-  });
-  return result.uri;
+  const directory = Directory.Cache;
+  const temporary = `${fileName}.writing`;
+  const remove = (path: string) => Filesystem.deleteFile({ path, directory }).catch(() => {});
+  try {
+    await Filesystem.writeFile({ path: temporary, data: bytesToBase64(bytes), directory });
+  } catch (error) {
+    await remove(temporary);
+    throw error;
+  }
+  try {
+    await Filesystem.rename({ from: temporary, to: fileName, directory });
+  } catch (error) {
+    // Android may fall back to copying on a failed rename. This destination
+    // was reserved as unused. Keep the source as an incomplete-publication
+    // marker if deleting the partial destination also fails.
+    try {
+      await Filesystem.deleteFile({ path: fileName, directory });
+      await remove(temporary);
+    } catch (cleanupError) {
+      if (
+        typeof cleanupError === 'object' && cleanupError !== null &&
+        'code' in cleanupError && cleanupError.code === 'OS-PLUG-FILE-0008'
+      ) {
+        // Rename failed before creating a destination, or it was already evicted.
+        await remove(temporary);
+      }
+      // For other deletion failures, leave the .writing marker in place.
+    }
+    throw error;
+  }
+  return (await Filesystem.getUri({ path: fileName, directory })).uri;
 }
 
 /** What the share sheet did: handed the file over, or the owner backed out. */
 export type ShareOutcome = 'shared' | 'canceled';
-
-/**
- * The binary export channel (reports) has no destination object to report, so a
- * cancelled share has to surface as a rejection. The screen can still tell it
- * apart from a real failure and say the file is in the cache.
- */
-export class ShareCanceledError extends Error {
-  constructor() {
-    super('分享已取消');
-    this.name = 'ShareCanceledError';
-  }
-}
 
 /**
  * True when a rejection is the owner dismissing the share sheet rather than a
@@ -136,7 +145,7 @@ export interface DeviceWriterDeps {
   isNativePlatform(): Promise<boolean>;
   folder: FolderAccess;
   writeCacheFile(fileName: string, text: string): Promise<string>;
-  writeCacheBytes(fileName: string, bytes: Uint8Array): Promise<string>;
+  writeCachedReport(fileName: string, bytes: Uint8Array): Promise<{ fileName: string; uri: string }>;
   shareCacheFile(fileName: string, uri: string): Promise<ShareOutcome>;
   downloadInBrowser(fileName: string, blob: Blob): void;
 }
@@ -160,18 +169,18 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
   async function writeToFolder(
     fileName: string,
     bytes: Uint8Array
-  ): Promise<StoredFolder | null> {
+  ): Promise<{ folderName: string; fileName: string } | null> {
     const folder = await deps.folder.current();
     if (folder === null) return null;
 
     const base64 = bytesToBase64(bytes);
     try {
       const result = await deps.folder.write(fileName, base64);
-      return result.saved ? folder : null;
+      return result.saved ? { folderName: result.folderName ?? folder.name, fileName: result.name } : null;
     } catch {
       // A folder can turn unwritable between current() and write(): permission
-      // revoked, directory deleted, read-only, or full. The native writer is
-      // atomic, so the old file is untouched; this is the same fallback path as
+      // revoked, directory deleted, read-only, or full. The native writer never
+      // opens an old file for writing; this is the same fallback path as
       // a bridge that answered { saved: false }. Only the folder write is
       // caught — if the cache itself then fails, that error still reaches the
       // screen instead of inventing a successful export.
@@ -189,7 +198,7 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
         }
 
         const folder = await writeToFolder(fileName, new TextEncoder().encode(text));
-        if (folder !== null) return { kind: 'folder', folderName: folder.name };
+        if (folder !== null) return { kind: 'folder', folderName: folder.folderName, fileName: folder.fileName };
 
         const uri = await deps.writeCacheFile(fileName, text);
         const outcome = await deps.shareCacheFile(fileName, uri);
@@ -199,7 +208,7 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
       async writeCopy(fileName, text): Promise<CopyDestination> {
         if (!(await deps.isNativePlatform())) return { kind: 'none' };
         const folder = await writeToFolder(fileName, new TextEncoder().encode(text));
-        if (folder !== null) return { kind: 'folder', folderName: folder.name };
+        if (folder !== null) return { kind: 'folder', folderName: folder.folderName, fileName: folder.fileName };
         const uri = await deps.writeCacheFile(fileName, text);
         return { kind: 'cache', uri };
       },
@@ -210,14 +219,15 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
         const native = await deps.isNativePlatform();
         if (!native) {
           deps.downloadInBrowser(fileName, new Blob([new Uint8Array(bytes)], { type: mimeType }));
-          return;
+          return { kind: 'download' };
         }
 
-        if ((await writeToFolder(fileName, bytes)) !== null) return;
+        const folder = await writeToFolder(fileName, bytes);
+        if (folder !== null) return { kind: 'folder', ...folder };
 
-        const uri = await deps.writeCacheBytes(fileName, bytes);
-        const outcome = await deps.shareCacheFile(fileName, uri);
-        if (outcome === 'canceled') throw new ShareCanceledError();
+        const cached = await deps.writeCachedReport(fileName, bytes);
+        const outcome = await deps.shareCacheFile(cached.fileName, cached.uri);
+        return { kind: outcome === 'canceled' ? 'canceled' : 'share', fileName: cached.fileName };
       },
     },
   };
@@ -229,7 +239,7 @@ const deviceWriters = createDeviceWriters({
   // Defer access until an action runs; the store is initialized below. All
   // text cache writes share its queue with retention and cached-file sharing.
   writeCacheFile: (fileName, text) => cachedBackups.write(fileName, text),
-  writeCacheBytes,
+  writeCachedReport: (fileName, bytes) => cachedReports.write(fileName, bytes),
   shareCacheFile,
   downloadInBrowser,
 });
@@ -244,14 +254,16 @@ export const deviceFileWriter: BackupFileWriter = deviceWriters.text;
  */
 export const deviceBinaryFileWriter: BinaryFileWriter = deviceWriters.binary;
 
-/** One .ledger file sitting in the app cache, newest first on the screen. */
-export interface CachedBackup {
+/** One exported file in the app cache. */
+export interface CachedFile {
   name: string;
   uri: string;
   bytes: number;
   /** Epoch milliseconds from the file's mtime. */
   modifiedAt: number;
 }
+
+export type CachedBackup = CachedFile;
 
 /** The filesystem fields the cache listing reads; a subset of Capacitor's FileInfo. */
 export interface CachedFileInfo {
@@ -260,6 +272,17 @@ export interface CachedFileInfo {
   uri: string;
   size: number;
   mtime: number;
+}
+
+function cachedEntries(files: readonly CachedFileInfo[], accept: (name: string) => boolean): CachedFile[] {
+  return files
+    .filter(file =>
+      file.type === 'file' && accept(file.name) &&
+      Number.isSafeInteger(file.size) && file.size >= 0 &&
+      Number.isFinite(file.mtime) && !Number.isNaN(new Date(file.mtime).getTime())
+    )
+    .map(file => ({ name: file.name, uri: file.uri, bytes: file.size, modifiedAt: file.mtime }))
+    .sort((left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name));
 }
 
 export interface CachedBackupPort {
@@ -308,26 +331,7 @@ export function createCachedBackupStore(port: CachedBackupPort): CachedBackupSto
   }
 
   async function readFiles(): Promise<CachedBackup[]> {
-    const files = await port.listFiles();
-    return files
-        .filter((file) => file.type === 'file' && file.name.endsWith('.ledger'))
-        // FileInfo crosses the native bridge. An invalid size or mtime would
-        // throw in fileSizeText/toISOString while the screen renders, so drop
-        // the row instead of taking the whole list down.
-        .filter(
-          (file) =>
-            Number.isSafeInteger(file.size) &&
-            file.size >= 0 &&
-            Number.isFinite(file.mtime) &&
-            !Number.isNaN(new Date(file.mtime).getTime())
-        )
-        .map((file) => ({
-          name: file.name,
-          uri: file.uri,
-          bytes: file.size,
-          modifiedAt: file.mtime,
-        }))
-        .sort((left, right) => right.modifiedAt - left.modifiedAt || right.name.localeCompare(left.name));
+    return cachedEntries(await port.listFiles(), name => name.endsWith('.ledger'));
   }
 
   async function prune(files: CachedBackup[]): Promise<CachedBackup[]> {
@@ -380,13 +384,14 @@ export function createCachedBackupStore(port: CachedBackupPort): CachedBackupSto
   };
 }
 
+async function listNativeCacheFiles(): Promise<readonly CachedFileInfo[]> {
+  const { Filesystem, Directory } = await import('@capacitor/filesystem');
+  return (await Filesystem.readdir({ path: '', directory: Directory.Cache })).files;
+}
+
 const nativeCachedBackupPort: CachedBackupPort = {
   isNativePlatform,
-  async listFiles() {
-    const { Filesystem, Directory } = await import('@capacitor/filesystem');
-    const result = await Filesystem.readdir({ path: '', directory: Directory.Cache });
-    return result.files;
-  },
+  listFiles: listNativeCacheFiles,
   writeFile: writeNativeCacheFile,
   async deleteFile(fileName) {
     const { Filesystem, Directory } = await import('@capacitor/filesystem');
@@ -397,3 +402,85 @@ const nativeCachedBackupPort: CachedBackupPort = {
 
 /** The app-wide cache listing. Nothing native is imported until list() runs. */
 export const cachedBackups: CachedBackupStore = createCachedBackupStore(nativeCachedBackupPort);
+
+type CachedReportPort = Pick<CachedBackupPort, 'isNativePlatform' | 'listFiles' | 'share'> & {
+  publish(fileName: string, bytes: Uint8Array): Promise<string>;
+  isComplete(file: CachedFile): Promise<boolean>;
+};
+
+// Recognizes the original month/year names and numbered copies in Directory.Cache.
+const reportName = /^(记账本-[1-9]\d{3}(?:-(?:0[1-9]|1[0-2]))?)(?: \((?:[2-9]|[1-9]\d+)\))?\.xlsx$/;
+
+export function createCachedReportStore(port: CachedReportPort) {
+  let tail: Promise<void> = Promise.resolve();
+
+  function enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const result = tail.then(work);
+    tail = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  function list(): Promise<CachedFile[]> {
+    // An Android rename may copy bytes as a fallback. A listing queued behind
+    // the write only sees published reports after that step or its cleanup.
+    return enqueue(async () => {
+      if (!(await port.isNativePlatform())) return [];
+      const files = await port.listFiles();
+      const incomplete = new Set(files.map(file => file.name).filter(name => name.endsWith('.writing')));
+      const candidates = cachedEntries(files, name => reportName.test(name) && !incomplete.has(`${name}.writing`));
+      const complete: CachedFile[] = [];
+      for (const file of candidates) {
+        if (file.bytes >= ZIP_END_BYTES && file.uri.startsWith('file://') && await port.isComplete(file)) {
+          complete.push(file);
+        }
+      }
+      return complete;
+    });
+  }
+
+  return {
+    list,
+    write(fileName: string, bytes: Uint8Array): Promise<{ fileName: string; uri: string }> {
+      return enqueue(async () => {
+        const base = reportName.exec(fileName)?.[1];
+        if (!base) throw new Error('报表文件名无效。');
+        const names = new Set((await port.listFiles()).map(file => file.name));
+        let available = fileName;
+        for (let number = 2; names.has(available) || names.has(`${available}.writing`); number += 1) {
+          available = `${base} (${number}).xlsx`;
+        }
+        return { fileName: available, uri: await port.publish(available, bytes) };
+      });
+    },
+    async share(fileName: string): Promise<ShareOutcome> {
+      const file = (await list()).find(entry => entry.name === fileName);
+      if (!file) throw new Error('报表已不在应用缓存中。');
+      return port.share(file.name, file.uri);
+    },
+  };
+}
+
+export const cachedReports = createCachedReportStore({
+  isNativePlatform,
+  listFiles: listNativeCacheFiles,
+  publish: publishCacheWorkbook,
+  async isComplete(file) {
+    // Older exports wrote directly to the final filename, and Android can
+    // evict a .writing marker separately. Verify the ZIP footer as well.
+    const { Filesystem, Directory } = await import('@capacitor/filesystem');
+    try {
+      const { data } = await Filesystem.readFile({
+        path: file.name,
+        directory: Directory.Cache,
+        offset: file.bytes - ZIP_END_BYTES,
+        length: ZIP_END_BYTES,
+      });
+      return typeof data === 'string' &&
+        hasZipEnd(Uint8Array.from(atob(data), character => character.charCodeAt(0)), file.bytes);
+    } catch {
+      // The system may have removed this file since readdir.
+      return false;
+    }
+  },
+  share: shareCacheFile,
+});

@@ -19,7 +19,7 @@ import type { ReportCategory } from '../db/repos/reports';
 import { buildXlsx, formulaCell, moneyLiteral, numberLiteral } from './xlsx';
 import type { XlsxCellValue } from './xlsx';
 import { XLSX_MIME_TYPE } from './writer';
-import type { BinaryFileWriter } from './writer';
+import type { BinaryExportDestination, BinaryFileWriter } from './writer';
 
 /** Source rows and totals for one period, with tag names already resolved. */
 export interface ReportWorkbookInput {
@@ -40,12 +40,12 @@ export interface ReportWorkbookResult {
   summaryRows: number;
 }
 
-/** What a successful export tells the screen. */
-export interface ReportExportResult {
+/** The workbook and the writer's destination or sharing outcome. */
+export type ReportExportResult = BinaryExportDestination & {
   fileName: string;
   bytes: number;
   detailRows: number;
-}
+};
 
 const DETAIL_WIDTHS = [14, 18, 18, 22, 18, 22, 26, 44] as const;
 const SUMMARY_WIDTHS = [28, 20, 20] as const;
@@ -259,17 +259,19 @@ export async function buildYearWorkbook(db: Db, year: number): Promise<ReportWor
   };
 }
 
-function exportResult(workbook: ReportWorkbookResult): ReportExportResult {
+async function writeWorkbook(workbook: ReportWorkbookResult, writer: BinaryFileWriter): Promise<ReportExportResult> {
+  const destination = await writer.writeForShare(workbook.fileName, workbook.bytes, XLSX_MIME_TYPE);
   return {
     fileName: workbook.fileName,
     bytes: workbook.bytes.length,
     detailRows: workbook.detailRows,
+    ...destination,
   };
 }
 
 /**
  * Builds the month workbook, hands its bytes to the shared export channel, and
- * only then returns a success result. A rejected write rejects this function;
+ * then returns the destination or canceled-share result. A rejected write rejects this function;
  * there is no path that reports a file the writer did not accept.
  */
 export async function exportMonthWorkbook(
@@ -278,8 +280,7 @@ export async function exportMonthWorkbook(
   monthKey: string
 ): Promise<ReportExportResult> {
   const workbook = await buildMonthWorkbook(db, monthKey);
-  await writer.writeForShare(workbook.fileName, workbook.bytes, XLSX_MIME_TYPE);
-  return exportResult(workbook);
+  return writeWorkbook(workbook, writer);
 }
 
 /** The year counterpart of exportMonthWorkbook. */
@@ -289,6 +290,5 @@ export async function exportYearWorkbook(
   year: number
 ): Promise<ReportExportResult> {
   const workbook = await buildYearWorkbook(db, year);
-  await writer.writeForShare(workbook.fileName, workbook.bytes, XLSX_MIME_TYPE);
-  return exportResult(workbook);
+  return writeWorkbook(workbook, writer);
 }

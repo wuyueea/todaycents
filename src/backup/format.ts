@@ -193,16 +193,20 @@ export function importDoneToast(result: {
   rows: number;
   clearedProjectRefs?: number;
   /**
-   * Where the automatic before-copy actually went. Only a cache or no copy is
-   * worth repeating: a folder was already promised in the confirmation sheet.
+   * Where the automatic before-copy actually went.
    */
   beforeDestination?: CopyLocation;
+  beforeFileName?: string;
 }): string {
   const line = `已导入「${result.fileName}」 · ${result.rows} 笔`;
   const cleared = result.clearedProjectRefs ?? 0;
   const imported = cleared > 0 ? `${line}；${cleared} 笔流水的项目在文件里找不到，已清空` : line;
   const destination = result.beforeDestination;
-  if (destination === undefined || destination.kind === 'folder') return imported;
+  if (destination === undefined) return imported;
+  if (result.beforeFileName && destination.kind !== 'none') {
+    return `${imported} · 导入前的备份「${result.beforeFileName}」${copyLocationNote(destination)}`;
+  }
+  if (destination.kind === 'folder') return imported;
   return `${imported} · 导入前的备份${copyLocationNote(destination)}`;
 }
 

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AmountText, formatCentsDisplay } from '../components/AmountText';
+import { TxnDeleteRow } from '../components/TxnDelete';
 import { ProjectMark, UncategorisedLabel, isUncategorised } from '../components/TxnMarks';
 import { countMovements, orderTransferLegs } from '../components/txnOrder';
-import { useDb, useQuery } from '../store/useDb';
-import { deleteTransfer } from '../db/repos/transfers';
+import { useQuery } from '../store/useDb';
 import { listTxnsByMonth, monthSummary } from '../db/repos/txns';
 import type { TxnRow } from '../db/repos/txns';
 import type { Db } from '../db/driver';
@@ -28,8 +28,7 @@ import {
  *
  * A transfer arrives as two legs, one negative and one positive. The display
  * keeps the pair together with the out leg first, and neither leg may be
- * edited or deleted on its own: the only action deletes the whole group, with
- * an inline second tap. Adjustments are readable and editable but count in
+ * edited or deleted on its own. Adjustments are readable and editable but count in
  * neither 出 nor 入.
  */
 
@@ -213,23 +212,6 @@ export async function loadLedgerData(db: Db, monthKey: string): Promise<LedgerDa
   };
 }
 
-/**
- * Deletes the whole transfer that this row belongs to.
- *
- * The only transfer mutation the ledger offers. It never reaches softDeleteTxn
- * and refuses a non-transfer row or a legacy leg with no group id, so a single
- * side of a matched pair can never be deleted. Returns whether a group was
- * actually deleted.
- */
-export async function deleteTransferFromLedger(
-  db: Db,
-  row: Pick<TxnRow, 'direction' | 'transferGroupId'>
-): Promise<boolean> {
-  if (row.direction !== 'transfer' || row.transferGroupId === null) return false;
-  await deleteTransfer(db, row.transferGroupId);
-  return true;
-}
-
 /** A row's rounded mark: a category initial or a kind glyph. */
 function ledgerGlyph(row: TxnRow): string {
   if (row.direction === 'transfer') return '⇄';
@@ -244,33 +226,9 @@ function ledgerLabel(row: TxnRow): string {
   return row.categoryName ?? '未分类';
 }
 
-/**
- * One row of a day card.
- *
- * A transfer is a plain div rather than a Link: there is no edit screen for a
- * single leg. Its one action deletes the whole group, and the first tap only
- * opens an inline confirmation — no window.confirm and no undo. The in leg
- * carries no action, so the pair has exactly one delete entry.
- */
-function LedgerRowView({
-  row,
-  deleting,
-  confirming,
-  onAskDelete,
-  onCancelDelete,
-  onConfirmDelete,
-}: {
-  row: TxnRow;
-  deleting: boolean;
-  confirming: boolean;
-  onAskDelete: (row: TxnRow) => void;
-  onCancelDelete: () => void;
-  onConfirmDelete: (row: TxnRow) => void;
-}) {
+// Both transfer legs share one delete target, and neither opens an editor.
+function LedgerRowView({ row }: { row: TxnRow }) {
   const isTransfer = row.direction === 'transfer';
-  const canDelete =
-    isTransfer && row.transferGroupId !== null && row.amountCents < 0;
-
   const meta = isTransfer
     ? `${row.amountCents < 0 ? '转出' : '转入'} · ${row.accountName}${
         row.note !== '' ? ` ${row.note}` : ''
@@ -308,42 +266,6 @@ function LedgerRowView({
         </span>
       </span>
       <AmountText cents={row.amountCents} direction={row.direction} />
-      {canDelete && (
-        <span className="ledger-row__act">
-          {confirming ? (
-            <>
-              <span className="ledger-row__warn">两条一起删，删了不能撤销</span>
-              <span className="ledger-row__confirm">
-                <button
-                  className="ledger-row__delete"
-                  type="button"
-                  disabled={deleting}
-                  onClick={() => onConfirmDelete(row)}
-                >
-                  {deleting ? '正在删除…' : '删除'}
-                </button>
-                <button
-                  className="ledger-row__delete ledger-row__delete--cancel"
-                  type="button"
-                  disabled={deleting}
-                  onClick={onCancelDelete}
-                >
-                  算了
-                </button>
-              </span>
-            </>
-          ) : (
-            <button
-              className="ledger-row__delete"
-              type="button"
-              disabled={deleting}
-              onClick={() => onAskDelete(row)}
-            >
-              删除这笔转账
-            </button>
-          )}
-        </span>
-      )}
     </>
   );
 
@@ -429,15 +351,9 @@ function LedgerBars({
 }
 
 export default function LedgerScreen() {
-  const { db, bump } = useDb();
   const today = todayLocalISO();
   const currentMonthKey = monthKeyOf(today);
   const [monthKey, setMonthKey] = useState(currentMonthKey);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [confirmGroupId, setConfirmGroupId] = useState<string | null>(null);
-  const [status, setStatus] = useState<{ kind: 'success' | 'error'; text: string } | null>(
-    null
-  );
   const query = useQuery<LedgerData>(
     database => loadLedgerData(database, monthKey),
     [monthKey]
@@ -455,15 +371,7 @@ export default function LedgerScreen() {
 
   useEffect(() => {
     window.scrollTo({ top: 0 });
-    setConfirmGroupId(null);
-    setStatus(null);
   }, [monthKey]);
-
-  useEffect(() => {
-    if (status?.kind !== 'success') return;
-    const timer = window.setTimeout(() => setStatus(null), 2600);
-    return () => window.clearTimeout(timer);
-  }, [status]);
 
   const jumpToDay = (date: string) => {
     const target = document.getElementById(`ledger-day-${date}`);
@@ -476,27 +384,6 @@ export default function LedgerScreen() {
     const top =
       target.getBoundingClientRect().top + window.scrollY - inset - 8;
     window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
-  };
-
-  /** The first tap only opens the confirmation; the second deletes the pair. */
-  const handleDeleteTransfer = async (row: TxnRow) => {
-    if (db === null || row.transferGroupId === null) return;
-
-    setDeletingId(row.id);
-    setStatus(null);
-    try {
-      await deleteTransferFromLedger(db, row);
-      setConfirmGroupId(null);
-      setStatus({ kind: 'success', text: '已删除这笔转账' });
-      bump();
-    } catch (reason) {
-      setStatus({
-        kind: 'error',
-        text: `删除转账失败：${reason instanceof Error ? reason.message : String(reason)}`,
-      });
-    } finally {
-      setDeletingId(null);
-    }
   };
 
   return (
@@ -566,33 +453,14 @@ export default function LedgerScreen() {
               </header>
               <ul className="ledger-day__rows">
                 {orderTransferLegs(group.rows).map(row => (
-                  <li key={row.id}>
-                    <LedgerRowView
-                      row={row}
-                      deleting={deletingId === row.id}
-                      confirming={
-                        row.transferGroupId !== null &&
-                        confirmGroupId === row.transferGroupId
-                      }
-                      onAskDelete={candidate => setConfirmGroupId(candidate.transferGroupId)}
-                      onCancelDelete={() => setConfirmGroupId(null)}
-                      onConfirmDelete={candidate => void handleDeleteTransfer(candidate)}
-                    />
-                  </li>
+                  <TxnDeleteRow key={row.id} row={row} label={ledgerLabel(row)}>
+                    <LedgerRowView row={row} />
+                  </TxnDeleteRow>
                 ))}
               </ul>
             </section>
           ))}
         </div>
-      )}
-
-      {status !== null && (
-        <p
-          className={`ledger-note ledger-note--${status.kind}`}
-          role={status.kind === 'error' ? 'alert' : 'status'}
-        >
-          {status.text}
-        </p>
       )}
 
       <div className="ledger-switch" role="group" aria-label="月份切换">

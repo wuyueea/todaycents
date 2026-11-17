@@ -1,117 +1,92 @@
 package io.github.wuyueea.todaycents;
 
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import static org.junit.Assert.*;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
-import java.util.UUID;
-
-import org.junit.Rule;
+import java.util.Map;
+import java.util.Set;
 import org.junit.Test;
-import org.junit.rules.TemporaryFolder;
 
 public class FolderWriterTest {
+    private static final class Target implements FolderWriter.Destination<String> {
+        final Map<String, byte[]> documents = new HashMap<>();
+        final List<String> operations = new ArrayList<>();
+        boolean failWrite;
+        boolean failPublish;
 
-    @Rule
-    public TemporaryFolder temporary = new TemporaryFolder();
-
-    @Test
-    public void writesNewFileWithoutLeavingTemporaryFiles() throws Exception {
-        File folder = temporary.newFolder("folder");
-        File target = new File(folder, "记账本-20261114.ledger");
-        byte[] bytes = "第一行\n第二行\n".getBytes(StandardCharsets.UTF_8);
-
-        FolderWriter.writeAtomically(target, bytes);
-
-        assertTrue(target.isFile());
-        assertArrayEquals(bytes, Files.readAllBytes(target.toPath()));
-        assertTrue(listTemporaryFiles(folder).isEmpty());
-    }
-
-    @Test
-    public void overwritesExistingFileAndLeavesOnlyTheTarget() throws Exception {
-        File folder = temporary.newFolder("folder");
-        File target = new File(folder, "记账本-20261114.ledger");
-        Files.write(target.toPath(), "一份更长的旧内容".getBytes(StandardCharsets.UTF_8));
-        byte[] bytes = "新".getBytes(StandardCharsets.UTF_8);
-
-        FolderWriter.writeAtomically(target, bytes);
-
-        assertArrayEquals(bytes, Files.readAllBytes(target.toPath()));
-        assertTrue(listTemporaryFiles(folder).isEmpty());
-    }
-
-    @Test
-    public void keepsExistingTargetAndCleansUpWhenReplacementFails() throws Exception {
-        File folder = temporary.newFolder("folder");
-        File target = new File(folder, "记账本-20261114.ledger");
-        assertTrue(target.mkdir());
-        File child = new File(target, "旧数据.txt");
-        Files.write(child.toPath(), "不能被破坏".getBytes(StandardCharsets.UTF_8));
-
-        try {
-            FolderWriter.writeAtomically(target, new byte[] {1, 2, 3});
-            fail("目标是非空目录时应当写入失败");
-        } catch (IOException expected) {
-            // 预期：替换失败必须抛出异常，交给插件层 reject。
+        @Override public String createTemporary() {
+            operations.add("create");
+            documents.put("test.tmp", new byte[0]);
+            return "test.tmp";
         }
-
-        assertTrue(target.isDirectory());
-        assertEquals("不能被破坏", new String(Files.readAllBytes(child.toPath()), StandardCharsets.UTF_8));
-        assertTrue(listTemporaryFiles(folder).isEmpty());
-    }
-
-    @Test
-    public void removesStaleTemporaryFilesButKeepsFreshOnes() throws Exception {
-        File folder = temporary.newFolder("folder");
-        File stale = temporaryFile(folder);
-        File fresh = temporaryFile(folder);
-        Files.write(stale.toPath(), new byte[] {9});
-        Files.write(fresh.toPath(), new byte[] {9});
-        assertTrue(stale.setLastModified(System.currentTimeMillis() - 2L * 60L * 60L * 1000L));
-
-        FolderWriter.writeAtomically(new File(folder, "记账本-20261114.ledger"), new byte[] {1});
-
-        assertFalse(stale.exists());
-        assertTrue(fresh.exists());
-    }
-
-    @Test
-    public void doesNotDeleteFilesThatOnlyLookLikeTemporaryFiles() throws Exception {
-        File folder = temporary.newFolder("folder");
-        File impostor = new File(folder, FolderWriter.TEMP_PREFIX + "not-a-uuid" + FolderWriter.TEMP_SUFFIX);
-        Files.write(impostor.toPath(), new byte[] {9});
-        assertTrue(impostor.setLastModified(System.currentTimeMillis() - 2L * 60L * 60L * 1000L));
-
-        FolderWriter.writeAtomically(new File(folder, "记账本-20261114.ledger"), new byte[] {1});
-
-        assertTrue("只应清理本类生成的临时文件", impostor.exists());
-    }
-
-    private File temporaryFile(File folder) {
-        return new File(folder, FolderWriter.TEMP_PREFIX + UUID.randomUUID() + FolderWriter.TEMP_SUFFIX);
-    }
-
-    private List<File> listTemporaryFiles(File folder) {
-        List<File> found = new ArrayList<>();
-        File[] files = folder.listFiles();
-        if (files == null) {
-            return found;
-        }
-        for (File file : files) {
-            String name = file.getName();
-            if (name.startsWith(FolderWriter.TEMP_PREFIX) && name.endsWith(FolderWriter.TEMP_SUFFIX)) {
-                found.add(file);
+        @Override public void writeAndSync(String temporary, byte[] bytes) throws IOException {
+            operations.add("write");
+            if (failWrite) {
+                documents.put(temporary, new byte[]{bytes[0]});
+                throw new IOException("short write");
             }
+            documents.put(temporary, bytes);
         }
-        return found;
+        @Override public Set<String> names() { return documents.keySet(); }
+        @Override public String publish(String temporary, String name) throws IOException {
+            operations.add("publish");
+            if (failPublish || documents.containsKey(name)) throw new IOException("rename failed");
+            documents.put(name, documents.remove(temporary));
+            return name;
+        }
+        @Override public void discard(String temporary) {
+            operations.add("discard");
+            documents.remove(temporary);
+        }
+    }
+
+    @Test public void publishesNewWorkbookAfterWritingWithoutTouchingExistingFiles() throws Exception {
+        Target target = new Target();
+        byte[] old = {1};
+        byte[] bytes = {0, (byte) 255};
+        target.documents.put("报表.xlsx", old);
+        target.documents.put("报表 (2).xlsx", old);
+        assertEquals("报表 (3).xlsx", FolderWriter.writeNew(target, "报表.xlsx", bytes));
+        assertArrayEquals(bytes, target.documents.get("报表 (3).xlsx"));
+        assertArrayEquals(old, target.documents.get("报表.xlsx"));
+        assertArrayEquals(old, target.documents.get("报表 (2).xlsx"));
+        assertEquals(List.of("create", "write", "publish"), target.operations);
+        assertFalse(target.documents.containsKey("test.tmp"));
+    }
+
+    @Test public void numberedBeforeCopyRetainsMarkerAndExtension() throws Exception {
+        Target target = new Target();
+        target.documents.put("账本-before.ledger", new byte[]{1});
+        assertEquals("账本 (2)-before.ledger", FolderWriter.writeNew(target, "账本-before.ledger", new byte[]{2}));
+    }
+
+    @Test public void partialWriteNeverPublishesAndOnlyDiscardsItsTemporaryFile() {
+        Target target = new Target();
+        target.failWrite = true;
+        byte[] old = {1, 2, 3};
+        target.documents.put("账本.ledger", old);
+        assertThrows(IOException.class, () -> FolderWriter.writeNew(target, "账本.ledger", new byte[]{4, 5}));
+        assertEquals(List.of("create", "write", "discard"), target.operations);
+        assertEquals(Set.of("账本.ledger"), target.documents.keySet());
+        assertArrayEquals(old, target.documents.get("账本.ledger"));
+    }
+
+    @Test public void failedRenameKeepsExistingFileAndDiscardsOnlyItsOwnTemporaryFile() {
+        Target target = new Target();
+        target.failPublish = true;
+        target.documents.put("账本.ledger", new byte[]{1});
+        target.documents.put("someone-elses.tmp", new byte[]{2});
+        assertThrows(IOException.class, () -> FolderWriter.writeNew(target, "账本.ledger", new byte[]{9}));
+        assertEquals(Set.of("账本.ledger", "someone-elses.tmp"), target.documents.keySet());
+        assertArrayEquals(new byte[]{1}, target.documents.get("账本.ledger"));
+    }
+
+    @Test public void rejectsUnsafeNameBeforeCreatingAnyDocument() {
+        Target target = new Target();
+        assertThrows(IOException.class, () -> FolderWriter.writeNew(target, "../账本.ledger", new byte[]{1}));
+        assertTrue(target.operations.isEmpty());
     }
 }

@@ -3,7 +3,6 @@ import {
   createCachedBackupStore,
   createDeviceWriters,
   isShareCanceled,
-  ShareCanceledError,
 } from '../../src/backup/device';
 import type {
   CachedBackup,
@@ -16,7 +15,6 @@ import { bytesToBase64 } from '../../src/export/base64';
 import { XLSX_MIME_TYPE } from '../../src/export/writer';
 
 const FOLDER: StoredFolder = {
-  path: '/storage/emulated/0/Documents/Books',
   name: 'Books',
 };
 
@@ -25,6 +23,8 @@ interface HarnessOptions {
   folder: StoredFolder | null;
   /** Simulates a bridge that answers but did not save. */
   saved?: boolean;
+  actualName?: string;
+  cachedName?: string;
   /** Simulates the owner dismissing the system share sheet. */
   share?: ShareOutcome;
   /** Simulates the native bridge rejecting instead of answering. */
@@ -37,6 +37,8 @@ function harness({
   native,
   folder,
   saved = true,
+  actualName,
+  cachedName,
   share = 'shared',
   folderWriteError,
   cacheTextError,
@@ -50,16 +52,14 @@ function harness({
   const access: FolderAccess = {
     current: async () => folder,
     available: async () => true,
-    getAccess: async () => ({ granted: true }),
-    requestAccess: async () => ({ granted: true }),
-    list: async () => ({ path: '', parent: null, dirs: [] }),
-    choose: async () => null,
+    status: async () => ({ folder, needsReselection: false }),
+    choose: async () => false,
     clear: async () => {},
     open: async () => false,
     write: async (name, base64) => {
       folderWrites.push({ name, base64 });
       if (folderWriteError !== undefined) throw folderWriteError;
-      return { saved, name };
+      return { saved, name: actualName ?? name };
     },
   };
 
@@ -71,9 +71,10 @@ function harness({
       cacheText.push({ fileName, text });
       return `file:///cache/${fileName}`;
     },
-    writeCacheBytes: async (fileName, bytes) => {
+    writeCachedReport: async (fileName, bytes) => {
       cacheBytes.push({ fileName, bytes });
-      return `file:///cache/${fileName}`;
+      const name = cachedName ?? fileName;
+      return { fileName: name, uri: `file:///cache/${name}` };
     },
     shareCacheFile: async (fileName, uri) => {
       shared.push({ fileName, uri });
@@ -95,6 +96,16 @@ function harness({
 }
 
 describe('deviceFileWriter with a chosen folder', () => {
+  it('returns the actual filename for a renamed report or before-copy', async () => {
+    const report = harness({ native: true, folder: FOLDER, actualName: '报表 (2).xlsx' });
+    await expect(report.writers.binary.writeForShare('报表.xlsx', new Uint8Array([1, 2]), XLSX_MIME_TYPE))
+      .resolves.toEqual({ kind: 'folder', fileName: '报表 (2).xlsx', folderName: 'Books' });
+    const backup = harness({ native: true, folder: FOLDER, actualName: '记账本 (2)-before.ledger' });
+    await expect(backup.writers.text.writeCopy('记账本-before.ledger', 'test'))
+      .resolves.toEqual({ kind: 'folder', fileName: '记账本 (2)-before.ledger', folderName: 'Books' });
+    expect(report.shared).toHaveLength(0);
+    expect(backup.cacheText).toHaveLength(0);
+  });
   it('writes backup text into the folder as UTF-8 base64, with no cache or share sheet', async () => {
     const h = harness({ native: true, folder: FOLDER });
 
@@ -103,7 +114,7 @@ describe('deviceFileWriter with a chosen folder', () => {
       '你好'
     );
 
-    expect(destination).toEqual({ kind: 'folder', folderName: 'Books' });
+    expect(destination).toEqual({ kind: 'folder', folderName: 'Books', fileName: '记账本-20261020-2214.ledger' });
     expect(h.folderWrites).toEqual([
       {
         name: '记账本-20261020-2214.ledger',
@@ -135,7 +146,7 @@ describe('deviceFileWriter with a chosen folder', () => {
       'before'
     );
 
-    expect(destination).toEqual({ kind: 'folder', folderName: 'Books' });
+    expect(destination).toEqual({ kind: 'folder', folderName: 'Books', fileName: '记账本-20261020-2214-before.ledger' });
     expect(h.folderWrites).toHaveLength(1);
     expect(h.cacheText).toHaveLength(0);
     expect(h.shared).toHaveLength(0);
@@ -198,20 +209,23 @@ describe('deviceFileWriter when the chosen folder write rejects', () => {
     ]);
   });
 
-  it('still rejects a cancelled workbook share after the folder fallback', async () => {
+  it('returns a canceled share and the actual cache filename after a folder write fails', async () => {
     const h = harness({
       native: true,
       folder: FOLDER,
       folderWriteError: folderError,
       share: 'canceled',
+      cachedName: '记账本-2026-10 (2).xlsx',
     });
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
 
     await expect(
       h.writers.binary.writeForShare('记账本-2026-10.xlsx', bytes, XLSX_MIME_TYPE)
-    ).rejects.toBeInstanceOf(ShareCanceledError);
+    ).resolves.toEqual({ kind: 'canceled', fileName: '记账本-2026-10 (2).xlsx' });
     expect(h.cacheBytes).toHaveLength(1);
-    expect(h.shared).toHaveLength(1);
+    expect(h.shared).toEqual([{
+      fileName: '记账本-2026-10 (2).xlsx', uri: 'file:///cache/记账本-2026-10 (2).xlsx',
+    }]);
   });
 
   it('does not hide a cache failure behind the folder fallback', async () => {
@@ -263,13 +277,13 @@ describe('deviceFileWriter without a chosen folder', () => {
     expect(h.shared).toHaveLength(1);
   });
 
-  it('rejects a cancelled workbook share, so the report screen cannot claim success', async () => {
+  it('returns a separate canceled outcome for a dismissed workbook share', async () => {
     const h = harness({ native: true, folder: null, share: 'canceled' });
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04]);
 
     await expect(
       h.writers.binary.writeForShare('记账本-2026-10.xlsx', bytes, XLSX_MIME_TYPE)
-    ).rejects.toBeInstanceOf(ShareCanceledError);
+    ).resolves.toEqual({ kind: 'canceled', fileName: '记账本-2026-10.xlsx' });
     expect(h.cacheBytes).toHaveLength(1);
     expect(h.shared).toHaveLength(1);
   });

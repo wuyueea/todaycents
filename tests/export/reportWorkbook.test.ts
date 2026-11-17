@@ -70,6 +70,7 @@ function memoryWriter(): BinaryFileWriter & { written: Written[] } {
     written,
     async writeForShare(fileName, bytes, mimeType) {
       written.push({ fileName, bytes, mimeType });
+      return { kind: 'download' };
     },
   };
 }
@@ -370,6 +371,16 @@ describe('buildYearWorkbook', () => {
 });
 
 describe('exportMonthWorkbook / exportYearWorkbook', () => {
+  it('returns the actual file and location after a direct folder export', async () => {
+    const db = await seededDb();
+    const writer: BinaryFileWriter = {
+      async writeForShare() { return { kind: 'folder', fileName: '记账本-2026 (2).xlsx', folderName: '合成目录' }; },
+    };
+    expect(await exportYearWorkbook(db, writer, 2026)).toMatchObject({
+      fileName: '记账本-2026 (2).xlsx', folderName: '合成目录',
+    });
+  });
+
   it('hands the bytes and MIME type to the writer, then reports the size', async () => {
     const db = await seededDb();
     const card = await account(db, '饭卡');
@@ -390,6 +401,7 @@ describe('exportMonthWorkbook / exportYearWorkbook', () => {
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     );
     expect(result).toEqual({
+      kind: 'download',
       fileName: '记账本-2026-10.xlsx',
       bytes: writer.written[0]!.bytes.length,
       detailRows: 1,
