@@ -6,6 +6,7 @@ import {
 } from '../components/AmountKeypad';
 import { Sheet } from '../components/Sheet';
 import { createSaveExit } from '../components/saveExit';
+import { isPlainLinkClick } from '../components/TxnEditNavigation';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createTagForPicker } from '../components/createTagForPicker';
@@ -66,6 +67,21 @@ export interface QuickEntryDraft {
   /** 0..N tag ids; written after the row exists, never inside its insert. */
   tagIds: readonly string[];
   /** One project or none; written after the row exists, like the tags. */
+  projectId: string | null;
+}
+
+/** Values retained by a deliberate closure during this app session. */
+export interface QuickEntrySessionDraft {
+  direction: EntryDirection;
+  amount: string;
+  categoryChoices: Partial<Record<CategoryDirection, string | null>>;
+  accountChoice?: string;
+  fromChoice?: string;
+  toChoice?: string;
+  dateChoice?: string;
+  note: string;
+  tagIds: readonly string[];
+  newTag: string;
   projectId: string | null;
 }
 
@@ -370,12 +386,22 @@ export interface QuickEntryScreenProps {
   initialDirection?: EntryDirection;
   /** Closes the sheet. Defaults to leaving for 今天 when rendered on its own. */
   onClose?: () => void;
+  keptDraft?: QuickEntrySessionDraft | null;
+  onDraftChange?: (draft: QuickEntrySessionDraft | null) => void;
   /**
    * False while 账户 covers the sheet (opened from its empty-account link).
    * The component stays mounted so the draft survives, but it must not keep
    * focus, the keyboard listener or the back handler while it cannot be seen.
    */
   active?: boolean;
+}
+
+type QuickEntryDestination = 'close' | 'ledger';
+
+function defaultEntryCategory(data: QuickEntryData | null, direction: CategoryDirection): string | null {
+  const id = data?.lastUsed[direction].categoryId;
+  if (!id || id === UNCATEGORIZED_CATEGORY_ID) return null;
+  return data?.categories.some(category => category.id === id && category.kind === direction) ? id : null;
 }
 
 /**
@@ -395,6 +421,8 @@ export interface QuickEntryScreenProps {
 export default function QuickEntryScreen({
   initialDirection = 'expense',
   onClose,
+  keptDraft = null,
+  onDraftChange,
   active = true,
 }: QuickEntryScreenProps = {}) {
   const { db, bump } = useDb();
@@ -404,30 +432,32 @@ export default function QuickEntryScreen({
   const fieldsRef = useRef<HTMLDivElement>(null);
   const tagRowRef = useRef<HTMLDivElement>(null);
 
-  const [direction, setDirection] = useState<EntryDirection>(initialDirection);
-  const [amount, setAmount] = useState('');
-  const [tagIds, setTagIds] = useState<string[]>([]);
-  const [projectId, setProjectId] = useState<string | null>(null);
+  const [direction, setDirection] = useState<EntryDirection>(keptDraft?.direction ?? initialDirection);
+  const [amount, setAmount] = useState(keptDraft?.amount ?? '');
+  const [tagIds, setTagIds] = useState<readonly string[]>(keptDraft?.tagIds ?? []);
+  const [projectId, setProjectId] = useState<string | null>(keptDraft?.projectId ?? null);
   const [createdTags, setCreatedTags] = useState<Tag[]>([]);
-  const [tagOpen, setTagOpen] = useState(false);
-  const [newTag, setNewTag] = useState('');
+  const [tagOpen, setTagOpen] = useState(Boolean(keptDraft?.newTag));
+  const [newTag, setNewTag] = useState(keptDraft?.newTag ?? '');
   const [tagError, setTagError] = useState<string | null>(null);
   const [creatingTag, setCreatingTag] = useState(false);
   // undefined means "untouched", so the last-used default can still arrive
   // after the query resolves; null means the user cleared the choice.
   const [categoryChoices, setCategoryChoices] = useState<
     Partial<Record<CategoryDirection, string | null>>
-  >({});
-  const [accountChoice, setAccountChoice] = useState<string | undefined>(undefined);
+  >(keptDraft?.categoryChoices ?? {});
+  const [accountChoice, setAccountChoice] = useState(keptDraft?.accountChoice);
   // The transfer pair has its own choices, so switching to 支出 and back keeps
   // both of them; undefined means "use the computed default".
-  const [fromChoice, setFromChoice] = useState<string | undefined>(undefined);
-  const [toChoice, setToChoice] = useState<string | undefined>(undefined);
-  const [date, setDate] = useState(today);
-  const [note, setNote] = useState('');
+  const [fromChoice, setFromChoice] = useState(keptDraft?.fromChoice);
+  const [toChoice, setToChoice] = useState(keptDraft?.toChoice);
+  const [openingDate] = useState(today);
+  const [dateChoice, setDateChoice] = useState(keptDraft?.dateChoice);
+  const [note, setNote] = useState(keptDraft?.note ?? '');
   const [problems, setProblems] = useState<QuickEntryProblems>(noProblems);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [leaveFor, setLeaveFor] = useState<QuickEntryDestination | null>(null);
   const [keypadActive, setKeypadActive] = useState(true);
   const [fieldsOverflow, setFieldsOverflow] = useState(false);
 
@@ -444,7 +474,7 @@ export default function QuickEntryScreen({
   }, []);
 
   const close = onClose ?? (() => navigate('/'));
-  const exit = createSaveExit(submitting, close);
+  const exit = createSaveExit(submitting, () => requestLeave('close'));
   const data = query.data;
   const isTransfer = direction === 'transfer';
 
@@ -470,16 +500,7 @@ export default function QuickEntryScreen({
 
   // 未分类 is a sink for deleted categories, never a prefill: a last row that
   // was reflowed into it must not make the next entry choose it.
-  const selectableCategories = liveCategories.filter(
-    category => category.id !== UNCATEGORIZED_CATEGORY_ID
-  );
-  const lastCategoryId =
-    data === null || isTransfer ? null : data.lastUsed[direction].categoryId;
-  const defaultCategoryId =
-    lastCategoryId !== null &&
-    selectableCategories.some(category => category.id === lastCategoryId)
-      ? lastCategoryId
-      : null;
+  const defaultCategoryId = isTransfer ? null : defaultEntryCategory(data, direction);
   const categoryChoice = isTransfer ? undefined : categoryChoices[direction];
   const categoryId = categoryChoice === undefined ? defaultCategoryId : categoryChoice;
 
@@ -508,6 +529,17 @@ export default function QuickEntryScreen({
   const transferDefaults = pickTransferDefaults(data?.accounts ?? []);
   const fromAccountId = fromChoice ?? transferDefaults.fromAccountId;
   const toAccountId = toChoice ?? transferDefaults.toAccountId;
+  const date = dateChoice ?? openingDate;
+
+  const categoryChanged = (['expense', 'income'] as const).some(kind => {
+    const choice = categoryChoices[kind];
+    return choice !== undefined && choice !== defaultEntryCategory(data, kind);
+  });
+  const hasDraftInput =
+    direction !== initialDirection || amount !== '' || note !== '' || newTag !== '' ||
+    tagIds.length > 0 || projectId !== null || categoryChanged ||
+    accountId !== defaultAccountId || fromAccountId !== transferDefaults.fromAccountId ||
+    toAccountId !== transferDefaults.toAccountId || date !== openingDate;
 
   const liveTags = (data?.tags ?? []).filter(tag => tag.archivedAt === null);
   // Newly created tags go first: the created chip is the confirmation that the
@@ -532,6 +564,29 @@ export default function QuickEntryScreen({
     const active = document.activeElement;
     if (active instanceof HTMLElement) active.blur();
   };
+
+  function leave(destination: QuickEntryDestination) {
+    if (destination === 'ledger') navigate('/ledger', { replace: true });
+    else close();
+  }
+
+  function requestLeave(destination: QuickEntryDestination) {
+    if (keptDraft === null && !hasDraftInput) {
+      leave(destination);
+      return;
+    }
+    blurActive();
+    setLeaveFor(destination);
+  }
+
+  function finishLeaving(keep: boolean) {
+    if (leaveFor === null) return;
+    onDraftChange?.(keep && hasDraftInput ? {
+      direction, amount, categoryChoices, accountChoice, fromChoice, toChoice,
+      dateChoice, note, tagIds, newTag, projectId,
+    } : null);
+    leave(leaveFor);
+  }
 
   /**
    * The keypad is the amount's keyboard, not a permanent footer. Focusing a
@@ -649,7 +704,7 @@ export default function QuickEntryScreen({
   };
 
   const changeDate = (value: string) => {
-    setDate(clampEntryDate(value, today));
+    setDateChoice(clampEntryDate(value, today));
     setErrorText(null);
   };
 
@@ -660,25 +715,32 @@ export default function QuickEntryScreen({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (db === null || submitting) return;
+    if (db === null || data === null || submitting || leaveFor !== null) return;
 
     setSubmitting(true);
     try {
+      const liveAccount = (id: string) => data.accounts.some(account => account.id === id) ? id : '';
       const result = await saveQuickEntryAndLeave(
         db,
         date,
         {
           direction,
           amount,
-          categoryId,
-          accountId,
-          fromAccountId,
-          toAccountId,
+          categoryId: selectedCategory?.id ?? null,
+          accountId: liveAccount(accountId),
+          fromAccountId: liveAccount(fromAccountId),
+          toAccountId: liveAccount(toAccountId),
           note,
           tagIds,
           projectId,
         },
-        { onSaved: bump, navigate }
+        {
+          onSaved: () => {
+            onDraftChange?.(null);
+            bump();
+          },
+          navigate,
+        }
       );
       setProblems(result.problems);
 
@@ -692,16 +754,16 @@ export default function QuickEntryScreen({
     }
   };
 
-  return (
+  const entrySheet = (
     <Sheet
       variant="entry"
-      open={active}
+      open={active && leaveFor === null}
       titleId="entry-sheet-title"
       onClose={exit.requestLeave}
       canClose={() => exit.canLeave}
       scrimDismiss={exit.canLeave}
       initialFocus="panel"
-      restoreFocus={() => active}
+      restoreFocus={() => active && leaveFor === null}
       focusableFilter={element => element.offsetParent !== null}
     >
         <div className="entry-sheet__grab" aria-hidden="true" />
@@ -1051,7 +1113,14 @@ export default function QuickEntryScreen({
               aria-disabled={exit.canLeave ? undefined : true}
               tabIndex={exit.canLeave ? undefined : -1}
               onClick={event => {
-                if (!exit.canLeave) event.preventDefault();
+                if (!exit.canLeave) {
+                  event.preventDefault();
+                  return;
+                }
+                if (isPlainLinkClick(event)) {
+                  event.preventDefault();
+                  requestLeave('ledger');
+                }
               }}
             >
               记错了？去流水里改
@@ -1082,5 +1151,31 @@ export default function QuickEntryScreen({
           )}
         </form>
     </Sheet>
+  );
+
+  return (
+    <>
+      {entrySheet}
+      {active && leaveFor !== null && (
+        <Sheet
+          className="entry-draft-sheet"
+          titleId="entry-draft-title"
+          title="保留这笔草稿？"
+          initialFocus="last"
+          onClose={() => setLeaveFor(null)}
+        >
+          <p className="sheet__text">本次打开应用期间，重新打开随手记可以接着填写。</p>
+          <button className="sheet__primary" type="button" onClick={() => finishLeaving(true)}>
+            保留草稿
+          </button>
+          <button className="sheet__danger" type="button" onClick={() => finishLeaving(false)}>
+            放弃草稿
+          </button>
+          <button className="sheet__secondary" type="button" onClick={() => setLeaveFor(null)}>
+            继续填写
+          </button>
+        </Sheet>
+      )}
+    </>
   );
 }

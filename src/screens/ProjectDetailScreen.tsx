@@ -2,6 +2,8 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { TxnDeleteRow } from '../components/TxnDelete';
+import { TxnEditLink, useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
+import type { TxnEditOrigin } from '../components/TxnEditNavigation';
 import { AmountText } from '../components/AmountText';
 import { Sheet } from '../components/Sheet';
 import { CategoryBar } from '../components/CategoryBar';
@@ -158,7 +160,7 @@ function recentRowParts(row: TxnRow): { title: string; meta: string } {
     : { title: category, meta: day };
 }
 
-export default function ProjectDetailScreen() {
+export default function ProjectDetailScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
   const { db, bump } = useDb();
   const params = useParams<{ id: string }>();
   const id = params.id ?? '';
@@ -176,6 +178,7 @@ export default function ProjectDetailScreen() {
   const [confirming, setConfirming] = useState(false);
 
   const data = query.data;
+  useRestoreTxnEditScroll(editReturn, data !== null && !query.loading);
   const project = data?.detail.project ?? null;
   const txnCount = data?.txnCount ?? 0;
   const totalCents = data?.detail.totalCents ?? 0;
@@ -291,13 +294,12 @@ export default function ProjectDetailScreen() {
 
     return (
       <TxnDeleteRow key={row.id} row={row} label={title}>
-        <Link
+        <TxnEditLink
           className="project-txn"
-          to={`/txn/${encodeURIComponent(row.id)}`}
-          data-txn-id={row.id}
+          txnId={row.id}
         >
           {body}
-        </Link>
+        </TxnEditLink>
       </TxnDeleteRow>
     );
   };

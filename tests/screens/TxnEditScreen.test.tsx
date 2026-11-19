@@ -11,7 +11,7 @@ import type { TxnEditData, TxnEditDraft } from '../../src/screens/TxnEditScreen'
 import App from '../../src/App';
 import type { Category } from '../../src/db/repos/categories';
 import type { TxnRow } from '../../src/db/repos/txns';
-import { createExpense, getTxnById, listTxnsByMonth, softDeleteTxn } from '../../src/db/repos/txns';
+import { createExpense, getTxnById, listTxnsByMonth, recordAdjustment, softDeleteTxn } from '../../src/db/repos/txns';
 import { createTransfer } from '../../src/db/repos/transfers';
 import { createAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
@@ -356,6 +356,32 @@ describe('loading and editing through the repository', () => {
       note: '改过',
       occurredDate: '2026-10-20',
     });
+  });
+
+  it('updates only an adjustment note and preserves legacy associations', async () => {
+    const { db, card, bank, food } = await seeded();
+    const id = await recordAdjustment(db, {
+      date: '2026-10-20',
+      accountId: card.id,
+      deltaCents: 6500,
+    });
+    const tagId = await createTag(db, '旧调整标签');
+    await setTxnTags(db, id, [tagId]);
+    await db.run('UPDATE txn SET category_id = ? WHERE id = ?', [food.id, id]);
+    const row = (await loadTxnEditData(db, id)).row!;
+
+    const result = await commitTxnEdit(db, row, {
+      amount: '',
+      categoryId: null,
+      accountId: bank.id,
+      note: '已核对余额',
+      tagIds: [],
+      projectId: null,
+    });
+
+    expect(result.saved).toBe(true);
+    expect(await getTxnById(db, id)).toMatchObject({ ...row, note: '已核对余额' });
+    expect((await getTxnTags(db, id)).map(tag => tag.id)).toEqual([tagId]);
   });
 
   it('saves the chosen tags with setTxnTags after the row update', async () => {

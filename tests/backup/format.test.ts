@@ -96,9 +96,9 @@ describe('backup copy', () => {
   it('draws the last-backup title and the settings row line', () => {
     const yesterday = meta({ at: new Date(2026, 9, 22, 22, 14).toISOString() });
     expect(lastBackupTitle(yesterday, NOW)).toBe('昨天 22:14');
-    expect(lastBackupTitle(null, NOW)).toBe('还没有备份');
-    expect(settingsBackupLine(yesterday, NOW)).toBe('上次备份 · 昨天 22:14');
-    expect(settingsBackupLine(null, NOW)).toBe('还没有备份');
+    expect(lastBackupTitle(null, NOW)).toBe('还没有确认保存的备份');
+    expect(settingsBackupLine(yesterday, NOW)).toBe('最近一次确认备份 · 昨天 22:14');
+    expect(settingsBackupLine(null, NOW)).toBe('还没有确认保存的备份');
   });
 
   it('summarises rows and size under the last-backup title', () => {

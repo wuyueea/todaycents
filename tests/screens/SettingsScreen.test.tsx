@@ -40,9 +40,9 @@ describe('SettingsScreen', () => {
     }
     // The meta lines (counts, last backup time) are gone for good.
     expect(html).not.toContain('settings-row__meta');
-    expect(html).not.toContain('还没有备份');
+    expect(html).not.toContain('还没有确认保存的备份');
     expect(html).not.toContain('个标签');
-    expect(html).not.toContain('上次备份');
+    expect(html).not.toContain('最近一次确认备份');
   });
 
   it('shows how many fixed-cost candidates are waiting', () => {

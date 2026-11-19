@@ -12,6 +12,8 @@
  * on a dock tab, the first press only warns and the second one closes.
  */
 
+import { readTxnEditOrigin } from './TxnEditNavigation';
+
 declare global {
   interface Window {
     /** Installed by App; returns 1 when the page consumed the press. */
@@ -65,8 +67,8 @@ export function isTabPath(pathname: string): boolean {
 /**
  * One step up from a pushed page.
  *
- * - history: reveal the still-mounted 随手记 sheet (the 账户 detour from its
- *   empty-account link must not reset the draft);
+ * - history: return to an exact source entry after a transaction edit or reveal
+ *   the still-mounted 随手记 sheet after visiting 账户;
  * - path: replace the current entry with the page's structural parent, so
  *   back never walks through every tab the owner visited on the way here.
  */
@@ -90,9 +92,8 @@ function backgroundPath(state: unknown): string | null {
 
 /**
  * The structural parent of a route. Null means a dock tab; the caller then
- * owns the double-press exit gesture. 账户 is the one stateful exception:
- * when it was opened from 随手记's empty-account link, stepping history back
- * reveals the sheet that is still mounted underneath, draft intact.
+ * owns the double-press exit gesture. An edit opened by a list and the 账户
+ * detour from 随手记 have a specific source in the history stack.
  */
 export function backDestination(pathname: string, state: unknown): BackDestination | null {
   const path = normalisePath(pathname);
@@ -111,7 +112,7 @@ export function backDestination(pathname: string, state: unknown): BackDestinati
 
   if (path === '/transfer') return { kind: 'path', path: '/add' };
   if (path === '/txn' || path.startsWith('/txn/')) {
-    return { kind: 'path', path: '/ledger' };
+    return readTxnEditOrigin(state) === null ? { kind: 'path', path: '/ledger' } : { kind: 'history' };
   }
 
   if (path === '/settings/projects') return { kind: 'path', path: '/settings' };
@@ -128,7 +129,7 @@ export function backDestination(pathname: string, state: unknown): BackDestinati
 export interface BackEnvironment {
   /** react-router's navigate, used to replace the current route with a parent. */
   navigate: (to: string, options?: { replace?: boolean }) => void;
-  /** react-router's history step, used only to reveal the retained 随手记. */
+  /** react-router's history step back to the recorded source. */
   historyBack: () => void;
   /**
    * The route as it is right now; called on each press, never captured stale.

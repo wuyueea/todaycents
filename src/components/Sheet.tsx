@@ -88,7 +88,7 @@ export function Sheet({
     const panelClass =
       panelClassName === undefined ? 'entry-sheet' : `entry-sheet ${panelClassName}`;
     return (
-      <div className={layerClass}>
+      <div className={layerClass} inert={!open} aria-hidden={open ? undefined : true}>
         <div
           className="entry-scrim"
           aria-hidden="true"

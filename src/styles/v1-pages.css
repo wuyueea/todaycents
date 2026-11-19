@@ -285,6 +285,21 @@
   padding: 2px 0 12px;
 }
 
+.accounts-reconcile__preview {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 4px 12px;
+  margin: 0 0 8px;
+  color: var(--v1-t2);
+  font-size: 13px;
+}
+
+.accounts-reconcile__preview dd {
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 .accounts-screen--v1 .accounts-edit .add-field,
 .accounts-screen--v1 .accounts-reconcile .add-field {
   min-height: 0;

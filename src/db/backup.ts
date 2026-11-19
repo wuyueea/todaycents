@@ -22,6 +22,7 @@
  */
 import type { Db, DbParam } from './driver';
 import { assertDateISO, assertNotFutureDate, todayLocalISO } from '../domain/date';
+import { LOCAL_BACKUP_META_KEYS } from '../backup/meta';
 import {
   PROJECT_SCHEMA_VERSION,
   UNCATEGORIZED_CATEGORY_ID,
@@ -51,6 +52,9 @@ const BACKUP_TABLES = [
 ] as const;
 
 type BackupTable = (typeof BACKUP_TABLES)[number];
+
+// Older SQLite files can hold a NULL key in this TEXT PRIMARY KEY column.
+const PORTABLE_META_WHERE = ` WHERE key IS NULL OR key NOT IN (${LOCAL_BACKUP_META_KEYS.map(() => '?').join(', ')})`;
 
 /**
  * Tables that arrived after the v1 backup format shipped. A file written before
@@ -256,7 +260,7 @@ function toBackupRow(
 }
 
 /**
- * Reads every row of every table plus the current schema version.
+ * Reads every portable row plus the current schema version.
  *
  * Tables are read in dependency order and every table is present even when it
  * has no rows. Counts come from the rows actually read, so the file can always
@@ -287,8 +291,10 @@ export async function buildBackup(db: Db): Promise<BackupFile> {
       // child is always created after its parent today, but nothing enforces the
       // dump order). Parents first, then rowid for a stable file.
       const orderBy = table === 'category' ? 'parent_id IS NULL DESC, rowid' : 'rowid';
+      const where = table === 'app_meta' ? PORTABLE_META_WHERE : '';
       const rows = await tx.all<Record<string, unknown>>(
-        `SELECT ${columns.join(', ')} FROM ${table} ORDER BY ${orderBy}`
+        `SELECT ${columns.join(', ')} FROM ${table}${where} ORDER BY ${orderBy}`,
+        table === 'app_meta' ? LOCAL_BACKUP_META_KEYS : []
       );
       tables[table] = rows.map(raw => toBackupRow(table, raw, columns));
       counts[table] = rows.length;
@@ -515,12 +521,12 @@ function assertBackupTxnDates(rows: readonly BackupRow[], todayISO: string): voi
  * happened, so a hand-edited file cannot book tomorrow. Values are still
  * subject to the schema's own constraints when restored, which is where
  * foreign keys and CHECKs are enforced. counts is shape-checked here but
- * intentionally not compared with the array lengths: restoreBackup owns that
- * check so it can roll back a lying file.
+ * compared with the array lengths when inspecting a cached file. Restore also
+ * checks how many rows SQLite actually wrote and rolls back on a mismatch.
  */
 export function parseBackup(
   text: string,
-  options: BackupDateOptions = {}
+  options: BackupDateOptions & { checkCounts?: boolean } = {}
 ): BackupFile {
   let raw: unknown;
   try {
@@ -572,6 +578,14 @@ export function parseBackup(
   }
 
   assertBackupTxnDates(tables.txn, options.today ?? todayLocalISO());
+
+  if (options.checkCounts) {
+    for (const table of BACKUP_TABLES) {
+      if (counts[table] !== tables[table].length) {
+        throw new Error(`备份文件的 ${table} 表行数与文件声明不符。`);
+      }
+    }
+  }
 
   return {
     magic: 'ledger-backup',
@@ -642,9 +656,9 @@ export interface RestoreResult {
 }
 
 /**
- * Replaces the whole database with one file, atomically.
+ * Replaces the portable ledger with one file, atomically.
  *
- * One transaction deletes every table in reverse foreign-key order and then
+ * One transaction deletes the portable rows in reverse foreign-key order and
  * inserts them in forward order. After each table the actual row count is
  * compared with counts; a disagreement throws, and the driver's transaction
  * wrapper rolls everything back so the local ledger is untouched.
@@ -686,9 +700,10 @@ export async function restoreBackup(
 
   let clearedProjectRefs = 0;
   await db.transaction(async tx => {
-    // Exact reverse of BACKUP_TABLES: children before their parents.
+    // Delete portable data in reverse dependency order, retaining device history.
     for (const table of [...BACKUP_TABLES].reverse()) {
-      await tx.run(`DELETE FROM ${table}`);
+      if (table === 'app_meta') await tx.run(`DELETE FROM app_meta${PORTABLE_META_WHERE}`, LOCAL_BACKUP_META_KEYS);
+      else await tx.run(`DELETE FROM ${table}`);
     }
     // purge_undo is deliberately not in the backup: it points at rows this
     // restore just replaced, and undoing a purge from the previous database
@@ -704,9 +719,15 @@ export async function restoreBackup(
         );
       }
 
+      let ignoredLocalMeta = 0;
       for (let index = 0; index < rows.length; index += 1) {
+        const row = rows[index];
+        if (table === 'app_meta' && typeof row?.key === 'string' && LOCAL_BACKUP_META_KEYS.includes(row.key)) {
+          ignoredLocalMeta += 1;
+          continue;
+        }
         try {
-          await insertRow(tx, table, columns, rows[index]);
+          await insertRow(tx, table, columns, row);
         } catch (cause) {
           throw new Error(
             `备份文件的 ${table} 表第 ${index + 1} 行无法写入，导入已取消，本机的账一笔没动。`,
@@ -715,7 +736,11 @@ export async function restoreBackup(
         }
       }
 
-      const countRow = await tx.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`);
+      const where = table === 'app_meta' ? PORTABLE_META_WHERE : '';
+      const countRow = await tx.get<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${table}${where}`,
+        table === 'app_meta' ? LOCAL_BACKUP_META_KEYS : []
+      );
       const actual = countRow?.n ?? 0;
       if (table === 'category') {
         // A file written before migration v2 has no system 未分类 row. Without
@@ -729,9 +754,10 @@ export async function restoreBackup(
           [UNCATEGORIZED_CATEGORY_ID, UNCATEGORIZED_CATEGORY_NAME, UNCATEGORIZED_CATEGORY_SORT]
         );
       }
-      if (actual !== file.counts[table]) {
+      const expected = file.counts[table] - ignoredLocalMeta;
+      if (actual !== expected) {
         throw new Error(
-          `备份文件的 ${table} 表行数与 counts 不符（counts.${table} 为 ${file.counts[table]}，` +
+          `备份文件的 ${table} 表行数与 counts 不符（应写入 ${expected} 行，` +
             `实际写入 ${actual} 行），导入已取消，本机的账一笔没动。`
         );
       }

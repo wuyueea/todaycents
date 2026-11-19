@@ -3,9 +3,9 @@ import type { Db } from '../../src/db/driver';
 import { buildBackup, parseBackup, serializeBackup, BackupSchemaTooNewError } from '../../src/db/backup';
 import { createTestDb } from '../helpers/nodeDb';
 import { seedDefaults } from '../../src/db/seed';
-import { listAccounts } from '../../src/db/repos/accounts';
+import { archiveAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
-import { createExpense, listTxnsByMonth } from '../../src/db/repos/txns';
+import { createExpense, listTxnsByMonth, softDeleteTxn } from '../../src/db/repos/txns';
 import {
   confirmImport,
   exportBackup,
@@ -13,12 +13,18 @@ import {
   prepareImport,
   resetWithBackup,
 } from '../../src/backup/flow';
-import { countTxnRows, readBackupMeta } from '../../src/backup/meta';
+import { countTxnRows, readBackupMeta, readRestoreMeta, recordBackupMeta, recordRestoreMeta } from '../../src/backup/meta';
 import type { BackupFileWriter } from '../../src/backup/flow';
 import { beforeBackupFileName, utf8ByteLength } from '../../src/backup/format';
+import { failingDb } from '../helpers/failingDb';
 
 const NOW = new Date(2026, 9, 23, 13, 5, 7);
 const LEDGER_NAME = '记账本-20261023-130507.ledger';
+const LOCAL_BACKUP = { at: '2026-10-22T11:00:00+08:00', rows: 5, bytes: 2048 };
+const LOCAL_RESTORE = {
+  restoredAt: '2026-10-22T10:00:00+08:00',
+  sourceExportedAt: '2026-10-21T15:00:00+08:00',
+};
 
 interface WrittenFile {
   fileName: string;
@@ -46,12 +52,12 @@ function memoryWriter(): BackupFileWriter & {
   };
 }
 
-async function seedExpense(db: Db, amountCents: number, note: string): Promise<string> {
+async function seedExpense(db: Db, amountCents: number, note: string, date = '2026-10-20'): Promise<string> {
   const account = (await listAccounts(db))[0];
   const category = (await listCategories(db)).find(candidate => candidate.name === '饮食');
   if (account === undefined || category === undefined) throw new Error('seed is incomplete');
   return createExpense(db, {
-    date: '2026-10-20',
+    date,
     accountId: account.id,
     amountCents,
     categoryId: category.id,
@@ -95,8 +101,7 @@ describe('exportBackup', () => {
 
     expect(result.meta).toEqual({ at: NOW.toISOString(), rows: 1, bytes: result.bytes });
     expect(result.destination).toEqual({ kind: 'folder', folderName: 'Books' });
-    // Recording 上次备份 is the screen's call, not the writer's: a share still
-    // needs the owner's answer before it becomes a promise.
+    // The screen records a shared backup only after the owner confirms the save.
     expect(await readBackupMeta(db)).toBeNull();
   });
 
@@ -140,8 +145,40 @@ describe('prepareImport', () => {
 
     expect(prepared.fileName).toBe(LEDGER_NAME);
     expect(prepared.fileRows).toBe(1);
+    expect(prepared.fileDateRange).toEqual({ start: '2026-10-20', end: '2026-10-20' });
+    expect(prepared.fileActiveAccounts).toBe(3);
     expect(prepared.localRows).toBe(2);
     expect(prepared.exportedAt).toBe(parseBackup(text).exportedAt);
+  });
+
+  it('summarizes dates and unarchived accounts from the file before replacing anything', async () => {
+    const db = await createTestDb();
+    await seedDefaults(db);
+    const source = await createTestDb();
+    await seedDefaults(source);
+    const newest = await seedExpense(source, 1200, 'newest', '2026-10-21');
+    const oldest = await seedExpense(source, 500, 'oldest', '2025-12-30');
+    const deleted = await seedExpense(source, 200, 'deleted', '2024-02-29');
+    await softDeleteTxn(source, deleted);
+    const [account] = await listAccounts(source);
+    await archiveAccount(source, account!.id);
+    const file = await buildBackup(source);
+    // These optional markers were not always present in old files.
+    delete file.tables.txn.find(row => row.id === newest)!.deleted_at;
+    delete file.tables.account.find(row => row.id !== account!.id)!.archived_at;
+    const text = serializeBackup(file);
+
+    const prepared = await prepareImport(db, text, LEDGER_NAME, utf8ByteLength(text));
+
+    expect(prepared.fileDateRange).toEqual({ start: '2025-12-30', end: '2026-10-21' });
+    expect(prepared.fileActiveAccounts).toBe(2);
+    expect(prepared.fileRows).toBe(3);
+    expect(prepared.localRows).toBe(0);
+
+    await softDeleteTxn(source, newest);
+    await softDeleteTxn(source, oldest);
+    const onlyDeleted = serializeBackup(await buildBackup(source));
+    expect((await prepareImport(db, onlyDeleted, LEDGER_NAME, utf8ByteLength(onlyDeleted))).fileDateRange).toBeNull();
   });
 
   it('rejects a non-JSON file before any write', async () => {
@@ -206,6 +243,54 @@ describe('confirmImport', () => {
     expect(restored).toHaveLength(1);
     expect(restored[0].id).toBe(sourceId);
     expect(restored[0].note).toBe('from file');
+  });
+
+  it.each([LOCAL_BACKUP, null])('uses device history when importing a file with old backup keys (%j)', async localBackup => {
+    const target = await createTestDb();
+    await seedDefaults(target);
+    if (localBackup !== null) await recordBackupMeta(target, localBackup);
+    const legacy = parseBackup((await sourceBackupText()).text);
+    legacy.exportedAt = '2026-10-21T20:00:00+08:00';
+    legacy.tables.app_meta = [
+      { key: 'last_backup_at', value: '2026-10-20T08:00:00+08:00' },
+      { key: 'last_backup_rows', value: '12' },
+      { key: 'last_backup_bytes', value: '4096' },
+      { key: 'last_restore', value: JSON.stringify(LOCAL_RESTORE) },
+      { key: '备注', value: '跟随账本' },
+    ];
+    legacy.counts.app_meta = legacy.tables.app_meta.length;
+    const text = serializeBackup(legacy);
+    const prepared = await prepareImport(target, text, LEDGER_NAME, utf8ByteLength(text));
+
+    await confirmImport(target, prepared, memoryWriter(), NOW);
+
+    expect(await readBackupMeta(target)).toEqual(localBackup);
+    expect(await readRestoreMeta(target)).toEqual({
+      restoredAt: NOW.toISOString(),
+      sourceExportedAt: legacy.exportedAt,
+    });
+    const exportedAgain = await buildBackup(target);
+    expect(exportedAgain.counts.app_meta).toBe(1);
+    expect(exportedAgain.tables.app_meta).toEqual([{ key: '备注', value: '跟随账本' }]);
+  });
+
+  it('rolls back the ledger and keeps device history when recording a restore fails', async () => {
+    const target = await createTestDb();
+    await seedDefaults(target);
+    await seedExpense(target, 500, 'keep me');
+    await recordBackupMeta(target, LOCAL_BACKUP);
+    await recordRestoreMeta(target, LOCAL_RESTORE);
+    const { text } = await sourceBackupText();
+    const prepared = await prepareImport(target, text, LEDGER_NAME, utf8ByteLength(text));
+    const writer = memoryWriter();
+    const unavailable = failingDb(target, sql => /INSERT INTO app_meta/.test(sql), 'disk full');
+
+    await expect(confirmImport(unavailable, prepared, writer, NOW)).rejects.toThrow('disk full');
+
+    expect(writer.copies).toHaveLength(1);
+    expect((await listTxnsByMonth(target, '2026-10')).map(row => row.note)).toEqual(['keep me']);
+    expect(await readBackupMeta(target)).toEqual(LOCAL_BACKUP);
+    expect(await readRestoreMeta(target)).toEqual(LOCAL_RESTORE);
   });
 
   // The import toast has to be able to say what was repaired; a silent rewrite
@@ -277,6 +362,8 @@ describe('resetWithBackup', () => {
     const db = await createTestDb();
     await seedDefaults(db);
     await seedExpense(db, 1230, 'keep me');
+    await recordBackupMeta(db, LOCAL_BACKUP);
+    await recordRestoreMeta(db, LOCAL_RESTORE);
     const writer = memoryWriter();
     let rowsWhenCopied: number | null = null;
     const observingWriter: BackupFileWriter = {
@@ -308,6 +395,8 @@ describe('resetWithBackup', () => {
     // The reset copy stays in the cache: no second share sheet opens by itself.
     expect(writer.shared).toHaveLength(0);
     expect(await countTxnRows(db)).toBe(0);
+    expect(await readBackupMeta(db)).toBeNull();
+    expect(await readRestoreMeta(db)).toBeNull();
     // The reset ends on the same starter set as a first launch: three accounts
     // and the twelve categories, not an empty account list.
     expect((await listAccounts(db)).map(account => account.name)).toEqual([

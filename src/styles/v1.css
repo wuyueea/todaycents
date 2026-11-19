@@ -341,6 +341,41 @@ body {
   z-index: 40;
 }
 
+.entry-draft-sheet {
+  z-index: 41;
+}
+
+.entry-draft-sheet .sheet__panel {
+  max-width: 560px;
+  border: 0;
+  border-radius: 24px 24px 0 0;
+  background: var(--v1-card);
+}
+
+.entry-draft-sheet .sheet__title {
+  color: var(--v1-ink);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.entry-draft-sheet :is(.sheet__primary, .sheet__danger, .sheet__secondary) {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--v1-s2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.entry-draft-sheet .sheet__primary {
+  background: var(--v1-amb);
+  color: var(--v1-ink);
+}
+
 .entry-scrim {
   position: absolute;
   inset: 0;

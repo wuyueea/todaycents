@@ -7,7 +7,7 @@
  * real cache + share-sheet implementation in the app.
  *
  * Import is two steps because the confirmation sheet sits between them:
- * prepareImport validates the file and reads both row counts, confirmImport
+ * prepareImport validates the file and prepares its overview, confirmImport
  * writes the before-copy and only then restores. A restore is already atomic
  * in the codec; this module adds the before-copy as the extra safety net.
  */
@@ -24,7 +24,7 @@ import { readResetCounts, resetLedger } from '../db/reset';
 import type { ResetCounts } from '../db/reset';
 import { backupFileName, beforeBackupFileName, utf8ByteLength } from './format';
 import type { BackupMeta } from './format';
-import { countTxnRows } from './meta';
+import { countTxnRows, recordRestoreMeta } from './meta';
 
 /**
  * Where an export ended up. `share` only means the file was handed to the
@@ -43,7 +43,7 @@ export type ExportDestination =
  */
 export type CopyDestination =
   | { kind: 'folder'; folderName: string; fileName?: string }
-  | { kind: 'cache'; uri: string }
+  | { kind: 'cache'; uri: string; fileName?: string }
   | { kind: 'none' };
 
 /** Where the two exported files go. The device implementation lives in device.ts. */
@@ -119,13 +119,15 @@ export interface PreparedImport {
   fileName: string;
   fileBytes: number;
   fileRows: number;
+  fileDateRange: { start: string; end: string } | null;
+  fileActiveAccounts: number;
   localRows: number;
   /** The file's own exportedAt, for the file card. */
   exportedAt: string;
 }
 
 /**
- * Validates the text and reads both row counts. Nothing is written here.
+ * Validates the text and summarizes the file for comparison. Nothing is written here.
  *
  * The schema gate is repeated from restoreBackup on purpose: a file from a
  * newer app must be refused before the dangerous confirmation sheet opens, not
@@ -147,12 +149,28 @@ export async function prepareImport(
     throw new BackupSchemaTooNewError(file.schemaVersion, databaseVersion);
   }
 
+  // Older files can omit these nullable columns. SQLite restores them as NULL.
+  const fileActiveAccounts = file.tables.account.filter(account => account.archived_at == null).length;
+  let fileDateRange: PreparedImport['fileDateRange'] = null;
+  for (const txn of file.tables.txn) {
+    const date = txn.occurred_date;
+    if (txn.deleted_at != null || typeof date !== 'string') continue;
+    if (fileDateRange === null) {
+      fileDateRange = { start: date, end: date };
+    } else {
+      if (date < fileDateRange.start) fileDateRange.start = date;
+      if (date > fileDateRange.end) fileDateRange.end = date;
+    }
+  }
+
   const localRows = await countTxnRows(db);
   return {
     file,
     fileName,
     fileBytes,
     fileRows: file.counts.txn,
+    fileDateRange,
+    fileActiveAccounts,
     localRows,
     exportedAt: file.exportedAt,
   };
@@ -169,10 +187,10 @@ export interface ImportResult {
 }
 
 /**
- * Writes the before-copy first, then replaces the whole ledger.
+ * Writes the before-copy first, then replaces the ledger and records the restore.
  *
  * If the before-copy cannot be written, restoreBackup is never called. If the
- * restore fails, its transaction rolls back and the before-copy remains. The
+ * replacement or history write fails, both roll back and the before-copy remains. The
  * caller shows the failure sheet and stays on the backup screen.
  */
 export async function confirmImport(
@@ -185,12 +203,21 @@ export async function confirmImport(
   const beforeFileName = beforeBackupFileName(now);
   const beforeDestination = await writer.writeCopy(beforeFileName, serializeBackup(current));
 
-  const restored = await restoreBackup(db, prepared.file);
+  const restored = await db.transaction(async tx => {
+    const result = await restoreBackup(tx, prepared.file);
+    await recordRestoreMeta(tx, {
+      restoredAt: now.toISOString(),
+      sourceExportedAt: prepared.file.exportedAt,
+    });
+    return result;
+  });
 
   return {
     fileName: prepared.fileName,
     rows: prepared.file.counts.txn,
-    beforeFileName: beforeDestination.kind === 'folder' ? beforeDestination.fileName ?? beforeFileName : beforeFileName,
+    beforeFileName: beforeDestination.kind === 'none'
+      ? beforeFileName
+      : (beforeDestination.fileName ?? beforeFileName),
     beforeDestination,
     clearedProjectRefs: restored.clearedProjectRefs,
   };
@@ -230,6 +257,8 @@ export async function resetWithBackup(
   const counts = await readResetCounts(db);
   await resetLedger(db);
 
-  const savedName = beforeDestination.kind === 'folder' ? beforeDestination.fileName ?? beforeFileName : beforeFileName;
+  const savedName = beforeDestination.kind === 'none'
+    ? beforeFileName
+    : (beforeDestination.fileName ?? beforeFileName);
   return { beforeFileName: savedName, beforeDestination, counts };
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { Db } from '../db/driver';
 import type { BackupMeta, ImportFailureCopy } from '../backup/format';
 import {
@@ -11,12 +11,14 @@ import {
   formatBackupTime,
   importFailureCopy,
   importSummary,
+  LAST_BACKUP_LABEL,
   lastBackupTitle,
   plannedCopyNote,
 } from '../backup/format';
 import { confirmImport, exportBackup, exportMetaAction, prepareImport } from '../backup/flow';
 import type { ExportResult, PreparedImport } from '../backup/flow';
-import { countTxnRows, readBackupMeta, recordBackupMeta } from '../backup/meta';
+import { countTxnRows, readBackupMeta, readRestoreMeta, recordBackupMeta } from '../backup/meta';
+import type { RestoreMeta } from '../backup/meta';
 import { AUTO_BEFORE_CACHE_LIMIT, cachedBackups, deviceFileWriter } from '../backup/device';
 import type { CachedBackup } from '../backup/device';
 import { deviceFolder } from '../storage/folder';
@@ -43,17 +45,21 @@ import { useDb, useQuery } from '../store/useDb';
  */
 export interface BackupScreenData {
   meta: BackupMeta | null;
+  restoreMeta: RestoreMeta | null;
   /** Local txn rows, compared with the file's count before confirmation. */
   localRows: number;
 }
 
 export async function loadBackupScreenData(db: Db): Promise<BackupScreenData> {
-  return { meta: await readBackupMeta(db), localRows: await countTxnRows(db) };
+  const [meta, restoreMeta, localRows] = await Promise.all([
+    readBackupMeta(db), readRestoreMeta(db), countTxnRows(db),
+  ]);
+  return { meta, restoreMeta, localRows };
 }
 
 /** The three bottom sheets this screen can show. */
 type SheetState =
-  | { kind: 'confirm'; prepared: PreparedImport }
+  | { kind: 'confirm'; prepared: PreparedImport; fromCache: boolean }
   | { kind: 'export-confirm'; result: ExportResult }
   | { kind: 'failure'; copy: ImportFailureCopy; fileName: string; fileMeta: string };
 
@@ -62,11 +68,14 @@ export interface ImportConfirmSheetProps {
   schemaVersion: number;
   fileRows: number;
   fileBytes: number;
+  fileDateRange: PreparedImport['fileDateRange'];
+  fileActiveAccounts: number;
   localRows: number;
   exportedAt: string;
   now: Date;
   /** The folder the before-copy will use; null means the app cache. */
   folderName: string | null;
+  fromCache?: boolean;
   busy: boolean;
   onConfirm(): void;
   onCancel(): void;
@@ -82,18 +91,27 @@ export function ImportConfirmSheet({
   schemaVersion,
   fileRows,
   fileBytes,
+  fileDateRange,
+  fileActiveAccounts,
   localRows,
   exportedAt,
   now,
   folderName,
+  fromCache = false,
   busy,
   onConfirm,
   onCancel,
 }: ImportConfirmSheetProps) {
+  let dateText = '无';
+  if (fileDateRange !== null) {
+    const { start, end } = fileDateRange;
+    dateText = start === end ? start : `${start} 至 ${end}`;
+  }
+
   return (
     <Sheet
       titleId="import-confirm-title"
-      title="从文件导入"
+      title={fromCache ? '从缓存恢复' : '从文件导入'}
       meta={<span className="sheet__version">版本 {schemaVersion}</span>}
       onClose={onCancel}
       initialFocus="last"
@@ -104,6 +122,8 @@ export function ImportConfirmSheet({
         <div className="sheet__file-meta">
           {backupFileMeta(fileRows, fileBytes)} · {formatBackupTime(exportedAt, now)}
         </div>
+        <div className="sheet__file-meta">流水日期 · {dateText}</div>
+        <div className="sheet__file-meta">未归档账户 · {fileActiveAccounts} 个</div>
       </div>
 
       <p className="sheet__text">{importSummary({ fileRows, localRows })}</p>
@@ -117,7 +137,7 @@ export function ImportConfirmSheet({
         onClick={onConfirm}
         disabled={busy}
       >
-        覆盖并导入
+        {fromCache ? '覆盖并恢复' : '覆盖并导入'}
       </button>
       <button
         className="sheet__secondary"
@@ -204,7 +224,7 @@ export function ExportConfirmSheet({
       <p className="sheet__text">文件已经交给系统分享面板。它保存好了吗？</p>
       <p className="sheet__note">
         应用无法确认目标应用是否已保存。请先在目标应用中确认文件已保存。
-        只有确认保存过，才会更新「上次备份」。没有保存的话，文件还在应用缓存里，可以在下面另存。
+        只有确认保存过，才会更新「{LAST_BACKUP_LABEL}」。没有保存的话，文件还在应用缓存里，可以在下面另存。
       </p>
 
       <button
@@ -231,11 +251,11 @@ export function CachedBackupList(props: CachedFileListProps) {
   return (
     <CachedFileList {...props} title="应用缓存中的备份">
       <p className="backup-cache__note">
-        导入/清除前的自动副本保留最近 {AUTO_BEFORE_CACHE_LIMIT} 份，旧副本会自动清理；普通导出不会自动清理。
+        导入/清除前的自动副本保留最近 {AUTO_BEFORE_CACHE_LIMIT} 份可用文件，旧的可用副本会自动清理；普通导出不会自动清理。
         这次打开应用后另存过的自动副本会暂时保留，清理失败时也可能超过 {AUTO_BEFORE_CACHE_LIMIT} 份。
       </p>
       <p className="backup-cache__note">
-        这些文件只在应用缓存里，系统可能清理。要留住，请点「另存」；另存只是把文件救出去，不会更新「上次备份」。
+        这些文件只在应用缓存里，系统可能清理。可用的备份支持「恢复」与「另存」。另存不会更新「{LAST_BACKUP_LABEL}」。
       </p>
     </CachedFileList>
   );
@@ -244,13 +264,16 @@ export function CachedBackupList(props: CachedFileListProps) {
 export default function BackupScreen() {
   const { db, bump } = useDb();
   const navigate = useNavigate();
+  const location = useLocation();
+  const cachedCopyName = (location.state as { cachedCopyName?: unknown } | null)?.cachedCopyName;
+  const highlightedName = typeof cachedCopyName === 'string' ? cachedCopyName : undefined;
   const query = useQuery<BackupScreenData>(loadBackupScreenData, []);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [folderName, setFolderName] = useState<string | null>(null);
-  const [cached, setCached] = useState<CachedBackup[]>([]);
+  const [cached, setCached] = useState<CachedBackup[] | null>(null);
   const { toast, showToast } = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -397,13 +420,14 @@ export default function BackupScreen() {
     setStatus(null);
     setNotice(null);
     try {
-      const outcome = await cachedBackups.share(file);
+      const outcome = await cachedBackups.share(file.name);
       if (outcome === 'canceled') {
         setNotice('已取消分享，文件还在应用缓存里。');
       } else {
-        setNotice(`已把「${file.name}」交给分享面板，不代表已保存；请在目标应用中确认。没有更新「上次备份」。`);
+        setNotice(`已把「${file.name}」交给分享面板，不代表已保存；请在目标应用中确认。没有更新「${LAST_BACKUP_LABEL}」。`);
       }
     } catch (reason) {
+      refreshCache();
       setStatus(`分享失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
       setBusy(false);
@@ -416,29 +440,42 @@ export default function BackupScreen() {
     fileInput.current?.click();
   };
 
-  const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.currentTarget;
-    const file = input.files?.[0] ?? null;
-    // Clear first, so picking the same file again still fires onChange.
-    input.value = '';
-    if (file === null || db === null || busy) return;
-
+  const openImport = async (
+    fileName: string,
+    fileBytes: number,
+    readText: () => Promise<string>,
+    fromCache = false
+  ) => {
+    if (db === null || busy) return;
     setBusy(true);
     setStatus(null);
+    setNotice(null);
     try {
-      const text = await file.text();
-      const prepared = await prepareImport(db, text, file.name, file.size);
-      setSheet({ kind: 'confirm', prepared });
+      const prepared = await prepareImport(db, await readText(), fileName, fileBytes);
+      setSheet({ kind: 'confirm', prepared, fromCache });
     } catch (reason) {
+      if (fromCache) refreshCache();
       setSheet({
         kind: 'failure',
         copy: importFailureCopy(reason),
-        fileName: file.name,
-        fileMeta: fileSizeText(file.size),
+        fileName,
+        fileMeta: fileSizeText(fileBytes),
       });
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0] ?? null;
+    // Clear first, so picking the same file again still fires onChange.
+    input.value = '';
+    if (file !== null) void openImport(file.name, file.size, () => file.text());
+  };
+
+  const handleRestoreCached = (file: CachedBackup) => {
+    void openImport(file.name, file.bytes, () => cachedBackups.read(file.name), true);
   };
 
   const closeSheet = () => {
@@ -486,11 +523,19 @@ export default function BackupScreen() {
         <h1>备份与恢复</h1>
       </header>
 
-      <section className="backup-state">
-        <p className="backup-state__label">上次备份</p>
+      <section className="backup-state" aria-label={LAST_BACKUP_LABEL}>
+        <p className="backup-state__label">{LAST_BACKUP_LABEL}</p>
         <p className="backup-state__value">{lastTitle}</p>
         {metaLine !== null && <p className="backup-state__meta">{metaLine}</p>}
       </section>
+
+      {data?.restoreMeta && (
+        <section className="backup-state" aria-label="最近一次恢复">
+          <p className="backup-state__label">最近一次恢复</p>
+          <p className="backup-state__value">{formatBackupTime(data.restoreMeta.restoredAt, now)}</p>
+          <p className="backup-state__meta">源文件生成时间 · {formatBackupTime(data.restoreMeta.sourceExportedAt, now)}</p>
+        </section>
+      )}
 
       <div className="backup-actions">
         <section className="backup-action-card">
@@ -519,7 +564,7 @@ export default function BackupScreen() {
           </button>
         </section>
         {/*
-          The system picker is the whole import UI. .ledger is not a registered
+          .ledger is not a registered
           MIME type on Android, so application/octet-stream is listed as well;
           without it some file managers grey out the app's own export.
         */}
@@ -546,11 +591,18 @@ export default function BackupScreen() {
         </p>
       )}
 
+      {highlightedName !== undefined && cached !== null && !cached.some(file => file.name === highlightedName) && (
+        <p className="backup-note" role="status">
+          无法查看「{highlightedName}」。应用缓存里的文件可能已被系统清理。
+        </p>
+      )}
       <CachedBackupList
-        files={cached}
+        files={cached ?? []}
         now={now}
         busy={busy}
         onShare={handleShareCached}
+        onRestore={db === null ? undefined : handleRestoreCached}
+        highlightedName={highlightedName}
       />
 
       {sheet?.kind === 'confirm' && (
@@ -559,10 +611,13 @@ export default function BackupScreen() {
           schemaVersion={sheet.prepared.file.schemaVersion}
           fileRows={sheet.prepared.fileRows}
           fileBytes={sheet.prepared.fileBytes}
+          fileDateRange={sheet.prepared.fileDateRange}
+          fileActiveAccounts={sheet.prepared.fileActiveAccounts}
           localRows={sheet.prepared.localRows}
           exportedAt={sheet.prepared.exportedAt}
           now={now}
           folderName={folderName}
+          fromCache={sheet.fromCache}
           busy={busy}
           onConfirm={handleConfirm}
           onCancel={closeSheet}

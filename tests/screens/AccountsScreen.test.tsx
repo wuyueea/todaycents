@@ -195,15 +195,16 @@ describe('planAccountEdit', () => {
 });
 
 describe('parseReconciliationAmount', () => {
-  it('treats a blank field as 0 and parses every other amount once', () => {
-    expect(parseReconciliationAmount('')).toBe(0);
-    expect(parseReconciliationAmount('   ')).toBe(0);
+  it('parses explicitly entered zero and positive balances', () => {
+    for (const text of ['0', '0.0', '0.00', ' 0 ', '０．００']) {
+      expect(parseReconciliationAmount(text)).toBe(0);
+    }
     expect(parseReconciliationAmount('9000')).toBe(900000);
     expect(parseReconciliationAmount('90.05')).toBe(9005);
   });
 
-  it('rejects negative, over-precise or literal-zero text instead of rounding it', () => {
-    for (const text of ['0', '0.00', '-1', '1.234', '12,30', '12.30元']) {
+  it('rejects blank, negative and malformed balances', () => {
+    for (const text of ['', '   ', '-1', '-0', '0.', '0.000', '1.234', '12,30', '12.30元']) {
       expect(parseReconciliationAmount(text)).toBeNull();
     }
   });

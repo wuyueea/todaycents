@@ -4,15 +4,18 @@ const NON_ASCII = /[^\x20-\x7E]/;
 const AMOUNT_PATTERN = /^\d+(\.\d{1,2})?$/;
 
 /**
- * Parses user input into positive integer cents.
+ * Parses user input into integer cents. By default the amount must be positive.
  *
  * The fraction is split off the string, so money never goes through floating
  * point arithmetic (no `* 100`). Input that is not exactly "digits" or
  * "digits.fraction" is rejected with null instead of being rounded or coerced;
- * zero and negative amounts are rejected as well, because the sign lives on the
- * transaction's direction, never on the parsed amount.
+ * Reconciliation can allow an explicit zero balance. The transaction direction
+ * still determines the sign of ordinary amounts.
  */
-export function parseAmountToCents(input: string): number | null {
+export function parseAmountToCents(
+  input: string,
+  { allowZero = false }: { allowZero?: boolean } = {}
+): number | null {
   const normalized = input
     .replace(FULL_WIDTH_DIGITS, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
     .replace(FULL_WIDTH_FULL_STOP, '.');
@@ -34,7 +37,7 @@ export function parseAmountToCents(input: string): number | null {
 
   // Concatenating very long digit strings can exceed Number.MAX_SAFE_INTEGER;
   // reject those instead of storing imprecise cents.
-  return Number.isSafeInteger(cents) && cents > 0 ? cents : null;
+  return Number.isSafeInteger(cents) && cents >= (allowZero ? 0 : 1) ? cents : null;
 }
 
 /**

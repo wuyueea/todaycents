@@ -1,11 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import {
   createCachedBackupStore,
   createDeviceWriters,
   isShareCanceled,
 } from '../../src/backup/device';
 import type {
-  CachedBackup,
   CachedFileInfo,
   DeviceWriterDeps,
   ShareOutcome,
@@ -13,6 +12,8 @@ import type {
 import type { FolderAccess, StoredFolder } from '../../src/storage/folder';
 import { bytesToBase64 } from '../../src/export/base64';
 import { XLSX_MIME_TYPE } from '../../src/export/writer';
+import { buildBackup, serializeBackup } from '../../src/db/backup';
+import { createTestDb } from '../helpers/nodeDb';
 
 const FOLDER: StoredFolder = {
   name: 'Books',
@@ -69,7 +70,7 @@ function harness({
     writeCacheFile: async (fileName, text) => {
       if (cacheTextError !== undefined) throw cacheTextError;
       cacheText.push({ fileName, text });
-      return `file:///cache/${fileName}`;
+      return { fileName, uri: `file:///cache/${fileName}` };
     },
     writeCachedReport: async (fileName, bytes) => {
       cacheBytes.push({ fileName, bytes });
@@ -189,7 +190,7 @@ describe('deviceFileWriter when the chosen folder write rejects', () => {
 
     const destination = await h.writers.text.writeCopy('before.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'cache', uri: 'file:///cache/before.ledger' });
+    expect(destination).toEqual({ kind: 'cache', fileName: 'before.ledger', uri: 'file:///cache/before.ledger' });
     expect(h.folderWrites).toHaveLength(1);
     expect(h.cacheText).toEqual([{ fileName: 'before.ledger', text: 'text' }]);
     expect(h.shared).toHaveLength(0);
@@ -260,7 +261,7 @@ describe('deviceFileWriter without a chosen folder', () => {
 
     const destination = await h.writers.text.writeCopy('before.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'cache', uri: 'file:///cache/before.ledger' });
+    expect(destination).toEqual({ kind: 'cache', fileName: 'before.ledger', uri: 'file:///cache/before.ledger' });
     expect(h.folderWrites).toHaveLength(0);
     expect(h.cacheText).toEqual([{ fileName: 'before.ledger', text: 'text' }]);
     expect(h.shared).toHaveLength(0);
@@ -346,8 +347,13 @@ describe('isShareCanceled', () => {
 });
 
 describe('createCachedBackupStore', () => {
+  let completeBackup: string;
+  beforeAll(async () => {
+    completeBackup = serializeBackup(await buildBackup(await createTestDb()));
+  });
   const unusedWrites = {
     writeFile: async () => { throw new Error('unexpected write'); },
+    readFile: async () => completeBackup,
     deleteFile: async () => { throw new Error('unexpected delete'); },
   };
   const files: CachedFileInfo[] = [
@@ -453,14 +459,7 @@ describe('createCachedBackupStore', () => {
         return 'canceled';
       },
     });
-    const file: CachedBackup = {
-      name: 'new.ledger',
-      uri: 'file:///cache/new.ledger',
-      bytes: 340,
-      modifiedAt: 3000,
-    };
-
-    expect(await store.share(file)).toBe('canceled');
+    expect(await store.share('new.ledger')).toBe('canceled');
     expect(calls).toEqual([
       { fileName: 'new.ledger', uri: 'file:///cache/new.ledger' },
     ]);

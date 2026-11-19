@@ -5,8 +5,7 @@
  * caller passes "now"). That keeps the exact 文案 unit-testable and keeps the
  * screens free of date arithmetic.
  *
- * The copy follows docs/原型交接说明.md §4.1 / §7. The three app_meta keys are
- * the ones the plan names; nothing else is written.
+ * The copy follows the backup and restore workflow.
  */
 import { BackupSchemaTooNewError } from '../db/backup';
 import type { ResetCounts } from '../db/reset';
@@ -21,12 +20,8 @@ export interface BackupMeta {
   bytes: number;
 }
 
-/** The exact app_meta keys the plan asks for. */
-export const BACKUP_META_KEYS = {
-  at: 'last_backup_at',
-  rows: 'last_backup_rows',
-  bytes: 'last_backup_bytes',
-} as const;
+export const LAST_BACKUP_LABEL = '最近一次确认备份';
+const NO_CONFIRMED_BACKUP = '还没有确认保存的备份';
 
 const UNTOUCHED = '本机的账一笔没动。';
 
@@ -89,7 +84,7 @@ function clock(date: Date): string {
 }
 
 /**
- * The big "上次备份" value: 刚刚 / 今天 22:14 / 昨天 22:14 / 10月20日 22:14,
+ * The time shown in the backup summaries: 刚刚 / 今天 22:14 / 昨天 22:14 / 10月20日 22:14,
  * and the year too when the backup is from an earlier year.
  */
 export function formatBackupTime(value: string | null, now: Date): string {
@@ -111,17 +106,17 @@ export function formatBackupTime(value: string | null, now: Date): string {
   return `${date.getFullYear()}年${monthDay} ${clock(date)}`;
 }
 
-/** The large value under 上次备份. */
+/** The large value under 最近一次确认备份. */
 export function lastBackupTitle(meta: BackupMeta | null, now: Date): string {
-  return meta === null ? '还没有备份' : formatBackupTime(meta.at, now);
+  return meta === null ? NO_CONFIRMED_BACKUP : formatBackupTime(meta.at, now);
 }
 
 /** The settings row's quiet second line (§4.7: every row carries its state). */
 export function settingsBackupLine(meta: BackupMeta | null, now: Date): string {
-  return meta === null ? '还没有备份' : `上次备份 · ${formatBackupTime(meta.at, now)}`;
+  return meta === null ? NO_CONFIRMED_BACKUP : `${LAST_BACKUP_LABEL} · ${formatBackupTime(meta.at, now)}`;
 }
 
-/** "231 笔流水 · 46 KB", under the 上次备份 value. */
+/** "231 笔流水 · 46 KB", under 最近一次确认备份. */
 export function backupMetaLine(meta: BackupMeta): string {
   return `${meta.rows} 笔流水 · ${fileSizeText(meta.bytes)}`;
 }

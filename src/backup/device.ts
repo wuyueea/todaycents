@@ -15,6 +15,8 @@
  * whichever app the owner picks.
  */
 import type { BackupFileWriter, CopyDestination, ExportDestination } from './flow';
+import type { Encoding } from '@capacitor/filesystem';
+import { parseBackup } from '../db/backup';
 import { bytesToBase64 } from '../export/base64';
 import type { BinaryFileWriter } from '../export/writer';
 import { hasZipEnd, ZIP_END_BYTES } from '../export/zip';
@@ -45,29 +47,48 @@ function downloadInBrowser(fileName: string, blob: Blob): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
-/** Writes UTF-8 text into the app cache and returns its file:// URI. */
-async function writeNativeCacheFile(fileName: string, text: string): Promise<string> {
-  const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
-  const result = await Filesystem.writeFile({
-    path: fileName,
-    data: text,
-    directory: Directory.Cache,
-    encoding: Encoding.UTF8,
-  });
-  return result.uri;
+function isMissingCacheFile(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    'code' in error && error.code === 'OS-PLUG-FILE-0008';
 }
 
-/**
- * Publishes the workbook after all bytes are written. A failed write leaves
- * no .xlsx entry that could be offered again by the cache list.
- */
-async function publishCacheWorkbook(fileName: string, bytes: Uint8Array): Promise<string> {
+interface CachedWrite {
+  fileName: string;
+  uri: string;
+}
+
+/** Writes UTF-8 text into the app cache while holding the cache store queue. */
+async function writeNativeCacheFile(fileName: string, text: string): Promise<CachedWrite> {
+  const { Filesystem, Directory, Encoding: FileEncoding } = await import('@capacitor/filesystem');
+  const directory = Directory.Cache;
+  const exists = (path: string) => Filesystem.stat({ path, directory }).then(
+    () => true,
+    (error: unknown) => {
+      if (isMissingCacheFile(error)) return false;
+      throw error;
+    }
+  );
+  if (!isLedgerCacheName(fileName)) throw new Error('缓存备份文件名无效。');
+  const base = fileName.replace(/(?: \(\d+\))?\.ledger$/, '');
+  let availableName = fileName;
+  for (let number = 2; await exists(availableName) || await exists(writingName(availableName)); number += 1) {
+    availableName = base + ' (' + number + ').ledger';
+  }
+  return { fileName: availableName, uri: await publishNativeCacheFile(availableName, text, FileEncoding.UTF8) };
+}
+
+function writingName(fileName: string): string {
+  return fileName + '.writing';
+}
+
+/** Publishes a cache file after its temporary contents are fully written. */
+async function publishNativeCacheFile(fileName: string, data: string, encoding?: Encoding): Promise<string> {
   const { Filesystem, Directory } = await import('@capacitor/filesystem');
   const directory = Directory.Cache;
-  const temporary = `${fileName}.writing`;
+  const temporary = writingName(fileName);
   const remove = (path: string) => Filesystem.deleteFile({ path, directory }).catch(() => {});
   try {
-    await Filesystem.writeFile({ path: temporary, data: bytesToBase64(bytes), directory });
+    await Filesystem.writeFile({ path: temporary, data, directory, ...(encoding === undefined ? {} : { encoding }) });
   } catch (error) {
     await remove(temporary);
     throw error;
@@ -82,10 +103,7 @@ async function publishCacheWorkbook(fileName: string, bytes: Uint8Array): Promis
       await Filesystem.deleteFile({ path: fileName, directory });
       await remove(temporary);
     } catch (cleanupError) {
-      if (
-        typeof cleanupError === 'object' && cleanupError !== null &&
-        'code' in cleanupError && cleanupError.code === 'OS-PLUG-FILE-0008'
-      ) {
+      if (isMissingCacheFile(cleanupError)) {
         // Rename failed before creating a destination, or it was already evicted.
         await remove(temporary);
       }
@@ -144,7 +162,7 @@ async function shareCacheFile(fileName: string, uri: string): Promise<ShareOutco
 export interface DeviceWriterDeps {
   isNativePlatform(): Promise<boolean>;
   folder: FolderAccess;
-  writeCacheFile(fileName: string, text: string): Promise<string>;
+  writeCacheFile(fileName: string, text: string): Promise<CachedWrite>;
   writeCachedReport(fileName: string, bytes: Uint8Array): Promise<{ fileName: string; uri: string }>;
   shareCacheFile(fileName: string, uri: string): Promise<ShareOutcome>;
   downloadInBrowser(fileName: string, blob: Blob): void;
@@ -200,8 +218,8 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
         const folder = await writeToFolder(fileName, new TextEncoder().encode(text));
         if (folder !== null) return { kind: 'folder', folderName: folder.folderName, fileName: folder.fileName };
 
-        const uri = await deps.writeCacheFile(fileName, text);
-        const outcome = await deps.shareCacheFile(fileName, uri);
+        const cached = await deps.writeCacheFile(fileName, text);
+        const outcome = await deps.shareCacheFile(cached.fileName, cached.uri);
         return outcome === 'canceled' ? { kind: 'canceled' } : { kind: 'share' };
       },
 
@@ -209,8 +227,7 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
         if (!(await deps.isNativePlatform())) return { kind: 'none' };
         const folder = await writeToFolder(fileName, new TextEncoder().encode(text));
         if (folder !== null) return { kind: 'folder', folderName: folder.folderName, fileName: folder.fileName };
-        const uri = await deps.writeCacheFile(fileName, text);
-        return { kind: 'cache', uri };
+        return { kind: 'cache', ...await deps.writeCacheFile(fileName, text) };
       },
     },
 
@@ -261,6 +278,8 @@ export interface CachedFile {
   bytes: number;
   /** Epoch milliseconds from the file's mtime. */
   modifiedAt: number;
+  /** A cached backup with this status cannot be restored or shared. */
+  unavailableReason?: string;
 }
 
 export type CachedBackup = CachedFile;
@@ -288,26 +307,35 @@ function cachedEntries(files: readonly CachedFileInfo[], accept: (name: string) 
 export interface CachedBackupPort {
   isNativePlatform(): Promise<boolean>;
   listFiles(): Promise<readonly CachedFileInfo[]>;
-  writeFile(fileName: string, text: string): Promise<string>;
+  writeFile(fileName: string, text: string): Promise<CachedWrite>;
+  readFile(fileName: string): Promise<string>;
   /** Deletes a base name in Directory.Cache, never a caller-supplied URI. */
   deleteFile(fileName: string): Promise<void>;
   share(fileName: string, uri: string): Promise<ShareOutcome>;
 }
 
 export interface CachedBackupStore {
-  /** Prunes old automatic copies, then lists remaining .ledger files newest first. */
+  /** Lists checked .ledger files, pruning only excess usable automatic copies. */
   list(): Promise<CachedBackup[]>;
   /** Writes first; best-effort retention can never turn a saved copy into failure. */
-  write(fileName: string, text: string): Promise<string>;
+  write(fileName: string, text: string): Promise<CachedWrite>;
+  /** Reads and verifies one backup base name from Directory.Cache. */
+  read(fileName: string): Promise<string>;
   /** Opens the share sheet for one of them; cancel is an outcome, not an error. */
-  share(file: CachedBackup): Promise<ShareOutcome>;
+  share(fileName: string): Promise<ShareOutcome>;
 }
 
 export const AUTO_BEFORE_CACHE_LIMIT = 10;
 
+function isLedgerCacheName(name: string): boolean {
+  return /^[^/\\:\0]+\.ledger$/.test(name);
+}
+
+const MISSING_BACKUP = '备份已不在应用缓存中，可能已被系统清理。';
+
 /** Only the app's automatic-copy names, including the old minute precision. */
 function isAutomaticBeforeCopy(name: string): boolean {
-  const match = /^记账本-(\d{4})(\d{2})(\d{2})-(?:[01]\d|2[0-3])[0-5]\d(?:[0-5]\d)?-before\.ledger$/.exec(name);
+  const match = /^记账本-(\d{4})(\d{2})(\d{2})-(?:[01]\d|2[0-3])[0-5]\d(?:[0-5]\d)?-before(?: \((?:[2-9]|[1-9]\d+)\))?\.ledger$/.exec(name);
   if (match === null) return false;
   const date = new Date(`${match[1]}-${match[2]}-${match[3]}T12:00:00`);
   return date.getFullYear() === Number(match[1]) &&
@@ -331,11 +359,50 @@ export function createCachedBackupStore(port: CachedBackupPort): CachedBackupSto
   }
 
   async function readFiles(): Promise<CachedBackup[]> {
-    return cachedEntries(await port.listFiles(), name => name.endsWith('.ledger'));
+    const entries = await port.listFiles();
+    const names = new Set(entries.map(entry => entry.name));
+    return cachedEntries(entries, isLedgerCacheName).map(file => names.has(writingName(file.name))
+      ? { ...file, unavailableReason: '文件写入未完成。' }
+      : file);
+  }
+
+  async function readChecked(file: CachedBackup): Promise<string> {
+    if (file.unavailableReason !== undefined) throw new Error(file.unavailableReason);
+    if (file.bytes === 0) throw new Error('备份文件是空的。');
+    let text: string;
+    try {
+      text = await port.readFile(file.name);
+    } catch (error) {
+      if (isMissingCacheFile(error)) throw new Error(MISSING_BACKUP);
+      throw new Error('无法读取缓存备份。', { cause: error });
+    }
+    parseBackup(text, { checkCounts: true });
+    return text;
+  }
+
+  async function inspect(files: CachedBackup[]): Promise<CachedBackup[]> {
+    const checked: CachedBackup[] = [];
+    for (const file of files) {
+      try {
+        await readChecked(file);
+        checked.push(file);
+      } catch (error) {
+        checked.push({ ...file, unavailableReason: error instanceof Error ? error.message : '无法校验备份文件。' });
+      }
+    }
+    return checked;
+  }
+
+  async function findFile(fileName: string): Promise<CachedBackup> {
+    if (!isLedgerCacheName(fileName)) throw new Error('缓存备份文件名无效。');
+    if (!(await port.isNativePlatform())) throw new Error('此环境无法读取应用缓存。');
+    const file = (await readFiles()).find(entry => entry.name === fileName);
+    if (file === undefined) throw new Error(MISSING_BACKUP);
+    return file;
   }
 
   async function prune(files: CachedBackup[]): Promise<CachedBackup[]> {
-    const copies = files.filter(file => isAutomaticBeforeCopy(file.name));
+    const copies = files.filter(file => file.unavailableReason === undefined && isAutomaticBeforeCopy(file.name));
     const keep = new Set(copies.slice(0, AUTO_BEFORE_CACHE_LIMIT).map(file => file.name));
     for (const file of copies) {
       if (sharedNames.has(file.name) || file.name === latestWrittenCopy) keep.add(file.name);
@@ -358,28 +425,35 @@ export function createCachedBackupStore(port: CachedBackupPort): CachedBackupSto
   return {
     list: () => enqueue(async () => {
       if (!(await port.isNativePlatform())) return [];
-      return prune(await readFiles());
+      return prune(await inspect(await readFiles()));
     }),
 
     write: (fileName, text) => enqueue(async () => {
-      const uri = await port.writeFile(fileName, text);
-      if (isAutomaticBeforeCopy(fileName)) latestWrittenCopy = fileName;
+      const saved = await port.writeFile(fileName, text);
+      if (isAutomaticBeforeCopy(saved.fileName)) latestWrittenCopy = saved.fileName;
       try {
-        await prune(await readFiles());
+        const copies = (await readFiles()).filter(file => isAutomaticBeforeCopy(file.name));
+        if (copies.length > AUTO_BEFORE_CACHE_LIMIT) await prune(await inspect(copies));
       } catch {
         // The new copy is already saved. A failed directory read must not
         // block import/reset or misreport the successful write as a failure.
       }
-      return uri;
+      return saved;
     }),
 
-    share(file) {
+    read: fileName => enqueue(async () => readChecked(await findFile(fileName))),
+
+    share(fileName) {
       // A target app may read the URI after the chooser returns. Protect it
       // for this app session, including ambiguous failures, rather than
       // assuming that Share's result is a receipt or an end-of-read signal.
       // Register at request time, before waiting behind an earlier prune.
-      if (isAutomaticBeforeCopy(file.name)) sharedNames.add(file.name);
-      return enqueue(() => port.share(file.name, file.uri));
+      if (isAutomaticBeforeCopy(fileName)) sharedNames.add(fileName);
+      return enqueue(async () => {
+        const file = await findFile(fileName);
+        await readChecked(file);
+        return port.share(file.name, file.uri);
+      });
     },
   };
 }
@@ -393,6 +467,16 @@ const nativeCachedBackupPort: CachedBackupPort = {
   isNativePlatform,
   listFiles: listNativeCacheFiles,
   writeFile: writeNativeCacheFile,
+  async readFile(fileName) {
+    const { Filesystem, Directory, Encoding } = await import('@capacitor/filesystem');
+    const { data } = await Filesystem.readFile({
+      path: fileName,
+      directory: Directory.Cache,
+      encoding: Encoding.UTF8,
+    });
+    if (typeof data !== 'string') throw new Error('无法读取缓存备份。');
+    return data;
+  },
   async deleteFile(fileName) {
     const { Filesystem, Directory } = await import('@capacitor/filesystem');
     await Filesystem.deleteFile({ path: fileName, directory: Directory.Cache });
@@ -463,7 +547,7 @@ export function createCachedReportStore(port: CachedReportPort) {
 export const cachedReports = createCachedReportStore({
   isNativePlatform,
   listFiles: listNativeCacheFiles,
-  publish: publishCacheWorkbook,
+  publish: (fileName, bytes) => publishNativeCacheFile(fileName, bytesToBase64(bytes)),
   async isComplete(file) {
     // Older exports wrote directly to the final filename, and Android can
     // evict a .writing marker separately. Verify the ZIP footer as well.

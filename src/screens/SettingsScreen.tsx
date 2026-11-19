@@ -47,8 +47,13 @@ function copyLocationFromState(value: unknown): CopyLocation | undefined {
   return undefined;
 }
 
+interface BackupNotice {
+  text: string;
+  cachedCopyName: string | null;
+}
+
 /** The router state /settings/backup hands over after a successful import. */
-export function importNoticeFromState(state: unknown): string | null {
+function importNoticeFromState(state: unknown): BackupNotice | null {
   if (typeof state !== 'object' || state === null) return null;
   const imported = (state as { imported?: unknown }).imported;
   if (typeof imported !== 'object' || imported === null) return null;
@@ -71,13 +76,18 @@ export function importNoticeFromState(state: unknown): string | null {
       ? clearedProjectRefs
       : 0;
 
-  return importDoneToast({
-    fileName,
-    rows,
-    clearedProjectRefs: cleared,
-    beforeDestination: copyLocationFromState(beforeDestination),
-    beforeFileName: typeof beforeFileName === 'string' ? beforeFileName : undefined,
-  });
+  const destination = copyLocationFromState(beforeDestination);
+  const copyName = typeof beforeFileName === 'string' ? beforeFileName : undefined;
+  return {
+    text: importDoneToast({
+      fileName,
+      rows,
+      clearedProjectRefs: cleared,
+      beforeDestination: destination,
+      beforeFileName: copyName,
+    }),
+    cachedCopyName: destination?.kind === 'cache' ? (copyName ?? null) : null,
+  };
 }
 
 export interface ResetConfirmSheetProps {
@@ -147,11 +157,14 @@ export function StorageRow() {
   );
 }
 
-export default function SettingsScreen() {
+export default function SettingsScreen({ onLedgerReset }: { onLedgerReset?: () => void } = {}) {
   const location = useLocation();
   const { db, bump } = useDb();
   const notice = importNoticeFromState(location.state);
-  const { toast, showToast } = useToast(notice);
+  const [cacheResult, setCacheResult] = useState<BackupNotice | null>(
+    notice?.cachedCopyName ? notice : null
+  );
+  const { toast, showToast, clearToast } = useToast(notice?.cachedCopyName ? null : (notice?.text ?? null));
   /**
    * Detection runs here rather than only behind 设置 › 固定支出, so opening
    * 设置 is enough to learn that something is waiting. A failure leaves the
@@ -210,8 +223,16 @@ export default function SettingsScreen() {
     setResetError(null);
     try {
       const result = await resetWithBackup(db, deviceFileWriter, new Date());
+      onLedgerReset?.();
       setResetCounts(null);
-      showToast(resetDoneToast(result));
+      const text = resetDoneToast(result);
+      if (result.beforeDestination.kind === 'cache') {
+        clearToast();
+        setCacheResult({ text, cachedCopyName: result.beforeFileName });
+      } else {
+        setCacheResult(null);
+        showToast(text);
+      }
       bump();
     } catch (reason) {
       setResetCounts(null);
@@ -226,6 +247,19 @@ export default function SettingsScreen() {
       <header className="settings-head">
         <h1>设置</h1>
       </header>
+
+      {cacheResult?.cachedCopyName && (
+        <div className="settings-backup-result">
+          <p className="settings-note" role="status">{cacheResult.text}</p>
+          <Link
+            className="settings-backup-result__link"
+            to="/settings/backup"
+            state={{ cachedCopyName: cacheResult.cachedCopyName }}
+          >
+            查看自动副本
+          </Link>
+        </div>
+      )}
 
       <section className="settings-group" aria-labelledby="settings-management">
         <h2 className="settings-group__title" id="settings-management">

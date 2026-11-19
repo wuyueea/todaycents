@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 
 async function sql<T>(page: Page, statement: string, params: (string | number | null)[] = []): Promise<T[]> {
@@ -24,6 +24,35 @@ async function openEntry(page: Page, amount = '12.50') {
 
 async function noHorizontalOverflow(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+}
+
+async function seedEditReturnRows(page: Page, date: string, projectId: string | null = null) {
+  await sql(page, `
+    WITH RECURSIVE rows(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM rows WHERE n < 24)
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, category_id,
+                     project_id, note, created_at)
+    SELECT 'edit-return-' || n, ?, account.id, -100, 'expense',
+           (SELECT id FROM category WHERE name = '饮食'), ?,
+           '样本流水 ' || n, printf('2026-01-01T00:00:%02dZ', n)
+      FROM rows CROSS JOIN account WHERE account.name = '微信'
+  `, [date, projectId]);
+}
+
+async function openScrolledTxn(page: Page, row: Locator) {
+  const position = await row.evaluate(element => {
+    element.scrollIntoView({ block: 'center', behavior: 'instant' });
+    return { rowTop: element.getBoundingClientRect().top, scrollY: window.scrollY };
+  });
+  expect(position.scrollY).toBeGreaterThan(0);
+  await row.click();
+  await expect(page.getByRole('heading', { name: '编辑流水', exact: true })).toBeInViewport();
+  return position;
+}
+
+async function expectRestoredRow(row: Locator, originalTop: number) {
+  await expect(row).toBeFocused();
+  await expect.poll(async () => Math.abs(await row.evaluate(element => element.getBoundingClientRect().top) - originalTop))
+    .toBeLessThanOrEqual(2);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -77,6 +106,82 @@ test('downloads the xlsx directly in a browser without a native cache list', asy
   expect((await readFile(await file.path())).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 3, 4]));
   await expect(page.getByText('应用缓存中的报表', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('keeps the first confirmed backup and shows both restore times after reimport', async ({ page }) => {
+  await openEntry(page);
+  await page.getByLabel('备注', { exact: true }).fill('备份测试午餐');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.locator('.today-card')).toContainText('备份测试午餐');
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  const backupLink = page.getByRole('link', { name: '备份与恢复' });
+  await backupLink.click();
+  const confirmed = page.getByRole('region', { name: '最近一次确认备份' });
+  await expect(confirmed).toContainText('还没有确认保存的备份');
+
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出到文件' }).click();
+  const file = await downloaded;
+  const buffer = await readFile(await file.path());
+  await expect(confirmed).toContainText('刚刚');
+
+  await page.clock.setFixedTime(new Date('2026-01-02T12:00:00+08:00'));
+  await page.getByLabel('选择备份文件').setInputFiles({
+    name: file.suggestedFilename(),
+    mimeType: 'application/octet-stream',
+    buffer,
+  });
+  const dialog = page.getByRole('dialog', { name: '从文件导入' });
+  await dialog.getByRole('button', { name: '覆盖并导入' }).click();
+  await expect(page.getByRole('heading', { name: '设置', exact: true })).toBeVisible();
+  await backupLink.click();
+  await page.reload();
+
+  await expect(confirmed).toContainText('昨天 12:00');
+  await expect(confirmed).toContainText('1 笔流水');
+  const restored = page.getByRole('region', { name: '最近一次恢复' });
+  await expect(restored).toContainText('刚刚');
+  await expect(restored).toContainText('源文件生成时间 · 昨天 12:00');
+  expect(await sql(page, 'SELECT amount_cents, note FROM txn')).toEqual([{ amount_cents: -1250, note: '备份测试午餐' }]);
+  await noHorizontalOverflow(page);
+});
+
+test('distinguishes same-named backups with the same row count by their transaction dates', async ({ page }) => {
+  await openEntry(page);
+  await page.getByLabel('备注', { exact: true }).fill('本机流水');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.locator('.today-card')).toContainText('本机流水');
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '备份与恢复' }).click();
+  const downloaded = page.waitForEvent('download');
+  await page.getByRole('button', { name: '导出到文件' }).click();
+  const file = await downloaded;
+  const backup = JSON.parse(await readFile(await file.path(), 'utf8')) as {
+    tables: { txn: Array<{ occurred_date: string }> };
+  };
+
+  const dialog = page.getByRole('dialog', { name: '从文件导入' });
+  for (const date of ['2025-11-07', '2025-12-09']) {
+    backup.tables.txn[0].occurred_date = date;
+    await page.getByLabel('选择备份文件').setInputFiles({
+      name: '同名备份.ledger',
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.from(JSON.stringify(backup)),
+    });
+    await expect(dialog.getByText('同名备份.ledger', { exact: true })).toBeVisible();
+    await expect(dialog.getByText(/^1 笔 ·/)).toBeVisible();
+    await expect(dialog.getByText(`流水日期 · ${date}`, { exact: true })).toBeInViewport();
+    await expect(dialog.getByText('未归档账户 · 3 个', { exact: true })).toBeInViewport();
+    const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+    await expect(cancel).toBeFocused();
+    await noHorizontalOverflow(page);
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+  }
+
+  expect(await sql(page, 'SELECT occurred_date, note FROM txn')).toEqual([
+    { occurred_date: '2026-01-01', note: '本机流水' },
+  ]);
 });
 
 test('long-press touch drop stages an expense and only writes after the undo window', async ({ page }) => {
@@ -273,6 +378,128 @@ test('shows a failed write and can retry without losing the draft', async ({ pag
   await expect(page.locator('.today-card')).toContainText('−12.50');
 });
 
+test('keeps quick-entry fields across exits and discards a retained draft when asked', async ({ page }) => {
+  await sql(page, "INSERT INTO tag (id, name) VALUES ('draft-tag', '草稿标签')");
+  await sql(page, "INSERT INTO project (id, name, created_at) VALUES ('draft-project', '草稿项目', '2025-12-01T12:00:00Z')");
+  const open = page.getByRole('link', { name: '记一笔', exact: true });
+  const entry = page.getByRole('dialog', { name: '随手记', exact: true });
+  const decision = page.getByRole('dialog', { name: '保留这笔草稿？', exact: true });
+  const close = entry.getByRole('button', { name: '收起', exact: true });
+  await open.click();
+  await close.click();
+  await expect(entry).toHaveCount(0);
+  await expect(decision).toHaveCount(0);
+
+  await openEntry(page, '26.40');
+  await entry.getByRole('button', { name: '支付宝', exact: true }).click();
+  await entry.getByRole('button', { name: '草稿标签', exact: true }).click();
+  await entry.getByRole('button', { name: '草稿项目', exact: true }).click();
+  await entry.getByRole('button', { name: '昨天', exact: true }).click();
+  await entry.getByLabel('备注', { exact: true }).fill('未记的午餐');
+
+  await page.locator('.entry-scrim').click({ position: { x: 5, y: 5 } });
+  await expect(decision.getByRole('button', { name: '继续填写' })).toBeFocused();
+  await expect(entry).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  await expect(decision).toHaveCount(0);
+  await expect(entry.getByLabel('备注', { exact: true })).toHaveValue('未记的午餐');
+  expect(await page.evaluate(() => window.__todaycentsBack?.())).toBe(1);
+  await decision.getByRole('button', { name: '保留草稿' }).click();
+  await expect(entry).toHaveCount(0);
+  expect(await sql(page, 'SELECT id FROM txn')).toEqual([]);
+
+  await open.click();
+  await expect(entry.getByRole('button', { name: '金额 −26.40', exact: true })).toBeVisible();
+  for (const value of ['饮食', '支付宝', '草稿标签', '草稿项目']) {
+    await expect(entry.getByRole('button', { name: value, exact: true })).toHaveAttribute('aria-pressed', 'true');
+  }
+  await expect(entry.getByLabel('日期', { exact: true })).toHaveValue('2025-12-31');
+  await expect(entry.getByLabel('备注', { exact: true })).toHaveValue('未记的午餐');
+  await entry.getByRole('link', { name: '记错了？去流水里改', exact: true }).click();
+  await expect(decision).toBeVisible();
+  await noHorizontalOverflow(page);
+  await decision.getByRole('button', { name: '放弃草稿' }).click();
+  await expect(page).toHaveURL(/#\/ledger$/);
+
+  await open.click();
+  await expect(entry.getByRole('button', { name: '金额 0.00', exact: true })).toBeVisible();
+  await expect(entry.getByLabel('备注', { exact: true })).toHaveValue('');
+  await expect(entry.getByLabel('日期', { exact: true })).toHaveValue('2026-01-01');
+  await expect(entry.getByRole('button', { name: '草稿标签', exact: true })).toHaveAttribute('aria-pressed', 'false');
+  await close.click();
+  await expect(entry).toHaveCount(0);
+  await expect(decision).toHaveCount(0);
+});
+
+test('keeps both transfer sides through a failed save and clears the kept entry after retry', async ({ page }) => {
+  const open = page.getByRole('link', { name: '记一笔', exact: true });
+  const entry = page.getByRole('dialog', { name: '随手记', exact: true });
+  const decision = page.getByRole('dialog', { name: '保留这笔草稿？', exact: true });
+  await open.click();
+  await entry.getByRole('button', { name: '转账', exact: true }).click();
+  await entry.locator('.entry-key[data-key="8"]').click();
+  const from = entry.locator('[data-from-account-id]').filter({ hasText: '支付宝' });
+  const to = entry.locator('[data-to-account-id]').filter({ hasText: '微信' });
+  await from.click();
+  await to.click();
+  await entry.getByLabel('备注', { exact: true }).fill('未提交的转账');
+  await entry.getByRole('button', { name: '收起', exact: true }).click();
+  await decision.getByRole('button', { name: '保留草稿' }).click();
+  await expect(entry).toHaveCount(0);
+  await open.click();
+  await expect(from).toHaveAttribute('aria-pressed', 'true');
+  await expect(to).toHaveAttribute('aria-pressed', 'true');
+  await expect(entry.getByRole('button', { name: '金额 8', exact: true })).toBeVisible();
+
+  await sql(page, "CREATE TRIGGER block_draft_transfer BEFORE INSERT ON txn WHEN NEW.amount_cents > 0 BEGIN SELECT RAISE(ABORT, '模拟写入失败'); END");
+  await entry.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(entry.getByRole('alert')).toContainText('模拟写入失败');
+  expect(await sql(page, 'SELECT id FROM txn')).toEqual([]);
+  await expect(entry.getByLabel('备注', { exact: true })).toHaveValue('未提交的转账');
+  await expect(from).toHaveAttribute('aria-pressed', 'true');
+  await expect(to).toHaveAttribute('aria-pressed', 'true');
+
+  await sql(page, 'DROP TRIGGER block_draft_transfer');
+  await entry.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(entry).toHaveCount(0);
+  expect(await sql(page, `
+    SELECT a.name, t.amount_cents FROM txn t JOIN account a ON a.id = t.account_id ORDER BY t.amount_cents
+  `)).toEqual([{ name: '支付宝', amount_cents: -800 }, { name: '微信', amount_cents: 800 }]);
+  await open.click();
+  await expect(entry.getByRole('button', { name: '支出', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(entry.getByLabel('备注', { exact: true })).toHaveValue('');
+  await expect(entry.getByRole('button', { name: '金额 0.00', exact: true })).toBeVisible();
+});
+
+test('blocks an archived draft account and clears the draft with a ledger reset', async ({ page }) => {
+  await openEntry(page, '12');
+  const open = page.getByRole('link', { name: '记一笔', exact: true });
+  const entry = page.getByRole('dialog', { name: '随手记', exact: true });
+  const decision = page.getByRole('dialog', { name: '保留这笔草稿？', exact: true });
+  await entry.getByRole('button', { name: '支付宝', exact: true }).click();
+  await entry.getByRole('button', { name: '收起', exact: true }).click();
+  await decision.getByRole('button', { name: '保留草稿' }).click();
+  await expect(entry).toHaveCount(0);
+  await sql(page, "UPDATE account SET archived_at = '2026-01-01T00:00:00Z' WHERE name = '支付宝'");
+  await open.click();
+  await expect(entry.getByRole('button', { name: '饮食', exact: true })).toBeVisible();
+  await entry.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(entry.getByRole('alert')).toContainText('账户');
+  expect(await sql(page, 'SELECT id FROM txn')).toEqual([]);
+  await entry.getByRole('link', { name: '记错了？去流水里改', exact: true }).click();
+  await decision.getByRole('button', { name: '保留草稿' }).click();
+  await expect(page).toHaveURL(/#\/ledger$/);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('button', { name: '清除所有数据', exact: true }).click();
+  await page.getByRole('button', { name: '确认清除', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await open.click();
+  await expect(entry.getByRole('button', { name: '金额 0.00', exact: true })).toBeVisible();
+  await entry.getByRole('button', { name: '收起', exact: true }).click();
+  await expect(entry).toHaveCount(0);
+  await expect(decision).toHaveCount(0);
+});
+
 test('adds an account from the empty-account state and keeps the entry draft', async ({ page }) => {
   await sql(page, 'UPDATE account SET archived_at = ?', [new Date().toISOString()]);
   await openEntry(page, '12.3');
@@ -291,6 +518,151 @@ test('adds an account from the empty-account state and keeps the entry draft', a
   await page.getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('.today-card')).toContainText('未丢的草稿');
   expect(await sql(page, 'SELECT amount_cents FROM txn')).toEqual([{ amount_cents: -1230 }]);
+});
+
+test('reconciles an account only after an explicit balance and shows the delta before saving', async ({ page }) => {
+  await sql(page, 'UPDATE account SET initial_balance_cents = ? WHERE name = ?', [10000, '微信']);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '账户', exact: true }).click();
+  const accountButton = page.getByRole('button', { name: /^微信/ });
+  const account = page.getByRole('listitem').filter({ has: accountButton });
+  await accountButton.click();
+
+  const open = account.getByRole('button', { name: '对账', exact: true });
+  const confirm = account.getByRole('button', { name: '确认对账', exact: true });
+  const field = account.getByRole('button', { name: '对账金额 输入实际余额' });
+  const preview = account.locator('.accounts-reconcile__preview dd');
+  const readTransactions = () => sql(page, 'SELECT amount_cents, direction FROM txn');
+  const enterBalance = async (amount: string) => {
+    await field.click();
+    const keypad = page.getByRole('dialog', { name: '对账金额键盘' });
+    await expect(keypad.getByText('待输入', { exact: true })).toBeVisible();
+    for (const key of amount) await keypad.getByRole('button', { name: key, exact: true }).click();
+    await keypad.getByRole('button', { name: '完成', exact: true }).click();
+  };
+
+  await open.click();
+  await expect(preview).toHaveText(['100.00', '—', '—']);
+  await confirm.click();
+  await expect(account.getByRole('alert')).toHaveText('请输入实际余额。');
+  await expect(field).toHaveAttribute('aria-invalid', 'true');
+  expect(await readTransactions()).toEqual([]);
+
+  await enterBalance('100');
+  await expect(preview).toHaveText(['100.00', '100.00', '0.00']);
+  await confirm.click();
+  await expect(page.getByText('余额一致，无需调整', { exact: true })).toBeVisible();
+  expect(await readTransactions()).toEqual([]);
+
+  await open.click();
+  await enterBalance('0');
+  await expect(preview).toHaveText(['100.00', '0.00', '−100.00']);
+  await noHorizontalOverflow(page);
+  await confirm.click();
+  await expect(account.locator('.accounts-row__balance')).toHaveText('0.00');
+  expect(await readTransactions()).toEqual([{ amount_cents: -10000, direction: 'adjust' }]);
+
+  await page.getByRole('link', { name: '返回设置', exact: true }).click();
+  await page.getByRole('link', { name: '流水', exact: true }).click();
+  await expect(page.getByLabel('本月合计').locator('.num')).toHaveText(['0.00', '0.00']);
+});
+
+test('edits only the note of an account adjustment', async ({ page }) => {
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '账户', exact: true }).click();
+  await page.getByRole('button', { name: /^微信/ }).click();
+  await page.getByRole('button', { name: '对账', exact: true }).click();
+  await page.getByRole('button', { name: '对账金额 输入实际余额' }).click();
+  const keypad = page.getByRole('dialog', { name: '对账金额键盘' });
+  for (const key of ['6', '5']) await keypad.getByRole('button', { name: key, exact: true }).click();
+  await keypad.getByRole('button', { name: '完成', exact: true }).click();
+  await page.getByRole('button', { name: '确认对账', exact: true }).click();
+  await expect(page.getByText('已调整「微信」的余额 65.00', { exact: true })).toBeVisible();
+
+  await page.getByRole('link', { name: '返回设置', exact: true }).click();
+  await page.getByRole('link', { name: '今天', exact: true }).click();
+  await page.locator('a.today-card[data-direction="adjust"]').click();
+  const facts = page.getByRole('region', { name: '对账调整' });
+  await expect(facts.locator('dd')).toHaveText(['2026-01-01', '微信', '+65.00']);
+  await expect(facts).toContainText('对原账户重新对账');
+  await expect(page.locator('[data-amount-open], button[data-account-id], [data-category-id], [data-tag-id], [data-project-id]')).toHaveCount(0);
+  const note = page.getByRole('textbox', { name: '备注', exact: true });
+  await expect(note).toHaveValue('对账差额');
+  await noHorizontalOverflow(page);
+
+  await note.fill('余额已复核');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '今天', exact: true })).toBeVisible();
+  expect(await sql(page, `
+    SELECT a.name, t.amount_cents, t.occurred_date, t.category_id, t.note
+    FROM txn t JOIN account a ON a.id = t.account_id
+  `)).toEqual([{ name: '微信', amount_cents: 6500, occurred_date: '2026-01-01', category_id: null, note: '余额已复核' }]);
+});
+
+test('restores the scrolled Today list after leaving or saving a transaction edit', async ({ page }) => {
+  await seedEditReturnRows(page, '2026-01-01');
+  await page.reload();
+  const row = page.locator('.today-card[data-txn-id="edit-return-12"]');
+  await expect(row).toContainText('样本流水 12');
+  const beforeBack = await openScrolledTxn(page, row);
+  await page.getByRole('link', { name: '返回今天', exact: true }).click();
+  await expectRestoredRow(row, beforeBack.rowTop);
+
+  const beforeSave = await openScrolledTxn(page, row);
+  await page.getByRole('textbox', { name: '备注', exact: true }).fill('今天已核对');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(row).toContainText('今天已核对');
+  await expectRestoredRow(row, beforeSave.rowTop);
+});
+
+test('restores the historical Ledger month and row on Android back and on save', async ({ page }) => {
+  await seedEditReturnRows(page, '2025-12-20');
+  await page.getByRole('link', { name: '流水', exact: true }).click();
+  await page.getByRole('button', { name: '上个月', exact: true }).click();
+  const month = page.getByRole('heading', { name: '2025年12月', exact: true });
+  await expect(month).toBeVisible();
+  const row = page.locator('.ledger-row[data-txn-id="edit-return-12"]');
+  await expect(row).toContainText('样本流水 12');
+  const beforeBack = await openScrolledTxn(page, row);
+  await page.getByRole('textbox', { name: '备注', exact: true }).fill('未保存修改');
+  expect(await page.evaluate(() => window.__todaycentsBack?.())).toBe(1);
+  await expect(month).toBeVisible();
+  await expect(row).toContainText('样本流水 12');
+  await expectRestoredRow(row, beforeBack.rowTop);
+
+  const beforeSave = await openScrolledTxn(page, row);
+  await page.getByRole('textbox', { name: '备注', exact: true }).fill('历史月已核对');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(month).toBeVisible();
+  await expect(row).toContainText('历史月已核对');
+  await expectRestoredRow(row, beforeSave.rowTop);
+});
+
+test('returns to the project and restores its scroll even when the edited row moves out', async ({ page }) => {
+  await sql(page, `
+    INSERT INTO project (id, name, created_at) VALUES ('return-project', '编辑返回测试项目', '2025-12-01T00:00:00Z')
+  `);
+  await seedEditReturnRows(page, '2025-12-20', 'return-project');
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '项目', exact: true }).click();
+  await page.getByRole('link').filter({ hasText: '编辑返回测试项目' }).click();
+  const project = page.getByRole('heading', { name: '编辑返回测试项目', exact: true });
+  const row = page.locator('.project-txn[data-txn-id="edit-return-20"]');
+  await expect(row).toBeVisible();
+  const beforeBack = await openScrolledTxn(page, row);
+  await page.getByRole('link', { name: '返回项目详情', exact: true }).click();
+  await expect(project).toBeVisible();
+  await expectRestoredRow(row, beforeBack.rowTop);
+
+  const beforeSave = await openScrolledTxn(page, row);
+  await page.getByRole('button', { name: '不归项目', exact: true }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(project).toBeVisible();
+  await expect(page.getByRole('region', { name: '最近几笔' }).getByText('样本流水 19', { exact: true })).toBeVisible();
+  await expect(row).toHaveCount(0);
+  await expect.poll(async () => Math.abs(await page.evaluate(() => window.scrollY) - beforeSave.scrollY))
+    .toBeLessThanOrEqual(2);
+  expect(await sql(page, `SELECT project_id FROM txn WHERE id = 'edit-return-20'`)).toEqual([{ project_id: null }]);
 });
 
 test('edits a project with real keypad, scroll and touch targets', async ({ page }) => {

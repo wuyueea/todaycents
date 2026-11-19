@@ -1,6 +1,7 @@
-import { Link } from 'react-router-dom';
 import { orderTransferLegs } from '../components/txnOrder';
 import { TxnDeleteRow } from '../components/TxnDelete';
+import { TxnEditLink, useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
+import type { TxnEditOrigin } from '../components/TxnEditNavigation';
 import { AmountText } from '../components/AmountText';
 import { ProjectMark, UncategorisedLabel, isUncategorised } from '../components/TxnMarks';
 import { useQuery } from '../store/useDb';
@@ -126,18 +127,17 @@ function TodayCard({ row }: { row: TxnRow }) {
   }
 
   return (
-    <Link
+    <TxnEditLink
       className="today-card"
-      to={`/txn/${encodeURIComponent(row.id)}`}
-      data-txn-id={row.id}
-      data-direction={row.direction}
+      txnId={row.id}
+      direction={row.direction}
     >
       {body}
-    </Link>
+    </TxnEditLink>
   );
 }
 
-export default function TodayScreen() {
+export default function TodayScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
   const today = todayLocalISO();
   const query = useQuery<TodayData>(database => loadTodayData(database, today), [today]);
 
@@ -145,6 +145,7 @@ export default function TodayScreen() {
   // the app can stay open across midnight.
   const data = query.data?.date === today ? query.data : null;
   const rows = orderTransferLegs(data?.rows ?? []);
+  useRestoreTxnEditScroll(editReturn, data !== null && !query.loading);
 
   return (
     <div className="today-screen">

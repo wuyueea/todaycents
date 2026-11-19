@@ -5,8 +5,10 @@ import AppDock from './components/AppDock';
 import GlobalPurgeUndo from './components/GlobalPurgeUndo';
 import { Toast } from './components/Toast';
 import { TxnDeleteProvider } from './components/TxnDelete';
+import { useTxnEditReturn } from './components/TxnEditNavigation';
 import TodayScreen from './screens/TodayScreen';
 import QuickEntryScreen from './screens/QuickEntryScreen';
+import type { QuickEntrySessionDraft } from './screens/QuickEntryScreen';
 import LedgerScreen from './screens/LedgerScreen';
 import TxnEditScreen from './screens/TxnEditScreen';
 import AccountsScreen from './screens/AccountsScreen';
@@ -42,6 +44,7 @@ export default function App() {
   const { db, error, bump } = useDb();
   const location = useLocation();
   const navigate = useNavigate();
+  const txnEditReturn = useTxnEditReturn(location);
   // Android's back key: the newest sheet closes itself first, then the page
   // steps up one structural level, and only a tab can ask the shell to close.
   // The handler is installed once; it reads the current route from this ref so
@@ -49,6 +52,7 @@ export default function App() {
   const locationRef = useRef(location);
   locationRef.current = location;
   const [exitHint, setExitHint] = useState(0);
+  const [quickEntryDraft, setQuickEntryDraft] = useState<QuickEntrySessionDraft | null>(null);
   // GlobalPurgeUndo owns the stored undo record, but the exit warning lives in
   // this shell. Lifting whether the bar is visible lets the warning stack above
   // it instead of covering the 撤销 action for two seconds.
@@ -141,20 +145,20 @@ export default function App() {
           stacked={undoVisible}
         >
           <Routes location={baseLocation}>
-            <Route path="/" element={<TodayScreen />} />
-            <Route path="/ledger" element={<LedgerScreen />} />
+            <Route path="/" element={<TodayScreen editReturn={txnEditReturn} />} />
+            <Route path="/ledger" element={<LedgerScreen editReturn={txnEditReturn} />} />
             <Route path="/reports" element={<ReportsScreen />} />
             <Route path="/accounts" element={<AccountsScreen />} />
             {/* The old transfer page is gone; its links land on 随手记. */}
             <Route path="/transfer" element={<Navigate to={LEGACY_TRANSFER_TARGET} replace />} />
             <Route path="/txn/:id" element={<TxnEditScreen />} />
-            <Route path="/settings" element={<SettingsScreen />} />
+            <Route path="/settings" element={<SettingsScreen onLedgerReset={() => setQuickEntryDraft(null)} />} />
             <Route path="/settings/backup" element={<BackupScreen />} />
             <Route path="/settings/storage" element={<StorageScreen />} />
             <Route path="/settings/tags" element={<TagsScreen />} />
             <Route path="/settings/categories" element={<CategoriesScreen />} />
             <Route path="/settings/projects" element={<ProjectsScreen />} />
-            <Route path="/settings/projects/:id" element={<ProjectDetailScreen />} />
+            <Route path="/settings/projects/:id" element={<ProjectDetailScreen editReturn={txnEditReturn} />} />
             <Route path="/settings/fixed" element={<FixedCostsScreen />} />
             {/* Unknown paths go back to 今天 rather than rendering a blank page. */}
             <Route path="*" element={<Navigate to="/" replace />} />
@@ -171,6 +175,8 @@ export default function App() {
         <div hidden={!isEntryOpen}>
           <QuickEntryScreen
             active={isEntryOpen}
+            keptDraft={quickEntryDraft}
+            onDraftChange={setQuickEntryDraft}
             onClose={() => {
               if (backgroundLocation) navigate(-1);
               else navigate('/', { replace: true });

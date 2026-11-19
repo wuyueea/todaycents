@@ -263,7 +263,16 @@
   font-size: 11.5px;
 }
 
-:is(.backup-screen--v1, .reports-screen) .backup-cache__share {
+.backup-screen--v1 .backup-cache__problem {
+  margin-top: 4px;
+  color: var(--v1-err);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+:is(.backup-screen--v1, .reports-screen) .backup-cache__share,
+.backup-screen--v1 .backup-cache__restore {
   flex: none;
   min-height: 44px;
   padding: 0 14px;
@@ -272,6 +281,24 @@
   background: var(--v1-s2);
   color: var(--v1-ink);
   font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.backup-screen--v1 .backup-cache__restore {
+  background: var(--v1-amb);
+}
+
+.backup-screen--v1 .backup-cache__row[tabindex="-1"] {
+  background: var(--v1-s2);
+}
+
+.settings-backup-result__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-inline: 4px;
+  color: var(--v1-ink);
   font-size: 13px;
   font-weight: 600;
 }

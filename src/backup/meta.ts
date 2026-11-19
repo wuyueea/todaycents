@@ -1,13 +1,31 @@
 /**
- * The app_meta half of backup: the last successful export and a row count.
+ * Backup and restore history for the current device.
  *
  * Kept apart from flow.ts so the 设置 screen can read the last backup without
  * pulling in the import/restore flow. app_meta is the existing key/value table;
  * this module adds no schema.
  */
 import type { Db } from '../db/driver';
-import { BACKUP_META_KEYS } from './format';
 import type { BackupMeta } from './format';
+
+const BACKUP_META_KEYS = {
+  at: 'last_backup_at',
+  rows: 'last_backup_rows',
+  bytes: 'last_backup_bytes',
+} as const;
+const RESTORE_META_KEY = 'last_restore';
+export const LOCAL_BACKUP_META_KEYS: readonly string[] = [
+  ...Object.values(BACKUP_META_KEYS),
+  RESTORE_META_KEY,
+];
+
+const UPSERT_META =
+  'INSERT INTO app_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value';
+
+export interface RestoreMeta {
+  restoredAt: string;
+  sourceExportedAt: string;
+}
 
 /**
  * Reads the last successful export. A half-written record (some keys missing,
@@ -45,13 +63,33 @@ export async function recordBackupMeta(db: Db, meta: BackupMeta): Promise<void> 
 
   await db.transaction(async tx => {
     for (const [key, value] of entries) {
-      await tx.run(
-        'INSERT INTO app_meta (key, value) VALUES (?, ?) ' +
-          'ON CONFLICT(key) DO UPDATE SET value = excluded.value',
-        [key, value]
-      );
+      await tx.run(UPSERT_META, [key, value]);
     }
   });
+}
+
+export async function readRestoreMeta(db: Db): Promise<RestoreMeta | null> {
+  const row = await db.get<{ value: string }>(
+    'SELECT value FROM app_meta WHERE key = ?', [RESTORE_META_KEY]
+  );
+  if (row === undefined) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.value);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null;
+  const { restoredAt, sourceExportedAt } = parsed as Partial<RestoreMeta>;
+  if (typeof restoredAt !== 'string' || !Number.isFinite(Date.parse(restoredAt))) return null;
+  if (typeof sourceExportedAt !== 'string' || sourceExportedAt.trim() === '') return null;
+  return { restoredAt, sourceExportedAt };
+}
+
+/** Called inside the same transaction that replaces the ledger. */
+export async function recordRestoreMeta(db: Db, meta: RestoreMeta): Promise<void> {
+  await db.run(UPSERT_META, [RESTORE_META_KEY, JSON.stringify(meta)]);
 }
 
 /**

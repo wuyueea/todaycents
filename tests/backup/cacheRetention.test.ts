@@ -1,18 +1,22 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { createCachedBackupStore } from '../../src/backup/device';
-import type { CachedBackup, CachedBackupPort, CachedFileInfo, ShareOutcome } from '../../src/backup/device';
+import type { CachedBackupPort, CachedFileInfo, ShareOutcome } from '../../src/backup/device';
+import { buildBackup, serializeBackup } from '../../src/db/backup';
+import { createTestDb } from '../helpers/nodeDb';
+
+let completeBackup: string;
+beforeAll(async () => {
+  completeBackup = serializeBackup(await buildBackup(await createTestDb()));
+});
 
 function before(index: number, overrides: Partial<CachedFileInfo> = {}): CachedFileInfo {
   const name = `记账本-20261101-1200${String(index).padStart(2, '0')}-before.ledger`;
   return { name, type: 'file', uri: `file:///cache/${name}`, size: 100, mtime: index + 1000, ...overrides };
 }
 
-function cached(file: CachedFileInfo): CachedBackup {
-  return { name: file.name, uri: file.uri, bytes: file.size, modifiedAt: file.mtime };
-}
-
 function harness(initial: CachedFileInfo[]) {
   let files = [...initial];
+  const contents = new Map<string, string>();
   const deleted: string[] = [];
   const events: string[] = [];
   let writeError: Error | null = null;
@@ -32,8 +36,9 @@ function harness(initial: CachedFileInfo[]) {
       if (writeError) throw writeError;
       const file = before(0, { name, uri: `file:///cache/${name}`, mtime: nextMtime });
       files = [...files.filter(existing => existing.name !== name), file];
-      return file.uri;
+      return { fileName: name, uri: file.uri };
     },
+    readFile: async name => contents.get(name) ?? completeBackup,
     deleteFile: async name => {
       events.push(`delete:${name}`);
       if (name === deleteErrorFor) throw new Error('read only');
@@ -49,6 +54,7 @@ function harness(initial: CachedFileInfo[]) {
     setDeleteError: (name: string) => { deleteErrorFor = name; },
     setMtime: (mtime: number) => { nextMtime = mtime; },
     setShare: (fn: () => Promise<ShareOutcome>) => { share = fn; },
+    contents,
   };
 }
 
@@ -98,7 +104,7 @@ describe('automatic before cache retention', () => {
     const h = harness(Array.from({ length: 10 }, (_, i) => before(i)));
     const name = before(20).name;
     h.setMtime(1);
-    expect(await h.store.write(name, 'snapshot')).toBe(`file:///cache/${name}`);
+    expect(await h.store.write(name, 'snapshot')).toEqual({ fileName: name, uri: `file:///cache/${name}` });
     expect(h.events[0]).toBe(`write:${name}:snapshot`);
     const listed = await h.store.list();
     expect(listed).toHaveLength(11);
@@ -113,7 +119,7 @@ describe('automatic before cache retention', () => {
     expect(h.deleted).toEqual([]);
     expect(h.events).toHaveLength(1);
     h.setWriteError(null);
-    await expect(h.store.write(before(21).name, 'snapshot')).resolves.toBe(`file:///cache/${before(21).name}`);
+    await expect(h.store.write(before(21).name, 'snapshot')).resolves.toMatchObject({ fileName: before(21).name });
     expect(await h.store.list()).toHaveLength(10);
   });
 
@@ -129,10 +135,10 @@ describe('automatic before cache retention', () => {
   it('does not fail a successful before write when cleanup cannot list or delete', async () => {
     const h = harness(Array.from({ length: 10 }, (_, i) => before(i)));
     h.setListError(new Error('readdir failed'));
-    await expect(h.store.write(before(20).name, 'snapshot')).resolves.toBe(`file:///cache/${before(20).name}`);
+    await expect(h.store.write(before(20).name, 'snapshot')).resolves.toMatchObject({ fileName: before(20).name });
     h.setListError(null);
     h.setDeleteError(before(0).name);
-    await expect(h.store.write(before(21).name, 'snapshot')).resolves.toBe(`file:///cache/${before(21).name}`);
+    await expect(h.store.write(before(21).name, 'snapshot')).resolves.toMatchObject({ fileName: before(21).name });
     expect(h.deleted).toEqual([before(1).name]);
   });
 
@@ -145,11 +151,11 @@ describe('automatic before cache retention', () => {
       entered();
       finish = () => resolve('shared');
     }));
-    const sharing = h.store.share(cached(before(0)));
+    const sharing = h.store.share(before(0).name);
     await started;
     const writing = h.store.write(before(20).name, 'snapshot');
     await Promise.resolve();
-    expect(h.events).toEqual([]);
+    expect(h.events).toEqual(['list']);
     finish();
     await sharing;
     await writing;
@@ -161,7 +167,7 @@ describe('automatic before cache retention', () => {
   it('protects shared URIs for the rest of this session, allowing a temporary excess', async () => {
     const files = Array.from({ length: 11 }, (_, i) => before(i));
     const h = harness(files);
-    for (const file of files) await h.store.share(cached(file));
+    for (const file of files) await h.store.share(file.name);
     expect(await h.store.list()).toHaveLength(11);
     expect(h.deleted).toEqual([]);
     // In-memory pins are not restored after the app process restarts.
@@ -180,7 +186,7 @@ describe('automatic before cache retention', () => {
     h.port.listFiles = async () => { entered(); await gate; return originalRead(); };
     const listing = h.store.list();
     await started;
-    const sharing = h.store.share(cached(before(0)));
+    const sharing = h.store.share(before(0).name);
     release();
     expect(await listing).toHaveLength(11);
     await sharing;
@@ -200,10 +206,41 @@ describe('automatic before cache retention', () => {
     };
     const listing = h.store.list();
     await started;
-    const sharing = h.store.share(cached(before(0)));
+    const sharing = h.store.share(before(0).name);
     release();
     expect(await listing).toHaveLength(11);
     await sharing;
     expect(h.deleted).toEqual([before(1).name]);
+  });
+
+  it('keeps ten usable copies when a newer automatic copy is truncated', async () => {
+    const invalid = before(10);
+    const files = Array.from({ length: 10 }, (_, i) => before(i));
+    const h = harness([...files, invalid]);
+    h.contents.set(invalid.name, completeBackup.slice(0, -10));
+
+    const listed = await h.store.list();
+
+    expect(listed).toHaveLength(11);
+    expect(listed[0]).toMatchObject({ name: invalid.name, unavailableReason: expect.stringContaining('JSON') });
+    expect(listed.slice(1).every(file => file.unavailableReason === undefined)).toBe(true);
+    expect(h.deleted).toEqual([]);
+  });
+
+  it('verifies the file on both actions when its contents changed after listing', async () => {
+    const file = before(0);
+    const h = harness([file]);
+    const listed = await h.store.list();
+    expect(listed[0]?.unavailableReason).toBeUndefined();
+    const mismatch = JSON.parse(completeBackup);
+    mismatch.counts.txn = 1;
+    h.contents.set(file.name, JSON.stringify(mismatch));
+    let shares = 0;
+    h.setShare(async () => { shares += 1; return 'shared'; });
+
+    await expect(h.store.read(file.name)).rejects.toThrow('txn 表行数与文件声明不符');
+    await expect(h.store.share(file.name)).rejects.toThrow('txn 表行数与文件声明不符');
+
+    expect(shares).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AmountText } from '../components/AmountText';
 import {
   AmountKeypad,
@@ -10,6 +10,7 @@ import {
 import { Sheet } from '../components/Sheet';
 import { registerBackHandler } from '../components/backButton';
 import { createSaveExit } from '../components/saveExit';
+import { isPlainLinkClick, readTxnEditOrigin } from '../components/TxnEditNavigation';
 import { useDb, useQuery } from '../store/useDb';
 import { listAccounts } from '../db/repos/accounts';
 import { listCategories } from '../db/repos/categories';
@@ -34,7 +35,8 @@ import { formatCents, parseAmountToCents } from '../domain/money';
  * An id that is not there — never recorded or already deleted — is a plain
  * "不存在" state rather than a form editing nothing.
  *
- * What may change is amount, category, account, note and tags. The date is
+ * Income and expense edits can change amount, category, account, note and tags.
+ * Adjustments only allow note edits. The date is
  * display-only: updateTxn has no date field and refuses a patch that carries
  * one, so a correction can never move a transaction to another day. Tags and
  * the project are written by setTxnTags and setTxnProject inside the same
@@ -185,8 +187,8 @@ function editCategoryOptions(
  */
 export async function loadTxnEditData(db: Db, id: string): Promise<TxnEditData> {
   const row = await getTxnById(db, id);
-  if (row === null) {
-    return { row: null, categories: [], accounts: [], tags: [], rowTags: [], projects: [] };
+  if (row === null || row.direction === 'adjust') {
+    return { row, categories: [], accounts: [], tags: [], rowTags: [], projects: [] };
   }
 
   const categories = await listCategories(db);
@@ -209,6 +211,16 @@ export async function commitTxnEdit(
 ): Promise<TxnEditResult> {
   if (row.direction === 'transfer') {
     throw new Error('转账记录不能在这里单独修改，需要整组处理');
+  }
+  if (row.direction === 'adjust') {
+    await db.transaction(tx => updateTxn(tx, row.id, { note: draft.note }));
+    return {
+      draft,
+      amountCents: Math.abs(row.amountCents),
+      problems: noProblems(),
+      blocked: false,
+      saved: true,
+    };
   }
 
   const plan = planTxnEdit(draft);
@@ -249,9 +261,37 @@ function problemText(problems: TxnEditProblems): string {
     : '请选择一个账户';
 }
 
+function TxnEditFacts({ row }: { row: TxnRow }) {
+  return (
+    <dl className="txn-edit-facts">
+      <div>
+        <dt>日期</dt>
+        <dd><time dateTime={row.occurredDate}>{row.occurredDate}</time></dd>
+      </div>
+      <div>
+        <dt>账户</dt>
+        <dd>{row.accountName}</dd>
+      </div>
+      <div>
+        <dt>{row.direction === 'adjust' ? '对账差额' : '金额'}</dt>
+        <dd>
+          <AmountText cents={row.amountCents} direction={row.direction} />
+        </dd>
+      </div>
+      {row.direction === 'transfer' && row.note !== '' && (
+        <div>
+          <dt>备注</dt>
+          <dd>{row.note}</dd>
+        </div>
+      )}
+    </dl>
+  );
+}
+
 export default function TxnEditScreen() {
   const { db, bump } = useDb();
   const navigate = useNavigate();
+  const origin = readTxnEditOrigin(useLocation().state);
   const params = useParams<{ id: string }>();
   const id = params.id ?? '';
 
@@ -277,7 +317,15 @@ export default function TxnEditScreen() {
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [amountPristine, setAmountPristine] = useState(false);
 
-  const exit = createSaveExit(busy, () => navigate('/ledger', { replace: true }));
+  const leaveEdit = () => {
+    if (origin === null) navigate('/ledger', { replace: true });
+    else navigate(-1);
+  };
+  const exit = createSaveExit(busy, leaveEdit);
+
+  useLayoutEffect(() => {
+    if (window.scrollY > 0) window.scrollTo({ top: 0 });
+  }, [id]);
 
   // While a save is in flight, swallow the hardware back gesture: the write is
   // still landing, and leaving now would hide a commit or invite a duplicate.
@@ -393,20 +441,17 @@ export default function TxnEditScreen() {
       });
       setProblems(result.problems);
 
-      if (!result.saved) {
-        setErrorText(problemText(result.problems));
+      if (result.saved) {
+        // Keep the exit guard active until the history step removes the form.
+        bump();
+        leaveEdit();
         return;
       }
-
-      // The write is committed before leaving; replace() keeps a stale edit
-      // form out of the back stack.
-      bump();
-      navigate('/ledger', { replace: true });
+      setErrorText(problemText(result.problems));
     } catch (reason) {
       setErrorText(`保存失败：${reason instanceof Error ? reason.message : String(reason)}`);
-    } finally {
-      setBusy(false);
     }
+    setBusy(false);
   };
 
   return (
@@ -414,12 +459,16 @@ export default function TxnEditScreen() {
       <header className="add-header">
         <Link
           className="add-back"
-          to="/ledger"
-          aria-label="返回流水"
+          to={origin ?? '/ledger'}
+          aria-label={origin?.pathname === '/' ? '返回今天'
+            : origin?.pathname.startsWith('/settings/projects/') ? '返回项目详情' : '返回流水'}
           aria-disabled={exit.canLeave ? undefined : true}
           tabIndex={exit.canLeave ? undefined : -1}
           onClick={event => {
-            if (!exit.canLeave) event.preventDefault();
+            if (!exit.canLeave || isPlainLinkClick(event)) {
+              event.preventDefault();
+              exit.requestLeave();
+            }
           }}
         >
           ‹
@@ -448,196 +497,185 @@ export default function TxnEditScreen() {
         </p>
       ) : row.direction === 'transfer' ? (
         <section className="txn-edit-readonly" aria-label="转账记录">
-          <dl className="txn-edit-facts">
-            <div>
-              <dt>日期</dt>
-              <dd>{row.occurredDate}</dd>
-            </div>
-            <div>
-              <dt>账户</dt>
-              <dd>{row.accountName}</dd>
-            </div>
-            <div>
-              <dt>金额</dt>
-              <dd>
-                <AmountText cents={row.amountCents} direction={row.direction} />
-              </dd>
-            </div>
-            {row.note !== '' && (
-              <div>
-                <dt>备注</dt>
-                <dd>{row.note}</dd>
-              </div>
-            )}
-          </dl>
+          <TxnEditFacts row={row} />
           <p className="add-note">
             转账记录由一出一进两条腿组成，不能在这里单独修改。
           </p>
         </section>
       ) : (
         <form className="add-form" onSubmit={handleSubmit}>
-          <div className="add-field add-field--amount">
-            <span className="add-label">金额</span>
-            <button
-              id="edit-amount"
-              className="txn-amount-button"
-              type="button"
-              data-amount-open
-              aria-label={`金额 ${formatAmountDraft(amount)}`}
-              aria-invalid={problems.amountInvalid ? 'true' : undefined}
-              onClick={() => {
-                setAmountPristine(true);
-                setKeypadOpen(true);
-              }}
-            >
-              {formatAmountDraft(amount)}
-            </button>
-          </div>
-
-          <p className="txn-edit-date">
-            日期：<time dateTime={row.occurredDate}>{row.occurredDate}</time>（不可修改）
-          </p>
-
-          <div className="entry-group">
-            <div className="entry-group__head">
-              <span>分类</span>
-            </div>
-            <div className="entry-chips entry-chips--wrap">
-              {categories.map(category => (
-                <button
-                  key={category.id}
-                  type="button"
-                  className={`entry-chip${categoryId === category.id ? ' is-on' : ''}`}
-                  data-category-id={category.id}
-                  aria-pressed={categoryId === category.id}
-                  onClick={() => changeCategory(category.id)}
-                >
-                  {category.name}
-                </button>
-              ))}
-            </div>
-          </div>
-          {currentCategoryMissing && (
-            <p className="add-note">
-              当前分类「{row.categoryName ?? '未分类'}」已停用；不重新选择会保留原分类。
-            </p>
-          )}
-
-          <div className="entry-group">
-            <div className="entry-group__head">
-              <span>账户</span>
-            </div>
-            <div className="entry-chips entry-chips--wrap">
-              {accounts.map(option => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`entry-chip${accountId === option.id ? ' is-on' : ''}`}
-                  data-account-id={option.id}
-                  aria-pressed={accountId === option.id}
-                  aria-invalid={problems.accountInvalid ? 'true' : undefined}
-                  onClick={() => changeAccount(option.id)}
-                >
-                  {option.name}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="entry-group">
-            <div className="entry-group__head">
-              <span>标签</span>
-            </div>
-            <div className="entry-chips entry-chips--wrap">
-              {tagOptions.length === 0 ? (
-                <span className="entry-group__hint">还没有标签</span>
-              ) : (
-                tagOptions.map(tag => (
-                  <button
-                    key={tag.id}
-                    type="button"
-                    className={`entry-chip${tagIds.includes(tag.id) ? ' is-on' : ''}`}
-                    data-tag-id={tag.id}
-                    aria-pressed={tagIds.includes(tag.id)}
-                    onClick={() =>
-                      changeTags(
-                        tagIds.includes(tag.id)
-                          ? tagIds.filter(candidate => candidate !== tag.id)
-                          : [...tagIds, tag.id]
-                      )
-                    }
-                  >
-                    {tag.name}
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
-
-          {(row.direction === 'expense' || row.direction === 'income') && (
+          {row.direction === 'adjust' ? (
+            <section className="txn-edit-readonly" aria-label="对账调整">
+              <TxnEditFacts row={row} />
+              <p className="add-note">这里只能编辑备注。要修正余额，请到「设置 → 账户」对原账户重新对账。</p>
+            </section>
+          ) : (
             <>
+              <div className="add-field add-field--amount">
+                <span className="add-label">金额</span>
+                <button
+                  id="edit-amount"
+                  className="txn-amount-button"
+                  type="button"
+                  data-amount-open
+                  aria-label={`金额 ${formatAmountDraft(amount)}`}
+                  aria-invalid={problems.amountInvalid ? 'true' : undefined}
+                  onClick={() => {
+                    setAmountPristine(true);
+                    setKeypadOpen(true);
+                  }}
+                >
+                  {formatAmountDraft(amount)}
+                </button>
+              </div>
+
+              <p className="txn-edit-date">
+                日期：<time dateTime={row.occurredDate}>{row.occurredDate}</time>（不可修改）
+              </p>
+
               <div className="entry-group">
                 <div className="entry-group__head">
-                  <span>项目</span>
+                  <span>分类</span>
                 </div>
                 <div className="entry-chips entry-chips--wrap">
-                  <button
-                    type="button"
-                    className={`entry-chip${projectId === null ? ' is-on' : ''}`}
-                    data-project-clear="true"
-                    aria-pressed={projectId === null}
-                    onClick={() => changeProject(null)}
-                  >
-                    不归项目
-                  </button>
-                  {projectOptions.map(project => (
+                  {categories.map(category => (
                     <button
-                      key={project.id}
+                      key={category.id}
                       type="button"
-                      className={`entry-chip${projectId === project.id ? ' is-on' : ''}`}
-                      data-project-id={project.id}
-                      aria-pressed={projectId === project.id}
-                      onClick={() => changeProject(project.id)}
+                      className={`entry-chip${categoryId === category.id ? ' is-on' : ''}`}
+                      data-category-id={category.id}
+                      aria-pressed={categoryId === category.id}
+                      onClick={() => changeCategory(category.id)}
                     >
-                      {project.name}
-                      {archivedProject?.id === project.id ? '（已归档）' : ''}
+                      {category.name}
                     </button>
                   ))}
                 </div>
               </div>
-              {row.projectArchived && row.projectName !== null && projectId === row.projectId && (
+              {currentCategoryMissing && (
                 <p className="add-note">
-                  当前项目「{row.projectName}」已归档；不重新选择会保留原项目。
+                  当前分类「{row.categoryName ?? '未分类'}」已停用；不重新选择会保留原分类。
                 </p>
               )}
-            </>
-          )}
 
-          {row.direction === 'expense' && (
-            <div className="txn-edit-fixed">
-              <span className="add-label">固定支出</span>
-              {/* A plain on/off control on the right: no status word, no
-                  paragraph underneath. The thumb's position says the state. */}
-              <button
-                className="fixed-toggle"
-                type="button"
-                role="switch"
-                data-fixed-toggle
-                aria-checked={isFixed}
-                aria-label="固定支出"
-                disabled={busy || fixedBusy || db === null}
-                onClick={() => {
-                  void changeFixed(!isFixed);
-                }}
-              >
-                <span
-                  className={isFixed ? 'fixed-toggle__track is-on' : 'fixed-toggle__track'}
-                  aria-hidden="true"
-                >
-                  <span className="fixed-toggle__thumb" />
-                </span>
-              </button>
-            </div>
+              <div className="entry-group">
+                <div className="entry-group__head">
+                  <span>账户</span>
+                </div>
+                <div className="entry-chips entry-chips--wrap">
+                  {accounts.map(option => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      className={`entry-chip${accountId === option.id ? ' is-on' : ''}`}
+                      data-account-id={option.id}
+                      aria-pressed={accountId === option.id}
+                      aria-invalid={problems.accountInvalid ? 'true' : undefined}
+                      onClick={() => changeAccount(option.id)}
+                    >
+                      {option.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="entry-group">
+                <div className="entry-group__head">
+                  <span>标签</span>
+                </div>
+                <div className="entry-chips entry-chips--wrap">
+                  {tagOptions.length === 0 ? (
+                    <span className="entry-group__hint">还没有标签</span>
+                  ) : (
+                    tagOptions.map(tag => (
+                      <button
+                        key={tag.id}
+                        type="button"
+                        className={`entry-chip${tagIds.includes(tag.id) ? ' is-on' : ''}`}
+                        data-tag-id={tag.id}
+                        aria-pressed={tagIds.includes(tag.id)}
+                        onClick={() =>
+                          changeTags(
+                            tagIds.includes(tag.id)
+                              ? tagIds.filter(candidate => candidate !== tag.id)
+                              : [...tagIds, tag.id]
+                          )
+                        }
+                      >
+                        {tag.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {(row.direction === 'expense' || row.direction === 'income') && (
+                <>
+                  <div className="entry-group">
+                    <div className="entry-group__head">
+                      <span>项目</span>
+                    </div>
+                    <div className="entry-chips entry-chips--wrap">
+                      <button
+                        type="button"
+                        className={`entry-chip${projectId === null ? ' is-on' : ''}`}
+                        data-project-clear="true"
+                        aria-pressed={projectId === null}
+                        onClick={() => changeProject(null)}
+                      >
+                        不归项目
+                      </button>
+                      {projectOptions.map(project => (
+                        <button
+                          key={project.id}
+                          type="button"
+                          className={`entry-chip${projectId === project.id ? ' is-on' : ''}`}
+                          data-project-id={project.id}
+                          aria-pressed={projectId === project.id}
+                          onClick={() => changeProject(project.id)}
+                        >
+                          {project.name}
+                          {archivedProject?.id === project.id ? '（已归档）' : ''}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {row.projectArchived && row.projectName !== null && projectId === row.projectId && (
+                    <p className="add-note">
+                      当前项目「{row.projectName}」已归档；不重新选择会保留原项目。
+                    </p>
+                  )}
+                </>
+              )}
+
+              {row.direction === 'expense' && (
+                <div className="txn-edit-fixed">
+                  <span className="add-label">固定支出</span>
+                  {/* A plain on/off control on the right: no status word, no
+                      paragraph underneath. The thumb's position says the state. */}
+                  <button
+                    className="fixed-toggle"
+                    type="button"
+                    role="switch"
+                    data-fixed-toggle
+                    aria-checked={isFixed}
+                    aria-label="固定支出"
+                    disabled={busy || fixedBusy || db === null}
+                    onClick={() => {
+                      void changeFixed(!isFixed);
+                    }}
+                  >
+                    <span
+                      className={isFixed ? 'fixed-toggle__track is-on' : 'fixed-toggle__track'}
+                      aria-hidden="true"
+                    >
+                      <span className="fixed-toggle__thumb" />
+                    </span>
+                  </button>
+                </div>
+              )}
+
+            </>
           )}
 
           <div className="txn-edit-note">
@@ -673,7 +711,7 @@ export default function TxnEditScreen() {
         </form>
       )}
 
-      {keypadOpen && (
+      {keypadOpen && (row?.direction === 'expense' || row?.direction === 'income') && (
         <Sheet variant="keypad" ariaLabel="金额键盘" onClose={() => setKeypadOpen(false)}>
           <div className="txn-keypad-head">
             <span>金额</span>

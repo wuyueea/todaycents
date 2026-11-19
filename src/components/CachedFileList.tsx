@@ -1,4 +1,4 @@
-import { useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import type { ReactNode } from 'react';
 import type { CachedFile } from '../backup/device';
 import { fileSizeText, formatBackupTime } from '../backup/format';
@@ -8,12 +8,22 @@ export interface CachedFileListProps {
   now: Date;
   busy: boolean;
   onShare(file: CachedFile): void;
+  onRestore?(file: CachedFile): void;
+  highlightedName?: string;
 }
 
 export function CachedFileList({
-  files, now, busy, onShare, title, children,
+  files, now, busy, onShare, onRestore, highlightedName, title, children,
 }: CachedFileListProps & { title: string; children: ReactNode }) {
   const titleId = useId();
+  const highlightedRow = useRef<HTMLLIElement>(null);
+  const highlighted = files.find(file => file.name === highlightedName);
+  const highlightedKey = highlighted?.name;
+  useEffect(() => {
+    const row = highlightedRow.current;
+    row?.scrollIntoView?.({ block: 'nearest' });
+    row?.focus({ preventScroll: true });
+  }, [highlightedKey]);
   if (files.length === 0) return null;
 
   return (
@@ -22,23 +32,46 @@ export function CachedFileList({
       {children}
       <ul className="backup-cache__list">
         {files.map(file => (
-          <li className="backup-cache__row" key={file.uri || file.name}>
+          <li
+            className="backup-cache__row"
+            key={file.uri || file.name}
+            ref={file === highlighted ? highlightedRow : undefined}
+            tabIndex={file === highlighted ? -1 : undefined}
+          >
             <div className="backup-cache__body">
               <div className="backup-cache__name">{file.name}</div>
               <div className="backup-cache__meta">
                 {fileSizeText(file.bytes)} ·{' '}
                 {formatBackupTime(new Date(file.modifiedAt).toISOString(), now)}
               </div>
+              {file.unavailableReason !== undefined && (
+                <div className="backup-cache__problem">无法使用 · {file.unavailableReason}</div>
+              )}
             </div>
-            <button
-              className="backup-cache__share"
-              type="button"
-              aria-label={`另存 ${file.name}`}
-              onClick={() => onShare(file)}
-              disabled={busy}
-            >
-              另存
-            </button>
+            {file.unavailableReason === undefined && (
+              <>
+                {onRestore !== undefined && (
+                  <button
+                    className="backup-cache__restore"
+                    type="button"
+                    aria-label={`恢复 ${file.name}`}
+                    onClick={() => onRestore(file)}
+                    disabled={busy}
+                  >
+                    恢复
+                  </button>
+                )}
+                <button
+                  className="backup-cache__share"
+                  type="button"
+                  aria-label={`另存 ${file.name}`}
+                  onClick={() => onShare(file)}
+                  disabled={busy}
+                >
+                  另存
+                </button>
+              </>
+            )}
           </li>
         ))}
       </ul>

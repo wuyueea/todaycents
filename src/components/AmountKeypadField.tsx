@@ -13,9 +13,11 @@ export interface AmountKeypadFieldProps {
   value: string;
   /** Receives the next raw draft. */
   onChange: (next: string) => void;
-  /** Text shown before anything is typed; also used as the accessible suffix. */
   label?: string;
+  /** Text shown before anything is typed; also used as the accessible suffix. */
   placeholder?: string;
+  /** Empty value displayed in the keypad. */
+  keypadPlaceholder?: string;
   invalid?: boolean;
   disabled?: boolean;
 }
@@ -34,6 +36,7 @@ export function AmountKeypadField({
   onChange,
   label = '金额',
   placeholder = '0.00',
+  keypadPlaceholder = '0.00',
   invalid = false,
   disabled = false,
 }: AmountKeypadFieldProps) {
@@ -68,7 +71,7 @@ export function AmountKeypadField({
           <div className="txn-keypad-head">
             <span>{label}</span>
             <strong aria-live="polite">
-              {value.trim() === '' ? '0.00' : formatAmountDraft(value)}
+              {display === '' ? keypadPlaceholder : display}
             </strong>
           </div>
           <AmountKeypad

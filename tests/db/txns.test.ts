@@ -268,6 +268,33 @@ describe('updateTxn', () => {
     });
   });
 
+  it('allows a note edit while protecting the account, amount and category of an adjustment', async () => {
+    const { db, card, food } = await fixture();
+    const bank = await createAccount(db, { name: '银行卡', type: 'bank' });
+    const id = await recordAdjustment(db, {
+      date: '2026-10-02',
+      accountId: card,
+      deltaCents: -6500,
+      note: '对账差额',
+    });
+
+    for (const patch of [{ accountId: bank }, { amountCents: 1200 }, { categoryId: food }]) {
+      await expect(updateTxn(db, id, { ...patch, note: '不能部分保存' })).rejects.toThrow(/只能编辑备注/);
+    }
+    expect((await listTxnsByMonth(db, '2026-10')).find(row => row.id === id)?.note).toBe('对账差额');
+
+    await updateTxn(db, id, { note: '已核对' });
+    expect((await listTxnsByMonth(db, '2026-10')).find(row => row.id === id)).toMatchObject({
+      occurredDate: '2026-10-02',
+      accountId: card,
+      amountCents: -6500,
+      categoryId: null,
+      note: '已核对',
+    });
+    expect(await accountBalance(db, card)).toBe(-6500);
+    expect(await accountBalance(db, bank)).toBe(0);
+  });
+
   it('rejects bad amounts, date moves and rows that are gone', async () => {
     const { db, card, food } = await fixture();
     const id = await createExpense(db, {

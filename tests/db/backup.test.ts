@@ -128,6 +128,7 @@ async function seedRichLedger(db: Db): Promise<{ expenseId: string }> {
     '2026-10-23T12:00:00+08:00',
   ]);
   await db.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', ['备注', '含中文与 emoji 🧾']);
+  await db.run('INSERT INTO app_meta (key, value) VALUES (?, ?)', [null, '旧数据库允许空键']);
 
   return { expenseId };
 }
@@ -147,6 +148,11 @@ describe('backup codec', () => {
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/
     );
     expect(Object.keys(file.counts)).toEqual([...TABLES]);
+    expect(file.tables.app_meta).toEqual(expect.arrayContaining([
+      { key: '备注', value: '含中文与 emoji 🧾' },
+      { key: null, value: '旧数据库允许空键' },
+    ]));
+    expect(file.counts.app_meta).toBe(2);
     // Money is copied as integer cents; nothing is formatted or converted.
     expect(file.tables.txn.find(row => row.id === expenseId)?.amount_cents).toBe(-1250);
 
@@ -154,7 +160,7 @@ describe('backup codec', () => {
     await restoreBackup(db, parsed);
 
     expect(await snapshot(db)).toEqual(before);
-    expect(await tableCounts(db)).toEqual(file.counts);
+    expect(await tableCounts(db)).toEqual({ ...file.counts, app_meta: file.counts.app_meta + 1 });
   });
 
   it('replaces every table instead of merging the file into the current data', async () => {

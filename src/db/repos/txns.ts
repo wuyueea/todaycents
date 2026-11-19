@@ -134,21 +134,6 @@ function assertPositiveCents(amountCents: number): void {
   }
 }
 
-/**
- * The row's sign, derived from its direction. Expenses are negative and income
- * positive; adjustments keep the side of zero they already sit on, so an edit
- * changes the size of the movement, never its sense.
- */
-function signedAmount(
-  amountCents: number,
-  direction: Direction,
-  previousAmountCents: number
-): number {
-  if (direction === 'expense') return -amountCents;
-  if (direction === 'income') return amountCents;
-  return previousAmountCents < 0 ? -amountCents : amountCents;
-}
-
 const INSERT_TXN = `INSERT INTO txn
    (id, occurred_date, account_id, amount_cents, direction, category_id, note,
     slot_key, is_fixed_cost, transfer_group_id, deleted_at, created_at)
@@ -286,7 +271,8 @@ export async function recordAdjustment(
 }
 
 /**
- * Edits amount, category, account and note of one live row.
+ * Edits amount, category, account and note of one live expense or income.
+ * An adjustment retains the account and delta recorded by reconciliation.
  *
  * The direction (and therefore the sign) belongs to the row, not the caller:
  * an edited expense stays negative and an edited income stays positive. A
@@ -306,8 +292,8 @@ export async function updateTxn(db: Db, id: string, patch: UpdateTxnPatch): Prom
     assertPositiveCents(patch.amountCents);
   }
 
-  const existing = await db.get<{ amount_cents: number; direction: Direction }>(
-    'SELECT amount_cents, direction FROM txn WHERE id = ? AND deleted_at IS NULL',
+  const existing = await db.get<{ direction: Direction }>(
+    'SELECT direction FROM txn WHERE id = ? AND deleted_at IS NULL',
     [id]
   );
   if (existing === undefined) {
@@ -316,13 +302,19 @@ export async function updateTxn(db: Db, id: string, patch: UpdateTxnPatch): Prom
   if (existing.direction === 'transfer') {
     throw new Error('updateTxn cannot edit a transfer leg: the two legs must stay a matched pair');
   }
+  if (
+    existing.direction === 'adjust' &&
+    (patch.amountCents !== undefined || patch.categoryId !== undefined || patch.accountId !== undefined)
+  ) {
+    throw new Error('对账调整只能编辑备注。要修正余额，请在原账户重新对账。');
+  }
 
   const sets: string[] = [];
   const params: DbParam[] = [];
 
   if (patch.amountCents !== undefined) {
     sets.push('amount_cents = ?');
-    params.push(signedAmount(patch.amountCents, existing.direction, existing.amount_cents));
+    params.push(existing.direction === 'expense' ? -patch.amountCents : patch.amountCents);
   }
   if (patch.categoryId !== undefined) {
     sets.push('category_id = ?');

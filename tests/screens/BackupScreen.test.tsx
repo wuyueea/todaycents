@@ -55,6 +55,8 @@ const confirmProps = {
   schemaVersion: 1,
   fileRows: 231,
   fileBytes: 46 * 1024,
+  fileDateRange: { start: '2025-11-10', end: '2026-10-20' },
+  fileActiveAccounts: 2,
   localRows: 12,
   // Build the fixture in local time: the sheet renders local time, so a fixed
   // +08:00 string changes to 14:14 when CI runs in UTC.
@@ -68,11 +70,11 @@ const confirmProps = {
 
 describe('BackupScreen', () => {
   it('leads with the last backup and the two actions', () => {
-    store.data = { meta: META, localRows: 231 };
+    store.data = { meta: META, restoreMeta: null, localRows: 231 };
     const html = renderScreen();
 
     expect(html).toContain('<h1>备份与恢复</h1>');
-    expect(html).toContain('上次备份');
+    expect(html).toContain('最近一次确认备份');
     expect(html).toContain('昨天 22:14');
     expect(html).toContain('231 笔流水 · 46 KB');
     expect(html).toContain('导出到文件');
@@ -82,16 +84,17 @@ describe('BackupScreen', () => {
   });
 
   it('still says what to do when no backup exists yet', () => {
-    store.data = { meta: null, localRows: 0 };
+    store.data = { meta: null, restoreMeta: null, localRows: 0 };
     const html = renderScreen();
 
-    expect(html).toContain('还没有备份');
+    expect(html).toContain('还没有确认保存的备份');
+    expect(html).not.toContain('最近一次恢复');
     expect(html).not.toContain('笔流水 ·');
     expect(html).toContain('导出到文件');
   });
 
   it('has a hidden file picker that accepts the ledger, json and text', () => {
-    store.data = { meta: null, localRows: 0 };
+    store.data = { meta: null, restoreMeta: null, localRows: 0 };
     const html = renderScreen();
 
     expect(html).toMatch(/<input[^>]*type="file"/);
@@ -102,7 +105,7 @@ describe('BackupScreen', () => {
   });
 
   it('drops the offline paragraph but still links back to settings', () => {
-    store.data = { meta: META, localRows: 231 };
+    store.data = { meta: META, restoreMeta: null, localRows: 231 };
     const html = renderScreen();
 
     // The promise used to be a paragraph; the buttons are self-explanatory now.
@@ -121,6 +124,8 @@ describe('ImportConfirmSheet', () => {
     expect(html).toContain('版本 1');
     expect(html).toContain('记账本-20261020-2214.ledger');
     expect(html).toContain('231 笔 · 46 KB');
+    expect(html).toContain('流水日期 · 2025-11-10 至 2026-10-20');
+    expect(html).toContain('未归档账户 · 2 个');
     expect(html).toContain('10月20日 22:14');
     expect(html).toContain('本机现在有 12 笔');
     expect(html).toContain('会整体替换');
@@ -140,6 +145,13 @@ describe('ImportConfirmSheet', () => {
     expect(html).toContain('请先到「设置 › 存储」允许访问');
     expect(html).not.toContain('这一份会存到');
   });
+
+  it('shows the empty date range and zero active accounts without dropping either label', () => {
+    const html = render(<ImportConfirmSheet {...confirmProps} fileDateRange={null} fileActiveAccounts={0} />);
+
+    expect(html).toContain('流水日期 · 无');
+    expect(html).toContain('未归档账户 · 0 个');
+  });
 });
 
 describe('ExportConfirmSheet', () => {
@@ -158,7 +170,7 @@ describe('ExportConfirmSheet', () => {
     expect(html).toContain('记账本-20261020-2214.ledger');
     expect(html).toContain('46 KB');
     expect(html).toContain('它保存好了吗？');
-    expect(html).toContain('只有确认保存过，才会更新「上次备份」');
+    expect(html).toContain('只有确认保存过，才会更新「最近一次确认备份」');
     expect(html).toContain('应用无法确认目标应用是否已保存');
     expect(html).toContain('已保存');
     expect(html).toContain('没有保存');
@@ -180,14 +192,15 @@ describe('CachedBackupList', () => {
 
   it('names each cache file, its size and time, with a way out', () => {
     const html = render(
-      <CachedBackupList files={files} now={NOW} busy={false} onShare={() => {}} />
+      <CachedBackupList files={files} now={NOW} busy={false} onShare={() => {}} onRestore={() => {}} />
     );
 
     expect(html).toContain('应用缓存中的备份');
     expect(html).toContain('系统可能清理');
     expect(html).toContain('自动副本保留最近 10 份');
     expect(html).toContain('普通导出不会自动清理');
-    expect(html).toContain('另存只是把文件救出去，不会更新「上次备份」');
+    expect(html).toContain('另存不会更新「最近一次确认备份」');
+    expect(html).toContain('aria-label="恢复 记账本-20261023-1255.ledger"');
     expect(html).toContain('记账本-20261023-1255.ledger');
     expect(html).toContain('46 KB');
     expect(html).toContain('今天 12:55');

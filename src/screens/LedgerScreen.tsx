@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
 import { AmountText, formatCentsDisplay } from '../components/AmountText';
 import { TxnDeleteRow } from '../components/TxnDelete';
+import { TxnEditLink, useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
+import type { TxnEditOrigin } from '../components/TxnEditNavigation';
 import { ProjectMark, UncategorisedLabel, isUncategorised } from '../components/TxnMarks';
 import { countMovements, orderTransferLegs } from '../components/txnOrder';
 import { useQuery } from '../store/useDb';
@@ -227,7 +228,7 @@ function ledgerLabel(row: TxnRow): string {
 }
 
 // Both transfer legs share one delete target, and neither opens an editor.
-function LedgerRowView({ row }: { row: TxnRow }) {
+function LedgerRowView({ row, monthKey }: { row: TxnRow; monthKey: string }) {
   const isTransfer = row.direction === 'transfer';
   const meta = isTransfer
     ? `${row.amountCents < 0 ? '转出' : '转入'} · ${row.accountName}${
@@ -282,14 +283,14 @@ function LedgerRowView({ row }: { row: TxnRow }) {
   }
 
   return (
-    <Link
+    <TxnEditLink
       className="ledger-row"
-      to={`/txn/${encodeURIComponent(row.id)}`}
-      data-txn-id={row.id}
-      data-direction={row.direction}
+      txnId={row.id}
+      direction={row.direction}
+      monthKey={monthKey}
     >
       {body}
-    </Link>
+    </TxnEditLink>
   );
 }
 
@@ -350,10 +351,11 @@ function LedgerBars({
   );
 }
 
-export default function LedgerScreen() {
+export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
   const today = todayLocalISO();
   const currentMonthKey = monthKeyOf(today);
-  const [monthKey, setMonthKey] = useState(currentMonthKey);
+  const [monthKey, setMonthKey] = useState(editReturn?.monthKey ?? currentMonthKey);
+  const lastPositionedMonth = useRef(editReturn?.monthKey);
   const query = useQuery<LedgerData>(
     database => loadLedgerData(database, monthKey),
     [monthKey]
@@ -370,8 +372,11 @@ export default function LedgerScreen() {
   const nextMonth = shiftMonthKey(monthKey, 1);
 
   useEffect(() => {
+    if (lastPositionedMonth.current === monthKey) return;
+    lastPositionedMonth.current = monthKey;
     window.scrollTo({ top: 0 });
   }, [monthKey]);
+  useRestoreTxnEditScroll(editReturn, data !== null && !query.loading);
 
   const jumpToDay = (date: string) => {
     const target = document.getElementById(`ledger-day-${date}`);
@@ -454,7 +459,7 @@ export default function LedgerScreen() {
               <ul className="ledger-day__rows">
                 {orderTransferLegs(group.rows).map(row => (
                   <TxnDeleteRow key={row.id} row={row} label={ledgerLabel(row)}>
-                    <LedgerRowView row={row} />
+                    <LedgerRowView row={row} monthKey={monthKey} />
                   </TxnDeleteRow>
                 ))}
               </ul>

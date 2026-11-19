@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { formatCentsDisplay } from '../components/AmountText';
+import { AmountText, formatCentsDisplay } from '../components/AmountText';
 import { AmountKeypadField } from '../components/AmountKeypadField';
 import { useDb, useQuery } from '../store/useDb';
 import {
@@ -100,17 +100,9 @@ export async function archiveAccountWithConfirm(
   return true;
 }
 
-/**
- * Parses the reconciliation field into integer cents.
- *
- * Blank means zero — an empty wallet is a real balance, not a missing value.
- * Everything else goes through parseAmountToCents exactly once, so the literal
- * "0" is rejected with the rest of the non-positive inputs: zero is expressed
- * by leaving the field empty, which keeps one representation of zero.
- */
+/** Parses an explicitly entered balance, including zero, into integer cents. */
 export function parseReconciliationAmount(text: string): number | null {
-  if (text.trim() === '') return 0;
-  return parseAmountToCents(text);
+  return parseAmountToCents(text, { allowZero: true });
 }
 
 /** Everything the 新增账户 form holds, exactly as typed. */
@@ -385,6 +377,14 @@ export default function AccountsScreen() {
   const [status, setStatus] = useState<StatusNote | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const actualBalanceCents = reconciling === null
+    ? null
+    : parseReconciliationAmount(reconciling.amount);
+  const ledgerBalanceCents = reconciling === null ? null : (data?.balances[reconciling.id] ?? null);
+  const estimatedDeltaCents = actualBalanceCents === null || ledgerBalanceCents === null
+    ? null
+    : actualBalanceCents - ledgerBalanceCents;
+
   const changeCreate = (patch: Partial<AccountDraft>, field?: keyof AccountProblems) => {
     setDraft(previous => ({ ...previous, ...patch }));
     if (field !== undefined) {
@@ -498,15 +498,13 @@ export default function AccountsScreen() {
   };
 
   /**
-   * One 对账 submit. The screen only parses what the user typed; the delta and
-   * the write live in reconcileAccountBalance, so no balance arithmetic is
-   * duplicated here.
+   * The preview uses the displayed balance. Reconciliation reads the current
+   * balance again and calculates the committed delta inside its transaction.
    */
   const handleReconcile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (db === null || reconciling === null || busy) return;
 
-    const actualBalanceCents = parseReconciliationAmount(reconciling.amount);
     if (actualBalanceCents === null) {
       setReconcileInvalid(true);
       return;
@@ -822,7 +820,7 @@ export default function AccountsScreen() {
                 <form className="accounts-reconcile" onSubmit={handleReconcile}>
                   <div className="add-field">
                     <label className="add-label" htmlFor={`reconcile-${account.id}`}>
-                      这张卡上现在实际有多少钱
+                      实际余额
                     </label>
                     <AmountKeypadField
                       id={`reconcile-${account.id}`}
@@ -833,15 +831,34 @@ export default function AccountsScreen() {
                         setReconcileInvalid(false);
                       }}
                       invalid={reconcileInvalid}
-                      placeholder="0.00"
+                      placeholder="输入实际余额"
+                      keypadPlaceholder="待输入"
                     />
-                    <p className="accounts-hint">留空表示 0；差额会自动记为一笔「调整」，不计入收支。</p>
+                    <p className="accounts-hint">有差额时会生成一笔「调整」，不计入收支。</p>
                     {reconcileInvalid && (
                       <p className="accounts-note accounts-note--error" role="alert">
-                        请输入实际余额：大于 0 的数字，最多两位小数；0 请留空。
+                        {reconciling.amount.trim() === ''
+                          ? '请输入实际余额。'
+                          : '请输入 0 或正数，最多两位小数。'}
                       </p>
                     )}
                   </div>
+                  <dl className="accounts-reconcile__preview" aria-label="对账预览">
+                    <dt>账面余额</dt>
+                    <dd className="num">
+                      {ledgerBalanceCents === null ? '—' : formatCentsDisplay(ledgerBalanceCents)}
+                    </dd>
+                    <dt>实际余额</dt>
+                    <dd className="num">
+                      {actualBalanceCents === null ? '—' : formatCentsDisplay(actualBalanceCents)}
+                    </dd>
+                    <dt>预计差额</dt>
+                    <dd>
+                      {estimatedDeltaCents !== null && Number.isSafeInteger(estimatedDeltaCents)
+                        ? <AmountText cents={estimatedDeltaCents} direction="adjust" />
+                        : '—'}
+                    </dd>
+                  </dl>
                   <div className="accounts-edit__actions">
                     <button className="add-submit" type="submit" disabled={busy}>
                       确认对账
