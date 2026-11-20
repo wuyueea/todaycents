@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef } from 'react';
 import type { MouseEvent, ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { Location } from 'react-router-dom';
-import { isMonthKey } from '../domain/date';
+import { assertDateISO, isMonthKey } from '../domain/date';
 import type { Direction } from '../domain/types';
 
 export interface TxnEditOrigin {
@@ -11,9 +11,14 @@ export interface TxnEditOrigin {
   search: string;
   hash: string;
   monthKey?: string;
+  calendarDay?: string;
   txnId: string;
   rowTop: number;
   scrollY: number;
+}
+
+export function projectTransactionsParent(path: string): string | null {
+  return path.match(/^(\/settings\/projects\/[^/?#]+)\/transactions\/?$/)?.[1] ?? null;
 }
 
 export function readTxnEditOrigin(state: unknown): TxnEditOrigin | null {
@@ -21,8 +26,16 @@ export function readTxnEditOrigin(state: unknown): TxnEditOrigin | null {
   if (!origin || typeof origin.pathname !== 'string') return null;
   const ledger = /^\/ledger\/?$/.test(origin.pathname);
   const project = /^\/settings\/projects\/[^/?#]+\/?$/.test(origin.pathname);
-  if (origin.pathname !== '/' && !ledger && !project) return null;
+  if (origin.pathname !== '/' && !ledger && !project && projectTransactionsParent(origin.pathname) === null) return null;
   if (ledger && (typeof origin.monthKey !== 'string' || !isMonthKey(origin.monthKey))) return null;
+  if (ledger && origin.calendarDay !== undefined) {
+    if (typeof origin.calendarDay !== 'string' || origin.calendarDay.slice(0, 7) !== origin.monthKey) return null;
+    try {
+      assertDateISO(origin.calendarDay);
+    } catch {
+      return null;
+    }
+  }
   if (typeof origin.locationKey !== 'string' || typeof origin.txnId !== 'string' ||
       typeof origin.search !== 'string' || typeof origin.hash !== 'string' ||
       !Number.isFinite(origin.rowTop) || !Number.isFinite(origin.scrollY)) return null;
@@ -34,10 +47,11 @@ export function isPlainLinkClick(event: MouseEvent<HTMLAnchorElement>): boolean 
     !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;
 }
 
-export function TxnEditLink({ txnId, direction, monthKey, className, children }: {
+export function TxnEditLink({ txnId, direction, monthKey, calendarDay, className, children }: {
   txnId: string;
   direction?: Direction;
   monthKey?: string;
+  calendarDay?: string;
   className: string;
   children: ReactNode;
 }) {
@@ -60,6 +74,7 @@ export function TxnEditLink({ txnId, direction, monthKey, className, children }:
           search: location.search,
           hash: location.hash,
           monthKey,
+          calendarDay,
           txnId,
           rowTop: event.currentTarget.getBoundingClientRect().top,
           scrollY: window.scrollY,

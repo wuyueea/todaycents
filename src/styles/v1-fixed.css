@@ -168,9 +168,6 @@
 }
 
 .fixed-screen--v1 .fixed-total {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
   gap: 10px;
   margin: 10px 0;
   padding: 14px;
@@ -251,6 +248,7 @@
   font-variant-numeric: tabular-nums;
 }
 
+.fixed-screen--v1 .fixed-row__estimate,
 .fixed-screen--v1 .fixed-row__next {
   color: var(--v1-t3);
   font-size: 11.5px;

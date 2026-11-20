@@ -14,13 +14,14 @@ import type { ResetCounts } from '../db/reset';
 export interface BackupMeta {
   /** ISO-8601 instant, stored verbatim and formatted in local time. */
   at: string;
-  /** Transaction rows in that backup (the plan's "笔流水"). */
+  /** Transaction rows in that backup, including both transfer legs and soft deletions. */
   rows: number;
   /** Size of the serialised JSON, in bytes. */
   bytes: number;
 }
 
 export const LAST_BACKUP_LABEL = '最近一次确认备份';
+export const TXN_ROW_COUNT_NOTE = '每笔转账的转出和转入各计 1 行，已删除的流水也计入。';
 const NO_CONFIRMED_BACKUP = '还没有确认保存的备份';
 
 const UNTOUCHED = '本机的账一笔没动。';
@@ -116,14 +117,16 @@ export function settingsBackupLine(meta: BackupMeta | null, now: Date): string {
   return meta === null ? NO_CONFIRMED_BACKUP : `${LAST_BACKUP_LABEL} · ${formatBackupTime(meta.at, now)}`;
 }
 
-/** "231 笔流水 · 46 KB", under 最近一次确认备份. */
-export function backupMetaLine(meta: BackupMeta): string {
-  return `${meta.rows} 笔流水 · ${fileSizeText(meta.bytes)}`;
+function txnRowsText(rows: number): string {
+  return `${rows} 行流水记录`;
 }
 
-/** "231 笔 · 46 KB", for the file card in the import sheet. */
+export function backupMetaLine(meta: BackupMeta): string {
+  return backupFileMeta(meta.rows, meta.bytes);
+}
+
 export function backupFileMeta(rows: number, bytes: number): string {
-  return `${rows} 笔 · ${fileSizeText(bytes)}`;
+  return `${txnRowsText(rows)} · ${fileSizeText(bytes)}`;
 }
 
 /**
@@ -193,7 +196,7 @@ export function importDoneToast(result: {
   beforeDestination?: CopyLocation;
   beforeFileName?: string;
 }): string {
-  const line = `已导入「${result.fileName}」 · ${result.rows} 笔`;
+  const line = `已导入「${result.fileName}」 · ${txnRowsText(result.rows)}`;
   const cleared = result.clearedProjectRefs ?? 0;
   const imported = cleared > 0 ? `${line}；${cleared} 笔流水的项目在文件里找不到，已清空` : line;
   const destination = result.beforeDestination;
@@ -211,7 +214,7 @@ export function importDoneToast(result: {
  */
 export function importSummary(result: { fileRows: number; localRows: number }): string {
   return (
-    `本机现在有 ${result.localRows} 笔，文件里有 ${result.fileRows} 笔。` +
+    `本机现在有 ${txnRowsText(result.localRows)}，备份文件有 ${txnRowsText(result.fileRows)}。` +
     '导入后会整体替换本机的账——当前的记录不保留，也不能撤销。'
   );
 }
@@ -250,7 +253,7 @@ export function importFailureCopy(error: unknown): ImportFailureCopy {
  */
 export function resetSummary(counts: ResetCounts): string {
   return (
-    `将删除 ${counts.txn} 笔流水、${counts.account} 个账户、${counts.category} 个分类、` +
+    `将删除 ${txnRowsText(counts.txn)}、${counts.account} 个账户、${counts.category} 个分类、` +
     `${counts.tag} 个标签、${counts.project} 个项目。`
   );
 }

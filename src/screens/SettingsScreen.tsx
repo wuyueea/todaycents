@@ -6,6 +6,7 @@ import {
   resetDoneToast,
   resetFailureText,
   resetSummary,
+  TXN_ROW_COUNT_NOTE,
 } from '../backup/format';
 import type { CopyLocation } from '../backup/format';
 import { resetWithBackup } from '../backup/flow';
@@ -125,6 +126,7 @@ export function ResetConfirmSheet({
       canClose={() => !busy}
     >
       <p className="sheet__text">{resetSummary(counts)}</p>
+      <p className="sheet__note">{TXN_ROW_COUNT_NOTE}</p>
       <p className="sheet__note">
         清除后只留下 3 个账户和 12 个分类，其余记录都不保留，也不能撤销。
       </p>

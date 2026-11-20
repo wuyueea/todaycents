@@ -122,6 +122,7 @@ function renderYear(data: ReportsData | null = yearData()): string {
         onModeChange={() => {}}
         onMonthChange={() => {}}
         onYearChange={() => {}}
+        onCategorySelect={() => {}}
       />
     </MemoryRouter>
   ).replace(/<!-- -->/g, '');

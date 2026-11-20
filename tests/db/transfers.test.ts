@@ -1,7 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
-import { createAccount, accountBalance } from '../../src/db/repos/accounts';
-import { createTransfer, deleteTransfer, monthExpenseTotal } from '../../src/db/repos/transfers';
+import { createAccount, accountBalance, archiveAccount, allBalances } from '../../src/db/repos/accounts';
+import {
+  createTransfer, deleteTransfer, loadTransferEditData, monthExpenseTotal,
+  transferBalanceChanges, updateTransfer,
+} from '../../src/db/repos/transfers';
 
 describe('transfers', () => {
   it('moves balance without counting as expense', async () => {
@@ -52,6 +55,95 @@ const selectLegs = (db: Awaited<ReturnType<typeof createTestDb>>, groupId: strin
      FROM txn WHERE transfer_group_id = ? ORDER BY amount_cents`,
     [groupId]
   );
+
+async function transferEditFixture() {
+  const db = await createTestDb();
+  const from = await createAccount(db, { name: '银行卡', type: 'bank', initialBalanceCents: 100000 });
+  const to = await createAccount(db, { name: '饭卡', type: 'prepaid', initialBalanceCents: 2500 });
+  const wallet = await createAccount(db, { name: '钱包', type: 'ewallet', initialBalanceCents: 20000 });
+  const cash = await createAccount(db, { name: '现金', type: 'cash', initialBalanceCents: 50000 });
+  const groupId = await createTransfer(db, {
+    date: '2026-10-05', fromAccountId: from, toAccountId: to, amountCents: 60000, note: '旧备注',
+  });
+  const original = (await loadTransferEditData(db, groupId))!;
+  return { db, groupId, from, to, wallet, cash, original };
+}
+
+describe('editing a transfer as a pair', () => {
+  it('previews up to four affected accounts and updates the original rows together', async () => {
+    const { db, groupId, from, to, wallet, cash, original } = await transferEditFixture();
+    const legs = await selectLegs(db, groupId);
+    const next = { amountCents: 3000, fromAccountId: wallet, toAccountId: cash, note: '新备注' };
+    const preview = transferBalanceChanges(original.pair, next, original.balances);
+    expect(preview).toEqual([
+      { accountId: from, beforeCents: 40000, afterCents: 100000 },
+      { accountId: to, beforeCents: 62500, afterCents: 2500 },
+      { accountId: wallet, beforeCents: 20000, afterCents: 17000 },
+      { accountId: cash, beforeCents: 50000, afterCents: 53000 },
+    ]);
+    await updateTransfer(db, original.pair, next, original.balances);
+    expect(await selectLegs(db, groupId)).toEqual([
+      { ...legs[0], amount_cents: -3000, account_id: wallet, note: '新备注' },
+      { ...legs[1], amount_cents: 3000, account_id: cash, note: '新备注' },
+    ]);
+    expect(await allBalances(db)).toEqual({ [from]: 100000, [to]: 2500, [wallet]: 17000, [cash]: 53000 });
+    expect(await monthExpenseTotal(db, '2026-10')).toBe(0);
+  });
+
+  it('keeps an original archived account and refuses selecting another archived account', async () => {
+    const { db, groupId, from, wallet } = await transferEditFixture();
+    await archiveAccount(db, from);
+    await archiveAccount(db, wallet);
+    const original = (await loadTransferEditData(db, groupId))!;
+    await expect(updateTransfer(db, original.pair, { ...original.pair, fromAccountId: wallet }, original.balances))
+      .rejects.toThrow('所选账户不可用');
+    const next = { ...original.pair, note: '保留原归档账户' };
+    expect(transferBalanceChanges(original.pair, next, original.balances)).toEqual([]);
+    await updateTransfer(db, original.pair, next, original.balances);
+    const saved = (await loadTransferEditData(db, groupId))!;
+    expect(saved.pair).toEqual(next);
+    expect(saved.balances).toEqual(original.balances);
+  });
+
+  it('rejects stale transfer details or balances used by the preview', async () => {
+    const { db, groupId, from, cash, original } = await transferEditFixture();
+    const next = { ...original.pair, note: '其他编辑' };
+    await updateTransfer(db, original.pair, next, original.balances);
+    await expect(updateTransfer(db, original.pair, { ...next, note: '原草稿' }, original.balances))
+      .rejects.toThrow('转账已变化');
+    const refreshed = (await loadTransferEditData(db, groupId))!;
+    await createTransfer(db, { date: '2026-10-05', fromAccountId: from, toAccountId: cash, amountCents: 500 });
+    await expect(updateTransfer(db, refreshed.pair, { ...next, amountCents: 3000 }, refreshed.balances))
+      .rejects.toThrow('账户余额已变化');
+    expect((await loadTransferEditData(db, groupId))!.pair).toEqual(next);
+  });
+
+  it('rolls back both rows if a failed update would leave only one changed', async () => {
+    const { db, groupId, original } = await transferEditFixture();
+    const legs = await selectLegs(db, groupId);
+    await db.exec(`CREATE TRIGGER skip_incoming_leg BEFORE UPDATE ON txn WHEN OLD.amount_cents > 0
+      BEGIN SELECT RAISE(IGNORE); END;`);
+    const next = { ...original.pair, amountCents: 700, note: '不能只改一条' };
+    await expect(updateTransfer(db, original.pair, next, original.balances)).rejects.toThrow('未能完整保存');
+    expect(await selectLegs(db, groupId)).toEqual(legs);
+    expect(await allBalances(db)).toEqual(original.balances);
+  });
+
+  it.each([
+    "deleted_at = '2026-10-06T00:00:00Z'",
+    "occurred_date = '2026-10-06'",
+    'amount_cents = amount_cents + 1',
+    "note = '另一条独立备注'",
+  ])('blocks editing a structurally invalid group (%s)', async corruption => {
+    const { db, groupId, original } = await transferEditFixture();
+    await db.run(`UPDATE txn SET ${corruption} WHERE id = ?`, [original.pair.toTxnId]);
+    const legs = await selectLegs(db, groupId);
+    expect(await loadTransferEditData(db, groupId)).toBeNull();
+    await expect(updateTransfer(db, original.pair, { ...original.pair, note: '尝试修改' }, original.balances))
+      .rejects.toThrow('转账记录不完整');
+    expect(await selectLegs(db, groupId)).toEqual(legs);
+  });
+});
 
 describe('transfer legs', () => {
   it('writes one negative and one positive leg sharing group, date and null category', async () => {

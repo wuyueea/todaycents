@@ -5,6 +5,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.webkit.WebView;
 
 import androidx.activity.OnBackPressedCallback;
 import androidx.activity.result.ActivityResult;
@@ -21,6 +22,7 @@ import java.util.function.Consumer;
 public class MainActivity extends BridgeActivity {
 
     private final Handler accessHandler = new Handler(Looper.getMainLooper());
+    private final ActivityForeground foreground = new ActivityForeground();
     private final String accessKeyPrefix = "todaycents-storage-" + UUID.randomUUID();
     private volatile boolean storageClosing;
     private final StorageAccessRequests<ActivityResult> accessRequests = new StorageAccessRequests<>(
@@ -54,6 +56,34 @@ public class MainActivity extends BridgeActivity {
                 askPageAboutBack();
             }
         });
+    }
+
+    @Override
+    protected void load() {
+        // Install the read-only snapshot before Capacitor loads the local page.
+        WebView webView = findViewById(com.getcapacitor.android.R.id.webview);
+        webView.addJavascriptInterface(foreground, "TodayCentsForeground");
+        super.load();
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        foreground.resume();
+        Bridge bridge = getBridge();
+        if (bridge != null) {
+            bridge.eval("document.dispatchEvent(new Event('todaycents:resume'))", null);
+        }
+    }
+
+    @Override
+    public void onPause() {
+        foreground.pause();
+        Bridge bridge = getBridge();
+        if (bridge != null) {
+            bridge.eval("document.dispatchEvent(new Event('todaycents:pause'))", null);
+        }
+        super.onPause();
     }
 
     /**

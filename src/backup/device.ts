@@ -187,14 +187,16 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
   async function writeToFolder(
     fileName: string,
     bytes: Uint8Array
-  ): Promise<{ folderName: string; fileName: string } | null> {
+  ): Promise<{ folderName: string; fileName: string; folderId?: string } | null> {
     const folder = await deps.folder.current();
     if (folder === null) return null;
 
     const base64 = bytesToBase64(bytes);
     try {
       const result = await deps.folder.write(fileName, base64);
-      return result.saved ? { folderName: result.folderName ?? folder.name, fileName: result.name } : null;
+      return result.saved
+        ? { folderName: result.folderName ?? folder.name, fileName: result.name, folderId: result.folderId }
+        : null;
     } catch {
       // A folder can turn unwritable between current() and write(): permission
       // revoked, directory deleted, read-only, or full. The native writer never
@@ -216,11 +218,11 @@ export function createDeviceWriters(deps: DeviceWriterDeps): DeviceWriters {
         }
 
         const folder = await writeToFolder(fileName, new TextEncoder().encode(text));
-        if (folder !== null) return { kind: 'folder', folderName: folder.folderName, fileName: folder.fileName };
+        if (folder !== null) return { kind: 'folder', ...folder };
 
         const cached = await deps.writeCacheFile(fileName, text);
         const outcome = await deps.shareCacheFile(cached.fileName, cached.uri);
-        return outcome === 'canceled' ? { kind: 'canceled' } : { kind: 'share' };
+        return { kind: outcome === 'canceled' ? 'canceled' : 'share', fileName: cached.fileName };
       },
 
       async writeCopy(fileName, text): Promise<CopyDestination> {

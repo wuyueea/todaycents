@@ -12,7 +12,7 @@
  * on a dock tab, the first press only warns and the second one closes.
  */
 
-import { readTxnEditOrigin } from './TxnEditNavigation';
+import { projectTransactionsParent, readTxnEditOrigin } from './TxnEditNavigation';
 
 declare global {
   interface Window {
@@ -117,7 +117,7 @@ export function backDestination(pathname: string, state: unknown): BackDestinati
 
   if (path === '/settings/projects') return { kind: 'path', path: '/settings' };
   if (path.startsWith('/settings/projects/')) {
-    return { kind: 'path', path: '/settings/projects' };
+    return { kind: 'path', path: projectTransactionsParent(path) ?? '/settings/projects' };
   }
   if (path.startsWith('/settings/')) return { kind: 'path', path: '/settings' };
 

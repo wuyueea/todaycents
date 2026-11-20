@@ -143,6 +143,10 @@ describe('back destinations', () => {
       kind: 'path',
       path: '/settings/projects',
     });
+    expect(backDestination('/settings/projects/project%2Fa/transactions/', null)).toEqual({
+      kind: 'path',
+      path: '/settings/projects/project%2Fa',
+    });
   });
 
   it('takes 编辑流水 back to 流水', () => {

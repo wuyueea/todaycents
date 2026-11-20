@@ -15,12 +15,14 @@ const mocks = vi.hoisted(() => ({
   write: vi.fn(),
   list: vi.fn(),
   share: vi.fn(),
+  openFolder: vi.fn(),
 }));
 vi.mock('../../src/db', () => ({ getDb: () => Promise.resolve(mocks.db) }));
 vi.mock('../../src/backup/device', () => ({
   deviceBinaryFileWriter: { writeForShare: mocks.write },
   cachedReports: { list: mocks.list, share: mocks.share },
 }));
+vi.mock('../../src/storage/folder', () => ({ deviceFolder: { open: mocks.openFolder } }));
 
 const name = '记账本-2026 (2).xlsx';
 const file = { name, uri: `file:///cache/${name}`, bytes: 128, modifiedAt: 1000 };
@@ -54,6 +56,7 @@ async function click(text: string) {
 
 const status = () => document.querySelector('.reports-note[role="status"]');
 const alert = () => document.querySelector('.reports-note[role="alert"]');
+const exportResult = () => document.querySelector('[aria-label="导出结果"]');
 
 beforeEach(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -64,6 +67,7 @@ beforeEach(async () => {
   mocks.write.mockReset().mockResolvedValue({ kind: 'canceled', fileName: name });
   mocks.list.mockReset().mockResolvedValue([]);
   mocks.share.mockReset().mockResolvedValue('shared');
+  mocks.openFolder.mockReset().mockResolvedValue(true);
 });
 
 afterEach(async () => {
@@ -73,18 +77,39 @@ afterEach(async () => {
 });
 
 describe('report cache and share feedback', () => {
+  it('opens the folder of the report and replaces the result on the next export', async () => {
+    mocks.write.mockResolvedValueOnce({
+      kind: 'folder', folderName: '合成报表目录', folderId: 'report-tree', fileName: name,
+    });
+    await mount();
+    await click('导出这个月为表格（.xlsx）');
+    await waitFor(() => button('打开文件夹') !== undefined);
+    expect(exportResult()?.textContent).toContain('合成报表目录');
+    expect(exportResult()?.textContent).toContain(name);
+    await click('打开文件夹');
+    expect(mocks.openFolder).toHaveBeenCalledExactlyOnceWith('report-tree');
+
+    await click('导出这个月为表格（.xlsx）');
+    await waitFor(() => exportResult()?.textContent?.includes('已取消分享') === true);
+    expect(button('打开文件夹')).toBeUndefined();
+    expect(exportResult()?.textContent).not.toContain('合成报表目录');
+  });
+
   it('shows canceled export as a status and offers the actual cached report for reshare', async () => {
     mocks.list.mockResolvedValueOnce([]).mockResolvedValue([file]);
     await mount();
     expect(button('另存')).toBeUndefined();
     await click('导出这个月为表格（.xlsx）');
     await waitFor(() => button('另存') !== undefined);
-    expect(status()?.textContent).toContain(`已取消分享「${name}」`);
+    expect(exportResult()?.querySelector('[role="status"]')?.textContent).toContain(`已取消分享「${name}」`);
     expect(alert()).toBeNull();
     expect(button('另存')?.getAttribute('aria-label')).toBe(`另存 ${name}`);
+    await click('查看缓存文件');
+    expect(document.activeElement?.querySelector('.backup-cache__name')?.textContent).toBe(name);
     await click('另存');
     expect(mocks.share).toHaveBeenCalledExactlyOnceWith(name);
     expect(status()?.textContent).toContain('请在目标应用确认是否保存');
+    expect(exportResult()?.textContent).toContain(`已取消分享「${name}」`);
     expect(await readBackupMeta(db)).toEqual(backupMeta);
   });
 

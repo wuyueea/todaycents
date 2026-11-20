@@ -56,11 +56,12 @@ export function useDialogFocus({
     const panel = panelRef.current;
     if (panel === null) return releaseBack;
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const focusable = Array.from(
+    const getFocusable = () => Array.from(
       panel.querySelectorAll<HTMLElement>(
         'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
       )
     ).filter(element => focusableFilterRef.current?.(element) ?? true);
+    const focusable = getFocusable();
     const target =
       initial === 'panel'
         ? panel
@@ -75,9 +76,11 @@ export function useDialogFocus({
         if (canCloseRef.current === undefined || canCloseRef.current()) closeRef.current();
         return;
       }
-      if (event.key !== 'Tab' || focusable.length === 0) return;
-      const firstFocusable = focusable[0]!;
-      const lastFocusable = focusable[focusable.length - 1]!;
+      if (event.key !== 'Tab') return;
+      const current = getFocusable();
+      if (current.length === 0) return;
+      const firstFocusable = current[0]!;
+      const lastFocusable = current[current.length - 1]!;
       if (event.shiftKey && (document.activeElement === firstFocusable || document.activeElement === panel)) {
         event.preventDefault();
         lastFocusable.focus();

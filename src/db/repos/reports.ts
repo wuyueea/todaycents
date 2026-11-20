@@ -12,17 +12,18 @@
  * domain/report.
  */
 import type { Db } from '../driver';
-import { assertDateISO, isMonthKey, monthKeyOf, todayLocalISO } from '../../domain/date';
+import { assertDateISO, isMonthKey, monthKeyOf, monthRange, todayLocalISO } from '../../domain/date';
 import { compareByCentsThenName, integerPercents, top3WithRest } from '../../domain/report';
 import { listAccounts } from './accounts';
 import {
   categoryShares,
+  categorySharesInRange,
+  listCategoryExpensesInRange,
   listTxnsByMonth,
-  mergeCategoryShares,
   monthSummary,
   sumExpensesByAccount,
 } from './txns';
-import type { CategoryShare, CategoryShareRow } from './txns';
+import type { CategoryExpense, CategoryShare } from './txns';
 
 /** One category's share of a period, with its integer percentage. */
 export interface ReportCategory {
@@ -122,25 +123,6 @@ const MONTHLY_EXPENSE = `SELECT substr(t.occurred_date, 1, 7) AS month,
    AND t.occurred_date >= ? AND t.occurred_date <= ?
  GROUP BY month`;
 
-/**
- * The year's category totals.
- *
- * The WHERE clause and first-level grouping key are SHARES_BY_MONTH's, only
- * wider, and the rows go through mergeCategoryShares so a null category and the
- * system 未分类 row still collapse into one bucket. One GROUP BY for the whole
- * year is the difference; 午餐 and 晚餐 still land in 饮食.
- */
-const YEAR_SHARES = `SELECT COALESCE(c.parent_id, t.category_id) AS category_id,
-        COALESCE(p.name, c.name) AS name,
-        SUM(-t.amount_cents) AS cents
- FROM txn t
- JOIN account a ON a.id = t.account_id
- LEFT JOIN category c ON c.id = t.category_id
- LEFT JOIN category p ON p.id = c.parent_id
- WHERE t.deleted_at IS NULL AND t.direction = 'expense'
-   AND t.occurred_date >= ? AND t.occurred_date <= ?
- GROUP BY COALESCE(c.parent_id, t.category_id)`;
-
 interface YearSummaryRow {
   expense_cents: number;
   income_cents: number;
@@ -179,6 +161,22 @@ function currentMonthOf(options: ReportOptions): string {
 /** Inclusive first and last day of a year, compared as text like every range. */
 function yearRange(yearKey: string): { start: string; end: string } {
   return { start: `${yearKey}-01-01`, end: `${yearKey}-12-31` };
+}
+
+/** The itemized spending behind a ranking row for a YYYY-MM month or calendar year. */
+export async function reportCategoryExpenses(
+  db: Db,
+  period: string | number,
+  categoryId: string
+): Promise<CategoryExpense[]> {
+  if (typeof period === 'string') {
+    assertMonthKey(period);
+    const { start, end } = monthRange(period);
+    return listCategoryExpensesInRange(db, start, end, categoryId);
+  }
+  assertYear(period);
+  const { start, end } = yearRange(String(period));
+  return listCategoryExpensesInRange(db, start, end, categoryId);
 }
 
 /**
@@ -329,9 +327,8 @@ export async function monthReport(
  * Everything the year view draws: the year's pie, its twelve bars and the two
  * months at the ends.
  *
- * The pie reuses SHARES_BY_MONTH's filters through YEAR_SHARES and the same
- * mergeCategoryShares rule; the totals reuse SUMMARY_BY_MONTH's direction
- * narrowing. A future month still contributes to the year total if a row was
+ * The pie uses the same expense category query as the month report. A future
+ * month still contributes to the year total if a row was
  * dated there — the money is recorded — but it is excluded from 最贵/最省, and
  * the screen leaves its bar blank like the month view does.
  */
@@ -349,8 +346,7 @@ export async function yearReport(
   const expenseCents = summary?.expense_cents ?? 0;
   const incomeCents = summary?.income_cents ?? 0;
 
-  const shareRows = await db.all<CategoryShareRow>(YEAR_SHARES, [start, end]);
-  const categories = toReportCategories(mergeCategoryShares(shareRows), expenseCents);
+  const categories = toReportCategories(await categorySharesInRange(db, start, end), expenseCents);
   const monthlySeriesPoints = await monthlySeries(db, yearKey, currentMonth);
   const { busiestMonth, quietestMonth } = extremesOf(monthlySeriesPoints);
 

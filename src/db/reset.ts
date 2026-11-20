@@ -59,10 +59,9 @@ const RESET_TABLES = [
  *
  * Every count is the number of rows the wipe will remove. Archived rows count
  * too: archiving hides a row, it does not stop the reset from deleting it, and
- * "会消失" has to mean what happens. txn matches countTxnRows and the backup
- * format's 笔流水 (soft-deleted rows included). category excludes the system
- * 未分类 row: it is the app's own reflow bucket, it is immediately re-created,
- * and it was never the owner's data.
+ * "会消失" has to mean what happens. txn matches the backup format's count
+ * of all transaction rows, including both transfer legs and soft deletions.
+ * category excludes the system 未分类 row, which is recreated.
  */
 export interface ResetCounts {
   txn: number;

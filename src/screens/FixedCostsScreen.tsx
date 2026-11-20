@@ -7,12 +7,11 @@ import {
   detectCandidates,
   dismissCandidate,
   listFixedCosts,
-  monthlyTotalCents,
   unmarkFixed,
 } from '../db/repos/fixedCosts';
-import type { FixedCost, FixedCostCandidate } from '../db/repos/fixedCosts';
+import type { FixedCostCandidate, FixedCostListItem } from '../db/repos/fixedCosts';
 import { formatCentsDisplay } from '../components/AmountText';
-import { formatMonthDay } from '../domain/date';
+import { formatMonthDay, todayLocalISO } from '../domain/date';
 import { useDb, useQuery } from '../store/useDb';
 
 /**
@@ -27,67 +26,50 @@ import { useDb, useQuery } from '../store/useDb';
  * - an empty state that says how much history is missing rather than "暂无".
  *
  * Nothing is booked here. Confirming only flags existing rows; undoing clears
- * the same flags. There is no money arithmetic in this file: the total comes
- * from monthlyTotalCents, and every displayed number is integer cents.
+ * the same flags. Both totals are based on the same list of recorded expenses.
  */
 
 /** One line after a confirm: enough to replace the prompt without a reload. */
 export interface FixedConfirmation {
   hintId: string;
   name: string;
-  nextDate: string;
 }
 
 /** Everything the screen renders from, loaded as one snapshot. */
 export interface FixedCostsData {
   /** Open prompts; detection has just run. */
   candidates: FixedCostCandidate[];
-  /** The confirmed list, already ordered by next date. */
-  items: FixedCost[];
-  /** Sum of every item's monthlyCents, from monthlyTotalCents. */
-  totalCents: number;
+  /** The confirmed list, already ordered by estimated date. */
+  items: FixedCostListItem[];
+  recordedCents: number;
+  expectedCents: number;
+  today: string;
   /** Distinct calendar months holding a live expense, for the empty state. */
   expenseMonthCount: number;
 }
 
-/**
- * §7's fixed-cost footnote, verbatim. The screen's one promise: this list is a
- * promise, not an automatic booking.
- */
-
-/** §7's empty-state caution, verbatim. */
-
 /** What the detector actually compares, in the owner's words. */
 export const FIXED_COST_RULE = '同一个分类、金额接近、间隔约一个月。';
 
-/** The number of months the detector needs before it dares to propose. */
-
-/** §7's candidate title and body, in the two lines the prototype uses. */
-export function candidatePromptCopy(candidate: FixedCostCandidate): {
-  title: string;
-  body: string;
-} {
-  return {
-    title: `${candidate.name} 每月约 ${formatCentsDisplay(candidate.monthlyCents)}`,
-    body: `连续 ${candidate.occurrences} 个月都是这个数，下次 ${formatMonthDay(
-      candidate.nextDate
-    )}。要加进清单吗？`,
-  };
+function estimatedDateText(bill: { lastDate: string; nextDate: string }, today: string): string {
+  return bill.nextDate < today
+    ? `待核对 · 上次实记 ${bill.lastDate}`
+    : `预计下次 ${formatMonthDay(bill.nextDate)}`;
 }
 
-/**
- * Loads the page in the order the states depend on: detection writes the hint
- * rows first, then the list, total and history depth are read from the same
- * database snapshot.
- */
-export async function loadFixedCostsData(db: Db): Promise<FixedCostsData> {
+/** Run detection before reading the confirmed list and its totals. */
+export async function loadFixedCostsData(db: Db, today = todayLocalISO()): Promise<FixedCostsData> {
   const candidates = await detectCandidates(db);
-  const [items, totalCents, expenseMonthCount] = await Promise.all([
-    listFixedCosts(db),
-    monthlyTotalCents(db),
+  const [items, expenseMonthCount] = await Promise.all([
+    listFixedCosts(db, today),
     countExpenseMonths(db),
   ]);
-  return { candidates, items, totalCents, expenseMonthCount };
+  const totals = { recordedCents: 0, expectedCents: 0 };
+  for (const item of items) {
+    totals.recordedCents += item.recordedCents;
+    totals.expectedCents += item.monthlyCents;
+  }
+  return { candidates, items, ...totals, today, expenseMonthCount };
 }
 
 /** Confirms one prompt and returns the line it became. */
@@ -96,7 +78,7 @@ export async function confirmFixedCost(
   candidate: FixedCostCandidate
 ): Promise<FixedConfirmation> {
   const item = await confirmCandidate(db, candidate.id);
-  return { hintId: candidate.id, name: item.name, nextDate: item.nextDate };
+  return { hintId: candidate.id, name: item.name };
 }
 
 /** Undoes one confirm; the prompt is back on the next read. */
@@ -113,6 +95,7 @@ function reasonText(reason: unknown): string {
 
 export interface CandidatePromptProps {
   candidate: FixedCostCandidate;
+  today: string;
   busy: boolean;
   onConfirm(): void;
   onDismiss(): void;
@@ -121,11 +104,11 @@ export interface CandidatePromptProps {
 /** One detected bill, in §7's two-line prompt with the prototype's buttons. */
 export function CandidatePrompt({
   candidate,
+  today,
   busy,
   onConfirm,
   onDismiss,
 }: CandidatePromptProps) {
-  const copy = candidatePromptCopy(candidate);
   return (
     <section
       className="fixed-prompt"
@@ -133,8 +116,12 @@ export function CandidatePrompt({
       aria-label="固定支出候选"
     >
       <p className="fixed-prompt__kicker">从历史里认出来的</p>
-      <p className="fixed-prompt__title">{copy.title}</p>
-      <p className="fixed-prompt__body">{copy.body}</p>
+      <p className="fixed-prompt__title">
+        {candidate.name} 每月约 {formatCentsDisplay(candidate.monthlyCents)}
+      </p>
+      <p className="fixed-prompt__body">
+        连续 {candidate.occurrences} 个月有相近金额。{estimatedDateText(candidate, today)}。要加进清单吗？
+      </p>
       <div className="fixed-prompt__actions">
         <button
           className="fixed-prompt__button fixed-prompt__button--primary"
@@ -170,9 +157,7 @@ export interface ConfirmedPromptProps {
 export function ConfirmedPrompt({ confirmation, busy, onUndo }: ConfirmedPromptProps) {
   return (
     <div className="fixed-flash" data-fixed-confirmed role="status">
-      <span className="fixed-flash__text">
-        {confirmation.name} 已加入清单 · 下次 {formatMonthDay(confirmation.nextDate)}
-      </span>
+      <span className="fixed-flash__text">{confirmation.name} 已加入清单</span>
       <button
         className="fixed-flash__undo"
         type="button"
@@ -186,23 +171,26 @@ export function ConfirmedPrompt({ confirmation, busy, onUndo }: ConfirmedPromptP
 }
 
 export interface FixedCostRowProps {
-  item: FixedCost;
+  item: FixedCostListItem;
+  today: string;
 }
 
 /** One confirmed bill: name / day of month / amount / next date. */
-export function FixedCostRow({ item }: FixedCostRowProps) {
+export function FixedCostRow({ item, today }: FixedCostRowProps) {
   return (
     <li className="fixed-row">
       <span className="fixed-row__main">
         <span className="fixed-row__name">{item.name}</span>
         <span className="fixed-row__meta">
-          每月 {item.dayOfMonth} 日
+          每月约 {item.dayOfMonth} 日
           {item.categoryName !== null ? ` · ${item.categoryName}` : ''}
         </span>
       </span>
       <span className="fixed-row__numbers">
-        <span className="fixed-row__amount">{formatCentsDisplay(item.monthlyCents)}</span>
-        <span className="fixed-row__next">下次 {formatMonthDay(item.nextDate)}</span>
+        <span className="fixed-row__estimate">
+          预计月额 <span className="fixed-row__amount">{formatCentsDisplay(item.monthlyCents)}</span>
+        </span>
+        <span className="fixed-row__next">{estimatedDateText(item, today)}</span>
       </span>
     </li>
   );
@@ -313,6 +301,7 @@ export function FixedCostsView({
                 <CandidatePrompt
                   key={candidate.id}
                   candidate={candidate}
+                  today={data.today}
                   busy={busy}
                   onConfirm={() => onConfirm(candidate)}
                   onDismiss={() => onDismiss(candidate)}
@@ -330,7 +319,7 @@ export function FixedCostsView({
               <div className="fixed-empty-card">
                 <p className="fixed-empty-card__title">还没有固定支出</p>
                 <p className="fixed-empty-card__body">
-                  把「固定支出」开关打开；每月同一分类、金额接近的支出会出现在建议里。
+                  打开「固定支出」开关并保存。每月同一分类、金额接近的支出会出现在建议里。
                 </p>
                 <Link className="fixed-manual__link" to="/ledger">
                   去流水 →
@@ -338,18 +327,23 @@ export function FixedCostsView({
               </div>
             ) : (
               <>
-                <section className="fixed-total" data-fixed-total>
-                  <span className="fixed-total__label">
-                    本月合计 · {data.items.length} 项
-                  </span>
-                  <span className="fixed-total__value">{formatCentsDisplay(data.totalCents)}</span>
-                </section>
+                <dl className="fixed-total" data-fixed-total>
+                  <div className="fixed-total__line">
+                    <dt className="fixed-total__label">本月已记</dt>
+                    <dd className="fixed-total__value">{formatCentsDisplay(data.recordedCents)}</dd>
+                  </div>
+                  <div className="fixed-total__line">
+                    <dt className="fixed-total__label">预计月额</dt>
+                    <dd className="fixed-total__value">{formatCentsDisplay(data.expectedCents)}</dd>
+                  </div>
+                </dl>
 
                 <ul className="fixed-list" data-fixed-list>
                   {data.items.map(item => (
                     <FixedCostRow
                       key={[item.categoryId ?? '', item.payee ?? '', item.lastDate].join('|')}
                       item={item}
+                      today={data.today}
                     />
                   ))}
                 </ul>

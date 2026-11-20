@@ -9,18 +9,46 @@
  */
 import type { Db } from '../driver';
 import { newId } from '../id';
-import { assertTxnWritableDate, monthSummary } from './txns';
+import type { Account } from '../../domain/types';
+import { accountBalance, allBalances, listAccounts } from './accounts';
+import { assertTxnDate, assertTxnWritableDate, monthSummary } from './txns';
 
-/** Everything createTransfer needs; the amount is a positive integer. */
-export interface CreateTransferInput {
-  /** Calendar date as YYYY-MM-DD; both legs share it. */
-  date: string;
+interface TransferMovement {
   fromAccountId: string;
   toAccountId: string;
-  /** Positive integer cents. The sign is applied per leg, never passed in. */
+  /** Positive integer cents; the sign is applied per leg. */
   amountCents: number;
+}
+
+/** Everything createTransfer needs; the amount is a positive integer. */
+export interface CreateTransferInput extends TransferMovement {
+  /** Calendar date as YYYY-MM-DD; both legs share it. */
+  date: string;
   /** Optional free text stored on both legs. */
   note?: string;
+}
+
+export interface TransferEditInput extends TransferMovement {
+  note: string;
+}
+
+export interface TransferPair extends TransferEditInput {
+  groupId: string;
+  date: string;
+  fromTxnId: string;
+  toTxnId: string;
+}
+
+export interface TransferEditData {
+  pair: TransferPair;
+  accounts: readonly Account[];
+  balances: Readonly<Record<string, number>>;
+}
+
+export interface TransferBalanceChange {
+  accountId: string;
+  beforeCents: number;
+  afterCents: number;
 }
 
 /**
@@ -34,13 +62,10 @@ const INSERT_LEG = `INSERT INTO txn
 
 /**
  * Rejects bad input before any statement runs, so a failed validation cannot
- * leave rows behind. The date must be a real YYYY-MM-DD day that is not in the
- * future (the same rule the transaction repository applies), and amounts are
- * integer cents only: fractional money never reaches SQL.
+ * leave rows behind. Amounts are integer cents only: fractional money never
+ * reaches SQL.
  */
-function assertTransferable(input: CreateTransferInput): void {
-  assertTxnWritableDate(input.date);
-  const { amountCents, fromAccountId, toAccountId } = input;
+function assertTransferMovement({ amountCents, fromAccountId, toAccountId }: TransferMovement): void {
   if (!Number.isSafeInteger(amountCents) || amountCents <= 0) {
     throw new RangeError(
       `amountCents must be a positive integer number of cents, received ${amountCents}`
@@ -58,7 +83,8 @@ function assertTransferable(input: CreateTransferInput): void {
  * it, so the transfer either exists completely or not at all.
  */
 export async function createTransfer(db: Db, input: CreateTransferInput): Promise<string> {
-  assertTransferable(input);
+  assertTxnWritableDate(input.date);
+  assertTransferMovement(input);
 
   const transferGroupId = newId();
   const note = input.note ?? '';
@@ -83,6 +109,150 @@ export async function createTransfer(db: Db, input: CreateTransferInput): Promis
   });
 
   return transferGroupId;
+}
+
+interface TransferLegRow {
+  id: string;
+  occurred_date: string;
+  account_id: string;
+  amount_cents: number;
+  note: string;
+  direction: string;
+  deleted_at: string | null;
+  category_id: string | null;
+  project_id: string | null;
+  is_fixed_cost: number;
+  has_tags: number;
+}
+
+async function readTransferPair(db: Db, groupId: string): Promise<TransferPair | null> {
+  const legs = await db.all<TransferLegRow>(
+    `SELECT t.id, t.occurred_date, t.account_id, t.amount_cents, t.note, t.direction,
+            t.deleted_at, t.category_id, t.project_id, t.is_fixed_cost,
+            EXISTS (SELECT 1 FROM txn_tag WHERE txn_id = t.id) AS has_tags
+       FROM txn t WHERE t.transfer_group_id = ?`,
+    [groupId]
+  );
+  if (legs.length !== 2 || legs.some(leg =>
+    leg.direction !== 'transfer' || leg.deleted_at !== null ||
+    leg.category_id !== null || leg.project_id !== null || leg.has_tags !== 0 || leg.is_fixed_cost !== 0
+  )) return null;
+
+  const from = legs.find(leg => leg.amount_cents < 0);
+  const to = legs.find(leg => leg.amount_cents > 0);
+  if (!from || !to || !Number.isSafeInteger(to.amount_cents) || from.amount_cents !== -to.amount_cents ||
+      from.account_id === to.account_id || from.occurred_date !== to.occurred_date || from.note !== to.note) {
+    return null;
+  }
+  try {
+    assertTxnDate(from.occurred_date);
+  } catch {
+    return null;
+  }
+  return {
+    groupId,
+    date: from.occurred_date,
+    fromTxnId: from.id,
+    toTxnId: to.id,
+    fromAccountId: from.account_id,
+    toAccountId: to.account_id,
+    amountCents: to.amount_cents,
+    note: from.note,
+  };
+}
+
+export async function loadTransferEditData(db: Db, groupId: string): Promise<TransferEditData | null> {
+  return db.transaction(async tx => {
+    const pair = await readTransferPair(tx, groupId);
+    if (pair === null) return null;
+    const accounts = await listAccounts(tx, { includeArchived: true });
+    if (!accounts.some(account => account.id === pair.fromAccountId) ||
+        !accounts.some(account => account.id === pair.toAccountId)) return null;
+    return { pair, accounts, balances: await allBalances(tx) };
+  });
+}
+
+/** Each side may keep its original account even after that account is archived. */
+export function transferAccountOptions(accounts: readonly Account[], originalId: string): Account[] {
+  return accounts.filter(account => account.archivedAt === null || account.id === originalId);
+}
+
+/** Remove the old transfer's contributions and apply the proposed ones. */
+export function transferBalanceChanges(
+  original: TransferMovement,
+  next: TransferMovement,
+  balances: Readonly<Record<string, number>>,
+): TransferBalanceChange[] | null {
+  const oldCents = BigInt(original.amountCents);
+  const newCents = BigInt(next.amountCents);
+  const contributions = [
+    [original.fromAccountId, oldCents],
+    [original.toAccountId, -oldCents],
+    [next.fromAccountId, -newCents],
+    [next.toAccountId, newCents],
+  ] as const;
+  // Exact intermediates matter when old and new movements reverse directions.
+  const deltas = new Map<string, bigint>();
+  for (const [accountId, cents] of contributions) {
+    deltas.set(accountId, (deltas.get(accountId) ?? 0n) + cents);
+  }
+
+  const changes: TransferBalanceChange[] = [];
+  for (const [accountId, delta] of deltas) {
+    if (delta === 0n) continue;
+    const beforeCents = balances[accountId];
+    if (!Number.isSafeInteger(beforeCents)) return null;
+    const afterCents = Number(BigInt(beforeCents) + delta);
+    if (!Number.isSafeInteger(afterCents)) return null;
+    changes.push({ accountId, beforeCents, afterCents });
+  }
+  return changes;
+}
+
+/** Update the two original rows only if the transfer and reviewed balances still match. */
+export async function updateTransfer(
+  db: Db,
+  original: TransferPair,
+  input: TransferEditInput,
+  previewBalances: Readonly<Record<string, number>>,
+): Promise<void> {
+  assertTransferMovement(input);
+  await db.transaction(async tx => {
+    const current = await readTransferPair(tx, original.groupId);
+    if (current === null) throw new Error('转账记录不完整或已删除，无法保存。');
+    if (current.fromTxnId !== original.fromTxnId || current.toTxnId !== original.toTxnId ||
+        current.fromAccountId !== original.fromAccountId || current.toAccountId !== original.toAccountId ||
+        current.amountCents !== original.amountCents || current.note !== original.note || current.date !== original.date) {
+      throw new Error('转账已变化，请返回并重新打开核对。');
+    }
+
+    const accounts = await listAccounts(tx, { includeArchived: true });
+    if (!transferAccountOptions(accounts, current.fromAccountId).some(account => account.id === input.fromAccountId) ||
+        !transferAccountOptions(accounts, current.toAccountId).some(account => account.id === input.toAccountId)) {
+      throw new Error('所选账户不可用，请重新选择。');
+    }
+    const changes = transferBalanceChanges(current, input, previewBalances);
+    if (changes === null) throw new Error('无法精确计算余额变化，请检查转账金额。');
+    for (const change of changes) {
+      if (await accountBalance(tx, change.accountId) !== change.beforeCents) {
+        throw new Error('账户余额已变化，请返回并重新打开核对。');
+      }
+    }
+
+    await tx.run(
+      `UPDATE txn
+          SET account_id = CASE WHEN id = ? THEN ? ELSE ? END,
+              amount_cents = CASE WHEN id = ? THEN ? ELSE ? END,
+              note = ?
+        WHERE transfer_group_id = ? AND direction = 'transfer' AND deleted_at IS NULL
+          AND id IN (?, ?)`,
+      [current.fromTxnId, input.fromAccountId, input.toAccountId,
+        current.fromTxnId, -input.amountCents, input.amountCents, input.note,
+        current.groupId, current.fromTxnId, current.toTxnId]
+    );
+    const changed = await tx.get<{ n: number }>('SELECT changes() AS n');
+    if (changed?.n !== 2) throw new Error('两条转账流水未能完整保存，请重试。');
+  });
 }
 
 /**

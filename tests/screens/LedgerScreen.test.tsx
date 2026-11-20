@@ -91,7 +91,7 @@ function ledgerData(overrides: Partial<LedgerData> = {}): LedgerData {
 function renderScreen(): string {
   return renderToString(
     <MemoryRouter>
-      <TxnDeleteProvider db={null} bump={() => {}} routeKey="ledger" onListPage dock stacked={false}>
+      <TxnDeleteProvider db={null} bump={() => {}} routeKey="ledger" routePath="/ledger" onListPage dock stacked={false}>
         <LedgerScreen />
       </TxnDeleteProvider>
     </MemoryRouter>
@@ -490,9 +490,9 @@ describe('LedgerScreen', () => {
     const nextButton = html.match(/<button[^>]*aria-label="下个月"[^>]*>/)?.[0] ?? '';
     expect(nextButton).toContain('disabled');
     expect(html).toContain('已是本月');
-    // The month title is real text, not a native month input.
+    // The visible month remains the heading and also opens the date dialog.
     expect(html).toContain('2026年10月');
-    expect(html).not.toContain('type="month"');
+    expect(openingTag(html, 'class="ledger-month__calendar"')).toContain('aria-haspopup="dialog"');
   });
 
   it('draws one bar per calendar day and keeps future/no-row days unclickable', () => {
@@ -523,7 +523,7 @@ describe('LedgerScreen', () => {
     expect(html).not.toContain('本月合计');
   });
 
-  it('renders a transfer leg read-only with a 转账 label and no edit link', () => {
+  it('links a transfer leg to detail and retains group deletion', () => {
     store.data = ledgerData({
       rows: [
         txn({
@@ -547,11 +547,9 @@ describe('LedgerScreen', () => {
     expect(html).toContain('转账');
     expect(html).toContain('−600.00');
     const rowTag = openingTag(html, 'data-txn-id="t-out"');
-    expect(rowTag.startsWith('<a ')).toBe(false);
+    expect(rowTag.startsWith('<a ')).toBe(true);
     expect(rowTag).toContain('data-direction="transfer"');
-    // No path from the list to updateTxn / softDeleteTxn on a transfer leg;
-    // the only action is deleting the whole group.
-    expect(html).not.toContain('/txn/t-out');
+    expect(rowTag).toContain('href="/txn/t-out"');
     expect(html).toContain('data-transfer-group="g-1"');
     expect(html).toContain('aria-label="删除转账，转账 · −600.00"');
     // A transfer is neither spending nor earning on the day card either.

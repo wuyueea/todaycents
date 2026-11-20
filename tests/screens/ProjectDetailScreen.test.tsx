@@ -252,6 +252,7 @@ describe('ProjectDetailScreen', () => {
     // A back link to the list, and the prototype's one action.
     expect(html).toContain('aria-label="返回项目"');
     expect(html).toContain('归档这个项目');
+    expect(html).toContain('查看全部流水');
   });
 
   it('drops the budget sentence when the project has no cap', () => {
@@ -320,6 +321,7 @@ describe('ProjectDetailScreen', () => {
 
     expect(html).toContain('还没有支出，暂无分类占比');
     expect(html).not.toContain('最近几笔');
+    expect(html).not.toContain('查看全部流水');
     expect(html).not.toContain('NaN');
   });
 

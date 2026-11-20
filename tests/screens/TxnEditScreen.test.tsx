@@ -411,9 +411,7 @@ describe('loading and editing through the repository', () => {
     expect((await getTxnTags(db, id)).map(tag => tag.name)).toEqual(['和室友', '夜宵']);
   });
 
-  // The row update, the tags and the project are one save. A failure in the tag
-  // write used to leave the new amount committed and the old tag detached.
-  it('keeps the old amount and tags when the tag write fails', async () => {
+  it('rolls back the amount, note, fixed-cost flag and tags when the tag write fails', async () => {
     const { db, card, food, sport } = await seeded();
     const night = await createTag(db, '夜宵');
     const roommate = await createTag(db, '和室友');
@@ -438,12 +436,15 @@ describe('loading and editing through the repository', () => {
           accountId: card.id,
           note: '改过',
           tagIds: [roommate],
+          isFixedCost: true,
         })
       )
     ).rejects.toThrow('injected failure');
 
     const stored = (await getTxnById(db, id))!;
-    expect(stored).toMatchObject({ amountCents: -1230, categoryId: food.id, note: '午饭' });
+    expect(stored).toMatchObject({
+      amountCents: -1230, categoryId: food.id, note: '午饭', isFixedCost: false,
+    });
     expect((await getTxnTags(db, id)).map(tag => tag.name)).toEqual(['夜宵']);
   });
 
@@ -657,7 +658,7 @@ describe('TxnEditScreen', () => {
 
   // A plain button on the right of a 固定支出 row: the thumb's position carries
   // the state, and neither 已标记 nor 未标记 is printed.
-  it('offers an immediate 固定支出 button on an expense row, with no status word', () => {
+  it('shows the current 固定支出 flag on an expense row, with no status word', () => {
     store.data = editData({ row: txnRow({ isFixedCost: true }) });
     const html = renderScreen('/txn/txn-1');
 
@@ -736,7 +737,7 @@ describe('TxnEditScreen', () => {
     }
   });
 
-  it('renders a transfer leg read-only, with no save or delete control', () => {
+  it('offers read-only details when a transfer has no valid pair', () => {
     store.data = editData({
       row: txnRow({
         id: 't-out',
@@ -751,7 +752,7 @@ describe('TxnEditScreen', () => {
 
     expect(html).toContain('转账');
     expect(html).toContain('−600.00');
-    expect(html).toContain('不能在这里单独修改');
+    expect(html).toContain('转账记录不完整或存在异常');
     expect(html).not.toContain('id="edit-amount"');
     expect(html).not.toContain('<button');
   });

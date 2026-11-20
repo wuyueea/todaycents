@@ -18,6 +18,7 @@ import {
   listProjects,
   projectDetail,
   projectTotals,
+  projectTransactions,
   renameProject,
   setProjectBudget,
   setTxnProject,
@@ -509,6 +510,16 @@ describe('projectDetail', () => {
 
     const two = await projectDetail(db, projectId, { recentLimit: 2 });
     expect(two.recentTxns.map(row => row.id)).toEqual(ids.slice(-2).reverse());
+
+    const income = await createIncome(db, { date: '2025-12-01', accountId, amountCents: 200, categoryId: null });
+    await setTxnProject(db, income, projectId);
+    await spend(db, accountId, foodId, 250, '其他流水', '2026-10-05');
+    await archiveProject(db, projectId);
+    const all = await projectTransactions(db, projectId);
+    expect(all.project).toMatchObject({ id: projectId, status: 'archived' });
+    expect(all.rows.map(row => row.id)).toEqual([...ids].reverse().concat(income));
+    expect(all.rows.at(-1)).toMatchObject({ amountCents: 200, direction: 'income' });
+    await expect(projectTransactions(db, 'missing')).rejects.toThrow(/项目不存在/);
   });
 
   it('refuses a nonsensical recent limit', async () => {

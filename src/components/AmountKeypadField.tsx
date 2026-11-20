@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import {
   AmountKeypad,
-  applyAmountKey,
   formatAmountDraft,
 } from './AmountKeypad';
 import { Sheet } from './Sheet';
@@ -41,7 +40,6 @@ export function AmountKeypadField({
   disabled = false,
 }: AmountKeypadFieldProps) {
   const [open, setOpen] = useState(false);
-  const [pristine, setPristine] = useState(false);
   const display = value.trim() === '' ? '' : formatAmountDraft(value);
 
   return (
@@ -54,10 +52,7 @@ export function AmountKeypadField({
         aria-label={`${label} ${display === '' ? placeholder : display}`}
         aria-invalid={invalid ? 'true' : undefined}
         disabled={disabled}
-        onClick={() => {
-          setPristine(true);
-          setOpen(true);
-        }}
+        onClick={() => setOpen(true)}
       >
         {display === '' ? placeholder : display}
       </button>
@@ -76,19 +71,8 @@ export function AmountKeypadField({
           </div>
           <AmountKeypad
             value={value}
-            onChange={next => onChange(next)}
-            onKey={key => {
-              let next: string;
-              if (pristine && /^\d$/.test(key)) {
-                next = key;
-              } else if (pristine && key === '.') {
-                next = '0.';
-              } else {
-                next = applyAmountKey(value, key);
-              }
-              setPristine(false);
-              onChange(next);
-            }}
+            onChange={onChange}
+            replaceOnFirstKey
             actionLabel="完成"
             actionType="button"
             actionData="done"

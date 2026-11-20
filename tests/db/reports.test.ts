@@ -1,16 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import { archiveAccount, createAccount } from '../../src/db/repos/accounts';
-import { createCategory } from '../../src/db/repos/categories';
+import { archiveCategory, createCategory } from '../../src/db/repos/categories';
 import {
   createExpense,
   createIncome,
   recordAdjustment,
+  softDeleteTxn,
 } from '../../src/db/repos/txns';
 import { createTransfer } from '../../src/db/repos/transfers';
 import { UNCATEGORIZED_CATEGORY_ID } from '../../src/db/schema';
 import type { Db, DbParam } from '../../src/db/driver';
-import { monthReport, yearReport } from '../../src/db/repos/reports';
+import { monthReport, reportCategoryExpenses, yearReport } from '../../src/db/repos/reports';
 import type { MonthPoint } from '../../src/db/repos/reports';
 
 /**
@@ -49,6 +50,55 @@ async function fixture() {
   const salary = await createCategory(db, { name: '生活费', kind: 'income' });
   return { db, card, bank, food, daily, transport, subscription, salary };
 }
+
+describe('reportCategoryExpenses', () => {
+  it('reconciles ranking rows to eligible expenses in monthly and annual reports', async () => {
+    const { db, card, bank, food, transport, salary } = await fixture();
+    const lunch = await createCategory(db, { name: '午餐', kind: 'expense', parentId: food });
+    const root = await createExpense(db, { date: '2025-12-01', accountId: card, amountCents: 100, categoryId: food });
+    const child = await createExpense(db, {
+      date: '2025-12-31', accountId: bank, amountCents: 230, categoryId: lunch, note: '历史午餐',
+    });
+    const earlier = await createExpense(db, { date: '2025-01-01', accountId: card, amountCents: 65, categoryId: food });
+    const noCategory = await createExpense(db, { date: '2025-12-04', accountId: card, amountCents: 40, categoryId: null });
+    const systemCategory = await createExpense(db, {
+      date: '2025-12-06', accountId: card, amountCents: 35, categoryId: UNCATEGORIZED_CATEGORY_ID,
+    });
+    // An imported category can have an empty string id, which also shares the empty ranking key.
+    await db.run("INSERT INTO category (id, name, kind) VALUES ('', '历史分类', 'expense')");
+    const emptyCategoryId = await createExpense(db, { date: '2025-12-07', accountId: card, amountCents: 25, categoryId: '' });
+    await createExpense(db, { date: '2025-12-02', accountId: card, amountCents: 60, categoryId: transport });
+    await createExpense(db, { date: '2024-12-31', accountId: card, amountCents: 90, categoryId: food });
+    await createExpense(db, { date: '2026-01-01', accountId: card, amountCents: 70, categoryId: food });
+    const deleted = await createExpense(db, { date: '2025-12-20', accountId: card, amountCents: 80, categoryId: lunch });
+    await softDeleteTxn(db, deleted);
+    await createIncome(db, { date: '2025-12-03', accountId: card, amountCents: 500, categoryId: salary });
+    await createTransfer(db, { date: '2025-12-03', fromAccountId: card, toAccountId: bank, amountCents: 91 });
+    await recordAdjustment(db, { date: '2025-12-05', accountId: card, deltaCents: -50, note: '对账差额' });
+    await archiveCategory(db, food);
+    await archiveAccount(db, bank);
+
+    const reader = readOnly(db);
+    const month = await monthReport(reader, '2025-12');
+    const year = await yearReport(reader, 2025);
+    for (const [period, report] of [['2025-12', month], [2025, year]] as const) {
+      for (const category of report.categories) {
+        const details = await reportCategoryExpenses(reader, period, category.categoryId);
+        expect(details.reduce((sum, detail) => sum + detail.cents, 0)).toBe(category.cents);
+      }
+    }
+    const details = await reportCategoryExpenses(reader, '2025-12', food);
+    expect(details.map(row => row.id)).toEqual([child, root]);
+    expect(details[0]).toEqual({
+      id: child, occurredDate: '2025-12-31', categoryName: '午餐',
+      accountName: '银行卡', note: '历史午餐', cents: 230,
+    });
+    expect((await reportCategoryExpenses(reader, 2025, food)).map(row => row.id)).toEqual([child, root, earlier]);
+    expect((await reportCategoryExpenses(reader, '2025-12', '')).map(row => row.id))
+      .toEqual([emptyCategoryId, systemCategory, noCategory]);
+    expect(await reportCategoryExpenses(reader, '2025-12', lunch)).toEqual([]);
+  });
+});
 
 describe('monthReport', () => {
   it('answers where the money went for one month', async () => {

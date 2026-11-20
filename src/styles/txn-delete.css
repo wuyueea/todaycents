@@ -105,6 +105,23 @@
   min-height: 44px;
 }
 
+.txn-delete-feedback__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 8px;
+}
+
+.txn-delete-feedback__countdown {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.txn-delete-feedback__note {
+  margin: 3px 0 0;
+  font-size: 12px;
+}
+
 /* The category/tag undo remains near the dock when both prompts are active. */
 .txn-delete-feedback--stacked {
   bottom: calc(var(--v1-dock) + var(--v1-dock-gap) * 2 + var(--safe-area-bottom) + 144px);

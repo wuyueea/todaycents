@@ -14,6 +14,7 @@ import {
   LAST_BACKUP_LABEL,
   lastBackupTitle,
   plannedCopyNote,
+  TXN_ROW_COUNT_NOTE,
 } from '../backup/format';
 import { confirmImport, exportBackup, exportMetaAction, prepareImport } from '../backup/flow';
 import type { ExportResult, PreparedImport } from '../backup/flow';
@@ -22,10 +23,11 @@ import type { RestoreMeta } from '../backup/meta';
 import { AUTO_BEFORE_CACHE_LIMIT, cachedBackups, deviceFileWriter } from '../backup/device';
 import type { CachedBackup } from '../backup/device';
 import { deviceFolder } from '../storage/folder';
-import { Toast, useToast } from '../components/Toast';
 import { Sheet } from '../components/Sheet';
-import { CachedFileList } from '../components/CachedFileList';
+import { CachedFileList, useCachedFileFocus } from '../components/CachedFileList';
 import type { CachedFileListProps } from '../components/CachedFileList';
+import { ExportResultPanel } from '../components/ExportResultPanel';
+import type { ExportFileNotice } from '../components/ExportResultPanel';
 import { useDb, useQuery } from '../store/useDb';
 
 /**
@@ -120,13 +122,14 @@ export function ImportConfirmSheet({
       <div className="sheet__file">
         <div className="sheet__file-name">{fileName}</div>
         <div className="sheet__file-meta">
-          {backupFileMeta(fileRows, fileBytes)} · {formatBackupTime(exportedAt, now)}
+          {fileSizeText(fileBytes)} · {formatBackupTime(exportedAt, now)}
         </div>
         <div className="sheet__file-meta">流水日期 · {dateText}</div>
         <div className="sheet__file-meta">未归档账户 · {fileActiveAccounts} 个</div>
       </div>
 
       <p className="sheet__text">{importSummary({ fileRows, localRows })}</p>
+      <p className="sheet__note">{TXN_ROW_COUNT_NOTE}</p>
       <p className="sheet__note">
         按下按钮之后，会先把现在的账本导出成一份备份，再覆盖。{plannedCopyNote(folderName)}
       </p>
@@ -274,7 +277,8 @@ export default function BackupScreen() {
   const [sheet, setSheet] = useState<SheetState | null>(null);
   const [folderName, setFolderName] = useState<string | null>(null);
   const [cached, setCached] = useState<CachedBackup[] | null>(null);
-  const { toast, showToast } = useToast();
+  const [exportResult, setExportResult] = useState<ExportFileNotice | null>(null);
+  const cacheFocus = useCachedFileFocus(cachedBackups.list, setCached);
   const fileInput = useRef<HTMLInputElement>(null);
 
   // The import/reset sheets state where the automatic copy will go before the
@@ -315,8 +319,9 @@ export default function BackupScreen() {
     cachedBackups.list().then(setCached, () => setCached([]));
   };
 
-  const cacheNotice = (prefix: string): string =>
-    `${prefix}文件还在应用缓存里，系统可能清理；如果下面列出了它，可以点「另存」。`;
+  const showCachedExport = (fileName: string, text: string) => {
+    setExportResult({ kind: 'cache', fileName, text });
+  };
 
   const data = query.data;
   const now = new Date();
@@ -334,21 +339,32 @@ export default function BackupScreen() {
     setBusy(true);
     setStatus(null);
     setNotice(null);
+    setExportResult(null);
+    cacheFocus.clear();
     try {
       const result = await exportBackup(db, deviceFileWriter, new Date());
       refreshCache();
 
-      const action = exportMetaAction(result.destination);
+      const { destination, fileName } = result;
+      const action = exportMetaAction(destination);
       if (action === 'none') {
-        setNotice(cacheNotice('已取消导出，没有记录这次备份。'));
+        showCachedExport(fileName, `已取消导出「${fileName}」，没有记录这次备份。`);
         return;
       }
 
       // A share only handed the file to another app. Ask before promising
       // that a backup exists; 没有保存 records nothing.
       if (action === 'ask') {
+        showCachedExport(fileName, `「${fileName}」已交给系统分享，请在目标应用确认是否保存。`);
         setSheet({ kind: 'export-confirm', result });
         return;
+      }
+
+      if (destination.kind === 'folder') {
+        const text = exportToast({ ...result, folderName: destination.folderName });
+        setExportResult({ ...destination, text });
+      } else {
+        setExportResult({ kind: 'download', text: exportToast(result) });
       }
 
       try {
@@ -364,16 +380,6 @@ export default function BackupScreen() {
 
       // app_meta changed; refresh the last-backup block without leaving.
       bump();
-      showToast(
-        exportToast({
-          fileName: result.fileName,
-          bytes: result.bytes,
-          folderName:
-            result.destination.kind === 'folder'
-              ? result.destination.folderName
-              : undefined,
-        })
-      );
     } catch (reason) {
       setStatus(`导出失败：${reason instanceof Error ? reason.message : String(reason)}`);
     } finally {
@@ -395,7 +401,7 @@ export default function BackupScreen() {
       await recordBackupMeta(db, result.meta);
       setSheet(null);
       bump();
-      showToast(exportToast({ ...result, recorded: true }));
+      showCachedExport(result.fileName, exportToast({ ...result, recorded: true }));
     } catch (reason) {
       setSheet(null);
       setStatus(
@@ -409,9 +415,10 @@ export default function BackupScreen() {
   };
 
   const handleExportNotSaved = () => {
-    if (busy) return;
+    if (busy || sheet?.kind !== 'export-confirm') return;
+    const { fileName } = sheet.result;
     setSheet(null);
-    setNotice(cacheNotice('没有记录这次备份。'));
+    showCachedExport(fileName, `「${fileName}」已交给系统分享，没有记录这次备份。`);
   };
 
   const handleShareCached = async (file: CachedBackup) => {
@@ -526,7 +533,12 @@ export default function BackupScreen() {
       <section className="backup-state" aria-label={LAST_BACKUP_LABEL}>
         <p className="backup-state__label">{LAST_BACKUP_LABEL}</p>
         <p className="backup-state__value">{lastTitle}</p>
-        {metaLine !== null && <p className="backup-state__meta">{metaLine}</p>}
+        {metaLine !== null && (
+          <>
+            <p className="backup-state__meta">{metaLine}</p>
+            <p className="backup-state__meta">{TXN_ROW_COUNT_NOTE}</p>
+          </>
+        )}
       </section>
 
       {data?.restoreMeta && (
@@ -549,6 +561,14 @@ export default function BackupScreen() {
           >
             导出到文件
           </button>
+          {exportResult !== null && (
+            <ExportResultPanel
+              result={exportResult}
+              cachedFiles={cached ?? []}
+              onViewCached={cacheFocus.locate}
+              busy={busy}
+            />
+          )}
         </section>
 
         <section className="backup-action-card">
@@ -603,6 +623,7 @@ export default function BackupScreen() {
         onShare={handleShareCached}
         onRestore={db === null ? undefined : handleRestoreCached}
         highlightedName={highlightedName}
+        focusRequest={cacheFocus.focusRequest}
       />
 
       {sheet?.kind === 'confirm' && (
@@ -642,8 +663,6 @@ export default function BackupScreen() {
           onClose={closeSheet}
         />
       )}
-
-      {toast !== null && <Toast text={toast} />}
     </div>
   );
 }

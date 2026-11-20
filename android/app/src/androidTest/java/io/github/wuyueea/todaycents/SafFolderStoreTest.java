@@ -60,7 +60,7 @@ public class SafFolderStoreTest {
         Uri tree = DocumentsContract.buildTreeDocumentUri(LOCAL, "primary:Documents/合成目录");
         prefs.edit().putString("folder_tree_uri", tree.toString()).commit();
         assertTrue(store.status().getBoolean("needsReselection"));
-        assertNull(store.openIntent());
+        assertNull(store.openIntent(null));
         assertThrows(IOException.class, () -> store.write("账本.ledger", new byte[]{1}));
         store.clear();
         assertFalse(store.status().getBoolean("needsReselection"));

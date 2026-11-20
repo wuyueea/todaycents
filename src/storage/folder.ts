@@ -14,13 +14,15 @@ export interface FolderWriteResult {
   saved: boolean;
   name: string;
   folderName?: string;
+  /** Identity of the tree used for this write, independent of its display name. */
+  folderId?: string;
 }
 
 export interface FolderPlugin {
   getFolder(): Promise<{ name?: string; needsReselection?: boolean }>;
   chooseFolder(): Promise<{ canceled: boolean }>;
   clearFolder(): Promise<void>;
-  openFolder(): Promise<{ opened: boolean }>;
+  openFolder(options?: { folderId: string }): Promise<{ opened: boolean }>;
   writeFile(options: { name: string; base64: string }): Promise<FolderWriteResult>;
 }
 
@@ -31,7 +33,7 @@ export interface FolderAccess {
   choose(): Promise<boolean>;
   available(): Promise<boolean>;
   clear(): Promise<void>;
-  open(): Promise<boolean>;
+  open(expectedFolderId?: string): Promise<boolean>;
   write(name: string, base64: string): Promise<FolderWriteResult>;
 }
 
@@ -78,10 +80,13 @@ export function createFolderAccess(
       const bridge = await loadPlugin();
       await bridge?.plugin.clearFolder();
     },
-    async open() {
+    async open(expectedFolderId) {
       const bridge = await loadPlugin().catch(() => null);
       if (bridge === null) return false;
-      return (await bridge.plugin.openFolder().catch(() => null))?.opened === true;
+      const opened = expectedFolderId === undefined
+        ? bridge.plugin.openFolder()
+        : bridge.plugin.openFolder({ folderId: expectedFolderId });
+      return (await opened.catch(() => null))?.opened === true;
     },
     async write(name, base64) {
       const bridge = await loadPlugin();

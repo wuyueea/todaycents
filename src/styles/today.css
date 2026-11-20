@@ -62,11 +62,6 @@ a.today-card:focus-visible {
   outline-offset: -2px;
 }
 
-/* A transfer leg has no editor of its own; it is shown, never invited. */
-.today-card--readonly {
-  cursor: default;
-}
-
 .today-card__body {
   display: flex;
   flex-direction: column;

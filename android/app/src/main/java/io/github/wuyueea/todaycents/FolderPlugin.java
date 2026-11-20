@@ -61,7 +61,7 @@ public final class FolderPlugin extends Plugin {
 
     @PluginMethod
     public void openFolder(PluginCall call) {
-        Intent intent = store().openIntent();
+        Intent intent = store().openIntent(call.getString("folderId"));
         if (intent == null || getActivity() == null) {
             call.resolve(new JSObject().put("opened", false));
             return;

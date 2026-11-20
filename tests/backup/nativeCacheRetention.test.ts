@@ -168,7 +168,9 @@ describe('production cache writer binding', () => {
     const numbered = '记账本-20261116-120005 (2).ledger';
     await native.write({ path: name + '.writing', data: '{' });
     await expect(cachedBackups.list()).resolves.not.toContainEqual(expect.objectContaining({ name }));
-    await expect(deviceFileWriter.writeForShare(name, completeBackup)).resolves.toEqual({ kind: 'share' });
+    await expect(deviceFileWriter.writeForShare(name, completeBackup)).resolves.toEqual({
+      kind: 'share', fileName: numbered,
+    });
     expect(native.contents.get(name + '.writing')).toBe('{');
     expect(native.contents.get(numbered)).toBe(completeBackup);
     expect(native.share).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({

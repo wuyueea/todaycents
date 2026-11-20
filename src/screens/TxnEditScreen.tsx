@@ -2,15 +2,15 @@ import { useEffect, useLayoutEffect, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { AmountText } from '../components/AmountText';
+import { TransferEditForm } from './TransferEditForm';
 import {
   AmountKeypad,
-  applyAmountKey,
   formatAmountDraft,
 } from '../components/AmountKeypad';
 import { Sheet } from '../components/Sheet';
 import { registerBackHandler } from '../components/backButton';
 import { createSaveExit } from '../components/saveExit';
-import { isPlainLinkClick, readTxnEditOrigin } from '../components/TxnEditNavigation';
+import { isPlainLinkClick, projectTransactionsParent, readTxnEditOrigin } from '../components/TxnEditNavigation';
 import { useDb, useQuery } from '../store/useDb';
 import { listAccounts } from '../db/repos/accounts';
 import { listCategories } from '../db/repos/categories';
@@ -18,6 +18,8 @@ import type { Category } from '../db/repos/categories';
 import { getTxnTags, listTags, setTxnTags } from '../db/repos/tags';
 import type { Tag } from '../db/repos/tags';
 import { getTxnById, updateTxn } from '../db/repos/txns';
+import { loadTransferEditData } from '../db/repos/transfers';
+import type { TransferEditData } from '../db/repos/transfers';
 import { listProjects, setTxnProject } from '../db/repos/projects';
 import type { Project } from '../db/repos/projects';
 import { setTxnFixedCost } from '../db/repos/fixedCosts';
@@ -42,18 +44,17 @@ import { formatCents, parseAmountToCents } from '../domain/money';
  * the project are written by setTxnTags and setTxnProject inside the same
  * transaction as the row update, so an edit lands whole or not at all.
  *
- * Transfers are read-only here. A transfer leg is one half of a matched pair;
- * updateTxn rejects a single transfer leg. Editing one leg would
- * move money out of thin air. The screen therefore renders such a row as a
- * read-only summary without a save control. commitTxnEdit also refuses a
- * transfer leg as a second line of defence.
+ * A transfer uses its group editor. The single-row update and commit paths
+ * reject transfer legs independently.
  */
 
 /** Everything the screen renders from, loaded as one snapshot. */
 export interface TxnEditData {
   /** The row, or null when this month has no live row with that id. */
   row: TxnRow | null;
-  /** Every live category; the screen narrows to the row's kind. */
+  /** Present when the requested row belongs to a complete, editable transfer. */
+  transfer?: TransferEditData;
+  /** Categories of the row's kind, including archived entries for historical labels. */
   categories: Category[];
   /** Live accounts; the row's own account is appended if it was archived. */
   accounts: Account[];
@@ -80,6 +81,8 @@ export interface TxnEditDraft {
    * rewrite (or refuse) an assignment the user did not touch.
    */
   projectId: string | null;
+  /** The edited expense flag. Omitted when the user leaves it untouched. */
+  isFixedCost?: boolean;
 }
 
 /** What stopped a save, field by field, so each can be marked in place. */
@@ -164,20 +167,6 @@ export function accountOptionsFor(
 }
 
 /**
- * The categories a row of this direction may choose from.
- *
- * Transfers and adjustments are not categorised, so they get no picker at all.
- * Archived categories are already excluded by listCategories.
- */
-function editCategoryOptions(
-  categories: readonly Category[],
-  direction: Direction
-): Category[] {
-  if (direction !== 'expense' && direction !== 'income') return [];
-  return categories.filter(category => category.kind === direction);
-}
-
-/**
  * Loads one live row by id, plus the pickers.
  *
  * The lookup is by primary key, not by membership in a month's list, so an old
@@ -187,11 +176,16 @@ function editCategoryOptions(
  */
 export async function loadTxnEditData(db: Db, id: string): Promise<TxnEditData> {
   const row = await getTxnById(db, id);
-  if (row === null || row.direction === 'adjust') {
-    return { row, categories: [], accounts: [], tags: [], rowTags: [], projects: [] };
+  if (row === null || row.direction === 'adjust' || row.direction === 'transfer') {
+    const data: TxnEditData = { row, categories: [], accounts: [], tags: [], rowTags: [], projects: [] };
+    if (row?.direction === 'transfer' && row.transferGroupId) {
+      const transfer = await loadTransferEditData(db, row.transferGroupId);
+      if (transfer && (transfer.pair.fromTxnId === id || transfer.pair.toTxnId === id)) data.transfer = transfer;
+    }
+    return data;
   }
 
-  const categories = await listCategories(db);
+  const categories = await listCategories(db, row.direction, { includeArchived: true });
   const accounts = await listAccounts(db);
   const tags = await listTags(db, { includeArchived: true });
   const rowTags = await getTxnTags(db, id);
@@ -231,9 +225,8 @@ export async function commitTxnEdit(
   // not narrowed by the guard above.
   const amountCents = plan.amountCents;
 
-  // One edit is one unit of work: the row, its tags and its project are written
-  // inside a single transaction, so a failure in either follow-up write leaves
-  // the row exactly as it was rather than half-edited.
+  // Keep the row, fixed-cost flag, tags and project in one transaction so
+  // a failure in any write rolls back the entire edit.
   await db.transaction(async tx => {
     await updateTxn(tx, row.id, {
       amountCents,
@@ -241,6 +234,10 @@ export async function commitTxnEdit(
       accountId: draft.accountId,
       note: draft.note,
     });
+
+    if (row.direction === 'expense' && draft.isFixedCost !== undefined) {
+      await setTxnFixedCost(tx, row.id, draft.isFixedCost);
+    }
 
     await setTxnTags(tx, row.id, draft.tagIds);
 
@@ -310,12 +307,10 @@ export default function TxnEditScreen() {
   const [tagEdit, setTagEdit] = useState<string[] | undefined>(undefined);
   const [projectEdit, setProjectEdit] = useState<string | null | undefined>(undefined);
   const [fixedEdit, setFixedEdit] = useState<boolean | undefined>(undefined);
-  const [fixedBusy, setFixedBusy] = useState(false);
   const [problems, setProblems] = useState<TxnEditProblems>(noProblems);
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [keypadOpen, setKeypadOpen] = useState(false);
-  const [amountPristine, setAmountPristine] = useState(false);
 
   const leaveEdit = () => {
     if (origin === null) navigate('/ledger', { replace: true });
@@ -348,8 +343,22 @@ export default function TxnEditScreen() {
   // undefined means untouched: the loaded row still supplies the flag.
   const isFixed = fixedEdit ?? row?.isFixedCost ?? false;
 
-  const categories =
-    row === null ? [] : editCategoryOptions(data?.categories ?? [], row.direction);
+  const categories = (data?.categories ?? []).filter(category => category.kind === row?.direction);
+  const liveCategories = categories.filter(category => category.archivedAt === null);
+  const selectedCategory = categories.find(category => category.id === categoryId);
+  const topCategories = liveCategories.filter(category => category.parentId === null);
+  const selectedTop = topCategories.find(
+    category => category.id === (selectedCategory?.parentId ?? selectedCategory?.id)
+  );
+  const subCategories = selectedTop
+    ? liveCategories.filter(category => category.parentId === selectedTop.id)
+    : [];
+  const historicalCategory =
+    categoryId !== null && categoryId !== UNCATEGORIZED_CATEGORY_ID &&
+    (!selectedTop || selectedCategory?.archivedAt !== null);
+  const historicalParent = historicalCategory
+    ? categories.find(category => category.id === selectedCategory?.parentId)
+    : undefined;
   const accounts = row === null ? [] : accountOptionsFor(data?.accounts ?? [], row);
   const tagOptions = (data?.tags ?? []).filter(
     tag => tag.archivedAt === null || tagIds.includes(tag.id)
@@ -365,18 +374,6 @@ export default function TxnEditScreen() {
       ? { id: row.projectId, name: row.projectName }
       : null;
   const projectOptions = archivedProject === null ? activeProjects : [...activeProjects, archivedProject];
-  // 未分类 is a real system row, not a retired category: it gets no
-  // "已停用" warning even though the sheet never offers it.
-  const currentCategoryMissing =
-    row !== null &&
-    row.categoryId !== null &&
-    row.categoryId !== UNCATEGORIZED_CATEGORY_ID &&
-    !categories.some(category => category.id === row.categoryId);
-
-
-
-
-
   const clearProblem = (field: keyof TxnEditProblems) => {
     setProblems(previous => (previous[field] ? { ...previous, [field]: false } : previous));
   };
@@ -407,22 +404,9 @@ export default function TxnEditScreen() {
     setErrorText(null);
   };
 
-  const changeFixed = async (next: boolean) => {
-    if (db === null || row === null || fixedBusy) return;
+  const changeFixed = (next: boolean) => {
     setFixedEdit(next);
     setErrorText(null);
-    setFixedBusy(true);
-    try {
-      await setTxnFixedCost(db, row.id, next);
-      bump();
-    } catch (reason) {
-      setFixedEdit(!next);
-      setErrorText(
-        `固定支出标记失败：${reason instanceof Error ? reason.message : String(reason)}`
-      );
-    } finally {
-      setFixedBusy(false);
-    }
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -438,6 +422,7 @@ export default function TxnEditScreen() {
         note,
         tagIds,
         projectId,
+        isFixedCost: fixedEdit,
       });
       setProblems(result.problems);
 
@@ -461,7 +446,8 @@ export default function TxnEditScreen() {
           className="add-back"
           to={origin ?? '/ledger'}
           aria-label={origin?.pathname === '/' ? '返回今天'
-            : origin?.pathname.startsWith('/settings/projects/') ? '返回项目详情' : '返回流水'}
+            : origin && projectTransactionsParent(origin.pathname) !== null ? '返回项目流水'
+              : origin?.pathname.startsWith('/settings/projects/') ? '返回项目详情' : '返回流水'}
           aria-disabled={exit.canLeave ? undefined : true}
           tabIndex={exit.canLeave ? undefined : -1}
           onClick={event => {
@@ -473,8 +459,8 @@ export default function TxnEditScreen() {
         >
           ‹
         </Link>
-        <h1>编辑流水</h1>
-        {row !== null && (
+        <h1>{row?.direction === 'transfer' ? '转账详情' : '编辑流水'}</h1>
+        {row !== null && row.direction !== 'transfer' && (
           <span className="txn-edit-kind" data-direction={row.direction}>
             {KIND_LABELS[row.direction]}
           </span>
@@ -495,12 +481,13 @@ export default function TxnEditScreen() {
         <p className="add-note" role="status">
           这笔记录不存在，可能已经被删除。
         </p>
+      ) : row.direction === 'transfer' && data.transfer ? (
+        <TransferEditForm key={data.transfer.pair.groupId} data={data.transfer} db={db} busy={busy}
+          setBusy={setBusy} onSaved={() => { bump(); leaveEdit(); }} />
       ) : row.direction === 'transfer' ? (
         <section className="txn-edit-readonly" aria-label="转账记录">
           <TxnEditFacts row={row} />
-          <p className="add-note">
-            转账记录由一出一进两条腿组成，不能在这里单独修改。
-          </p>
+          <p className="add-note" role="status">转账记录不完整或存在异常，仅可查看这条流水。</p>
         </section>
       ) : (
         <form className="add-form" onSubmit={handleSubmit}>
@@ -520,10 +507,7 @@ export default function TxnEditScreen() {
                   data-amount-open
                   aria-label={`金额 ${formatAmountDraft(amount)}`}
                   aria-invalid={problems.amountInvalid ? 'true' : undefined}
-                  onClick={() => {
-                    setAmountPristine(true);
-                    setKeypadOpen(true);
-                  }}
+                  onClick={() => setKeypadOpen(true)}
                 >
                   {formatAmountDraft(amount)}
                 </button>
@@ -538,23 +522,56 @@ export default function TxnEditScreen() {
                   <span>分类</span>
                 </div>
                 <div className="entry-chips entry-chips--wrap">
-                  {categories.map(category => (
+                  {topCategories.map(category => (
                     <button
                       key={category.id}
                       type="button"
-                      className={`entry-chip${categoryId === category.id ? ' is-on' : ''}`}
+                      className={`entry-chip${selectedTop?.id === category.id ? ' is-on' : ''}`}
                       data-category-id={category.id}
-                      aria-pressed={categoryId === category.id}
-                      onClick={() => changeCategory(category.id)}
+                      aria-pressed={selectedTop?.id === category.id}
+                      onClick={() => {
+                        if (selectedTop?.id !== category.id) changeCategory(category.id);
+                      }}
                     >
                       {category.name}
                     </button>
                   ))}
                 </div>
               </div>
-              {currentCategoryMissing && (
+              {selectedTop && (subCategories.length > 0 || selectedCategory?.parentId === selectedTop.id) && (
+                <div className="entry-group" role="group" aria-labelledby="edit-subcategory-heading">
+                  <div className="entry-group__head">
+                    <span id="edit-subcategory-heading">细分 · {selectedTop.name}</span>
+                  </div>
+                  <div className="entry-chips entry-chips--wrap">
+                    <button
+                      type="button"
+                      className={`entry-chip is-ghost${categoryId === selectedTop.id ? ' is-on' : ''}`}
+                      data-subcategory-id=""
+                      aria-pressed={categoryId === selectedTop.id}
+                      onClick={() => changeCategory(selectedTop.id)}
+                    >
+                      不细分
+                    </button>
+                    {subCategories.map(category => (
+                      <button
+                        key={category.id}
+                        type="button"
+                        className={`entry-chip is-ghost${categoryId === category.id ? ' is-on' : ''}`}
+                        data-subcategory-id={category.id}
+                        aria-pressed={categoryId === category.id}
+                        onClick={() => changeCategory(category.id)}
+                      >
+                        {category.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {historicalCategory && (
                 <p className="add-note">
-                  当前分类「{row.categoryName ?? '未分类'}」已停用；不重新选择会保留原分类。
+                  当前分类「{historicalParent && `${historicalParent.name} / `}
+                  {selectedCategory?.name ?? row.categoryName ?? '原分类'}」不可选。不重新选择会保留原分类。
                 </p>
               )}
 
@@ -660,10 +677,8 @@ export default function TxnEditScreen() {
                     data-fixed-toggle
                     aria-checked={isFixed}
                     aria-label="固定支出"
-                    disabled={busy || fixedBusy || db === null}
-                    onClick={() => {
-                      void changeFixed(!isFixed);
-                    }}
+                    disabled={busy || db === null}
+                    onClick={() => changeFixed(!isFixed)}
                   >
                     <span
                       className={isFixed ? 'fixed-toggle__track is-on' : 'fixed-toggle__track'}
@@ -724,22 +739,7 @@ export default function TxnEditScreen() {
               clearProblem('amountInvalid');
               setErrorText(null);
             }}
-            onKey={key => {
-              // The first digit replaces the loaded amount; a decimal starts
-              // a fresh cents value; edit keys keep the old draft editable.
-              let next: string;
-              if (amountPristine && /^\d$/.test(key)) {
-                next = key;
-              } else if (amountPristine && key === '.') {
-                next = '0.';
-              } else {
-                next = applyAmountKey(amount, key);
-              }
-              setAmountPristine(false);
-              setAmountEdit(next);
-              clearProblem('amountInvalid');
-              setErrorText(null);
-            }}
+            replaceOnFirstKey
             actionLabel="完成"
             actionType="button"
             actionData="done"

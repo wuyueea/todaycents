@@ -411,10 +411,6 @@ a.ledger-row:focus-visible {
   line-height: 1.2;
 }
 
-.ledger-row--readonly {
-  cursor: default;
-}
-
 .ledger-note {
   margin: var(--space-3) 0 0;
   color: var(--color-text-muted);

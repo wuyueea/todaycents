@@ -17,7 +17,7 @@
 import type { Db } from '../driver';
 import { newId } from '../id';
 import type { CategoryShare, TxnRow } from './txns';
-import { assertTxnDate, listTxnsByProject, mergeCategoryShares } from './txns';
+import { assertTxnDate, listProjectIncomeAndExpenses, listTxnsByProject, mergeCategoryShares } from './txns';
 
 /** The two states a project can be in; mirrors the v3 project.status CHECK. */
 export type ProjectStatus = 'active' | 'archived';
@@ -337,6 +337,11 @@ export async function projectTotals(db: Db): Promise<ProjectTotal[]> {
 
 /** Default number of 最近几笔 on the project detail screen. */
 export const PROJECT_RECENT_TXN_LIMIT = 5;
+
+export async function projectTransactions(db: Db, id: string): Promise<{ project: Project; rows: TxnRow[] }> {
+  const project = await getProject(db, id);
+  return { project, rows: await listProjectIncomeAndExpenses(db, id) };
+}
 
 /** Everything the detail screen renders, all of it derived from txn. */
 export interface ProjectDetail {

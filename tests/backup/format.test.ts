@@ -102,7 +102,7 @@ describe('backup copy', () => {
   });
 
   it('summarises rows and size under the last-backup title', () => {
-    expect(backupMetaLine(meta())).toBe('231 笔流水 · 46 KB');
+    expect(backupMetaLine(meta())).toBe('231 行流水记录 · 46 KB');
   });
 
   it('reports export and import in one line, with the file name', () => {
@@ -110,7 +110,7 @@ describe('backup copy', () => {
       '已导出「记账本-20261023-1305.ledger」 · 46 KB'
     );
     expect(importDoneToast({ fileName: '记账本-20261023-1305.ledger', rows: 231 })).toBe(
-      '已导入「记账本-20261023-1305.ledger」 · 231 笔'
+      '已导入「记账本-20261023-1305.ledger」 · 231 行流水记录'
     );
   });
 
@@ -156,7 +156,7 @@ describe('backup copy', () => {
         rows: 231,
         clearedProjectRefs: 3,
       })
-    ).toBe('已导入「记账本-20261023-1305.ledger」 · 231 笔；3 笔流水的项目在文件里找不到，已清空');
+    ).toBe('已导入「记账本-20261023-1305.ledger」 · 231 行流水记录；3 笔流水的项目在文件里找不到，已清空');
   });
 
   it('repeats only the before-copy locations the confirmation did not promise', () => {
@@ -166,27 +166,27 @@ describe('backup copy', () => {
         rows: 2,
         beforeDestination: { kind: 'cache' },
       })
-    ).toBe('已导入「x.ledger」 · 2 笔 · 导入前的备份在应用缓存，系统可能清理');
+    ).toBe('已导入「x.ledger」 · 2 行流水记录 · 导入前的备份在应用缓存，系统可能清理');
     expect(
       importDoneToast({
         fileName: 'x.ledger',
         rows: 2,
         beforeDestination: { kind: 'none' },
       })
-    ).toBe('已导入「x.ledger」 · 2 笔 · 导入前的备份这次没有写备份文件');
+    ).toBe('已导入「x.ledger」 · 2 行流水记录 · 导入前的备份这次没有写备份文件');
     expect(
       importDoneToast({
         fileName: 'x.ledger',
         rows: 2,
         beforeDestination: { kind: 'folder', folderName: 'Books' },
       })
-    ).toBe('已导入「x.ledger」 · 2 笔');
+    ).toBe('已导入「x.ledger」 · 2 行流水记录');
   });
 
   it('states file rows, local rows and whole-ledger replacement', () => {
     const summary = importSummary({ fileRows: 231, localRows: 12 });
-    expect(summary).toContain('本机现在有 12 笔');
-    expect(summary).toContain('文件里有 231 笔');
+    expect(summary).toContain('本机现在有 12 行流水记录');
+    expect(summary).toContain('备份文件有 231 行流水记录');
     expect(summary).toContain('会整体替换');
     expect(summary).toContain('不能撤销');
   });
@@ -227,10 +227,10 @@ describe('reset copy', () => {
 
   it('states exactly what 清除所有数据 removes, one count at a time', () => {
     expect(resetSummary(counts)).toBe(
-      '将删除 5 笔流水、7 个账户、13 个分类、2 个标签、2 个项目。'
+      '将删除 5 行流水记录、7 个账户、13 个分类、2 个标签、2 个项目。'
     );
     expect(resetSummary({ txn: 0, account: 6, category: 12, tag: 0, project: 0 })).toBe(
-      '将删除 0 笔流水、6 个账户、12 个分类、0 个标签、0 个项目。'
+      '将删除 0 行流水记录、6 个账户、12 个分类、0 个标签、0 个项目。'
     );
   });
 

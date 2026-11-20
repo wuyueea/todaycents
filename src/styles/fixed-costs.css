@@ -5,16 +5,21 @@
   flex-direction: column;
 }
 
-/* 本月合计是一页唯一的主数：金额墨色、无正负号，和项目总额同一档。 */
 .fixed-total {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 8px;
   margin-top: 16px;
   padding: 18px 0 16px;
   border-top: var(--stroke) solid var(--ink);
   border-bottom: var(--stroke) solid var(--ink);
+}
+
+.fixed-total__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
 }
 
 .fixed-total__label {
@@ -24,6 +29,10 @@
 }
 
 .fixed-total__value {
+  min-width: 0;
+  margin: 0 0 0 auto;
+  overflow-wrap: anywhere;
+  text-align: right;
   color: var(--ink);
   font-family: var(--font-num);
   font-size: 28px;
@@ -78,10 +87,13 @@
 
 .fixed-row__numbers {
   display: flex;
-  flex: none;
+  min-width: 0;
+  max-width: 65%;
   flex-direction: column;
   align-items: flex-end;
   gap: 4px;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .fixed-row__amount {
@@ -92,12 +104,12 @@
   letter-spacing: -.01em;
 }
 
+.fixed-row__estimate,
 .fixed-row__next {
   color: var(--ink-2);
   font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   letter-spacing: .03em;
-  white-space: nowrap;
 }
 
 /* 候选是一张虚线框，提醒它还不是清单的一部分。 */

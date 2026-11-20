@@ -171,9 +171,10 @@ final class SafFolderStore {
         }
     }
 
-    Intent openIntent() {
+    Intent openIntent(String expectedFolderId) {
         synchronized (LOCK) {
             Uri tree = savedUri();
+            if (expectedFolderId != null && !expectedFolderId.equals(localTreeId(tree))) return null;
             try {
                 writableFolderName(tree);
                 return new Intent(Intent.ACTION_VIEW).setDataAndType(folderDocument(tree), Document.MIME_TYPE_DIR);
@@ -191,7 +192,8 @@ final class SafFolderStore {
             Uri tree = savedUri();
             String folderName = writableFolderName(tree);
             String actualName = FolderWriter.writeNew(new Destination(tree), name, bytes);
-            return new JSObject().put("saved", true).put("name", actualName).put("folderName", folderName);
+            return new JSObject().put("saved", true).put("name", actualName)
+                .put("folderName", folderName).put("folderId", localTreeId(tree));
         }
     }
 

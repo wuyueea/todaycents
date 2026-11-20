@@ -5,10 +5,11 @@ import type { TxnEditOrigin } from '../components/TxnEditNavigation';
 import { AmountText } from '../components/AmountText';
 import { ProjectMark, UncategorisedLabel, isUncategorised } from '../components/TxnMarks';
 import { useQuery } from '../store/useDb';
+import { useToday } from '../store/useToday';
 import { listTxnsByMonth } from '../db/repos/txns';
 import type { TxnRow } from '../db/repos/txns';
 import type { Db } from '../db/driver';
-import { formatMonthDay, monthKeyOf, todayLocalISO } from '../domain/date';
+import { formatMonthDay, monthKeyOf } from '../domain/date';
 
 /**
  * 今天: a plain list of the movements recorded on the local day.
@@ -75,7 +76,7 @@ function rowGlyph(row: TxnRow): string {
  *
  * A normal row reads account then note, separated by a plain space. The ledger
  * page uses the same order, so the two lists scan the same way. A transfer leg
- * has no editor and no category: it names its side and account instead, which
+ * has no category: it names its side and account instead, which
  * is what tells the two legs apart. An adjustment says why it is not spending.
  */
 function rowMeta(row: TxnRow): string {
@@ -114,18 +115,6 @@ function TodayCard({ row }: { row: TxnRow }) {
     </>
   );
 
-  if (row.direction === 'transfer') {
-    return (
-      <div
-        className="today-card today-card--readonly"
-        data-txn-id={row.id}
-        data-direction={row.direction}
-      >
-        {body}
-      </div>
-    );
-  }
-
   return (
     <TxnEditLink
       className="today-card"
@@ -138,7 +127,7 @@ function TodayCard({ row }: { row: TxnRow }) {
 }
 
 export default function TodayScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
-  const today = todayLocalISO();
+  const today = useToday();
   const query = useQuery<TodayData>(database => loadTodayData(database, today), [today]);
 
   // A snapshot from another day must never be painted under this day's heading:

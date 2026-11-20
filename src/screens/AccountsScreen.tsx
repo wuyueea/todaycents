@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AmountText, formatCentsDisplay } from '../components/AmountText';
@@ -346,18 +346,22 @@ export default function AccountsScreen() {
   const { db, bump } = useDb();
   const location = useLocation();
   const navigate = useNavigate();
-  // 随手记's empty-account link steps here without unmounting its sheet. This
+  // 随手记's account links step here without unmounting its sheet. This
   // page then has to step back — not jump to 设置 — so the draft is revealed
   // again instead of being replaced by an unrelated page.
-  const fromQuickEntry = (
-    location.state as { quickEntryOpen?: boolean } | null
-  )?.quickEntryOpen === true;
-  const [showArchived, setShowArchived] = useState(false);
+  const entryState = location.state as {
+    quickEntryOpen?: boolean;
+    accountAction?: 'create' | 'restore';
+  } | null;
+  const fromQuickEntry = entryState?.quickEntryOpen === true;
+  const accountAction = fromQuickEntry ? entryState.accountAction : undefined;
+  const [showArchived, setShowArchived] = useState(accountAction === 'restore');
   const query = useQuery<AccountsData>(
     database => loadAccountsData(database, { includeArchived: showArchived }),
     [showArchived]
   );
   const data = query.data;
+  const accountsLoaded = data !== null;
   // The repository already applies the filter; filtering again means a stale
   // snapshot can never resurrect an archived account when the toggle is off.
   const accounts = (data?.accounts ?? []).filter(
@@ -368,7 +372,7 @@ export default function AccountsScreen() {
   const [createProblems, setCreateProblems] = useState<AccountProblems>(noCreateProblems);
   const [createError, setCreateError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showCreate, setShowCreate] = useState(false);
+  const [showCreate, setShowCreate] = useState(accountAction === 'create');
   const [editing, setEditing] = useState<(AccountEditDraft & { id: string }) | null>(null);
   const [editProblems, setEditProblems] = useState<AccountEditProblems>(noEditProblems);
   const [editError, setEditError] = useState<string | null>(null);
@@ -376,6 +380,12 @@ export default function AccountsScreen() {
   const [reconcileInvalid, setReconcileInvalid] = useState(false);
   const [status, setStatus] = useState<StatusNote | null>(null);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (accountAction === 'create' && accountsLoaded) {
+      document.getElementById('accounts-create')?.scrollIntoView({ block: 'start' });
+    }
+  }, [accountAction, accountsLoaded]);
 
   const actualBalanceCents = reconciling === null
     ? null
@@ -614,8 +624,12 @@ export default function AccountsScreen() {
       </header>
 
       {data !== null && (
-        <section className="accounts-hero" aria-label="全部账户余额">
-          <span>全部账户余额</span>
+        <section
+          className="accounts-hero"
+          aria-labelledby="accounts-balance-title"
+          aria-describedby="accounts-balance-scope"
+        >
+          <span id="accounts-balance-title">账户余额</span>
           <strong className="num">
             {formatCentsDisplay(
               accounts
@@ -623,6 +637,9 @@ export default function AccountsScreen() {
                 .reduce((sum, account) => sum + (data.balances[account.id] ?? 0), 0)
             )}
           </strong>
+          <p id="accounts-balance-scope" className="accounts-hero__scope">
+            仅合计未归档账户的余额
+          </p>
         </section>
       )}
 

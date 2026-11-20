@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   list: vi.fn(),
   read: vi.fn(),
   share: vi.fn(),
+  openFolder: vi.fn(),
 }));
 vi.mock('../../src/db', () => ({ getDb: () => Promise.resolve(mocks.db) }));
 vi.mock('../../src/backup/device', () => ({
@@ -30,7 +31,9 @@ vi.mock('../../src/backup/device', () => ({
   deviceFileWriter: { writeForShare: mocks.export, writeCopy: mocks.writeCopy },
   cachedBackups: { list: mocks.list, read: mocks.read, share: mocks.share },
 }));
-vi.mock('../../src/storage/folder', () => ({ deviceFolder: { current: async () => null } }));
+vi.mock('../../src/storage/folder', () => ({
+  deviceFolder: { current: async () => null, open: mocks.openFolder },
+}));
 
 const previous = { at: '2026-01-01T12:00:00.000Z', rows: 12, bytes: 2048 };
 const file: CachedBackup = {
@@ -99,6 +102,7 @@ beforeEach(async () => {
   mocks.list.mockReset().mockResolvedValue([]);
   mocks.read.mockReset();
   mocks.share.mockReset().mockResolvedValue('shared');
+  mocks.openFolder.mockReset().mockResolvedValue(true);
 });
 
 describe('restore directly from the app cache', () => {
@@ -132,6 +136,8 @@ describe('restore directly from the app cache', () => {
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain(file.name);
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('流水日期 · 2026-01-01');
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('未归档账户 · 3 个');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('本机现在有 2 行流水记录，备份文件有 1 行流水记录。');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('已删除的流水也计入。');
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('整体替换');
     expect(mocks.read).toHaveBeenCalledWith(file.name);
     expect(mocks.writeCopy).not.toHaveBeenCalled();
@@ -217,6 +223,25 @@ afterEach(async () => {
 });
 
 describe('backup share confirmation with real metadata', () => {
+  it('opens the folder from the written result and retains a way to find the file if opening fails', async () => {
+    mocks.export.mockResolvedValue({
+      kind: 'folder', folderName: '合成备份', folderId: 'written-tree', fileName: '本次备份 (2).ledger',
+    });
+    mocks.openFolder.mockResolvedValue(false);
+    await mount();
+    await click(button('导出到文件'));
+    await waitFor(() => document.querySelector('[aria-label="导出结果"]') !== null);
+
+    const result = document.querySelector('[aria-label="导出结果"]')!;
+    expect(button('导出到文件').nextElementSibling).toBe(result);
+    expect(result.textContent).toContain('合成备份');
+    expect(result.textContent).toContain('本次备份 (2).ledger');
+    await click(button('打开文件夹'));
+    expect(mocks.openFolder).toHaveBeenCalledWith('written-tree');
+    expect(result.textContent).toContain('请在文件管理器中到「合成备份」查找上方文件');
+    expect(result.textContent).toContain('本次备份 (2).ledger');
+  });
+
   it('keeps the previous record until the user confirms, with no claim of a save receipt', async () => {
     await mount();
     await exportToShare();
@@ -246,12 +271,23 @@ describe('backup share confirmation with real metadata', () => {
   });
 
   it('a canceled native share never opens confirmation or updates metadata', async () => {
-    mocks.export.mockResolvedValue({ kind: 'canceled' });
+    mocks.export.mockResolvedValue({ kind: 'canceled', fileName: newCopy.name });
+    mocks.list.mockResolvedValue([file, newCopy]);
     await mount();
     await click(button('导出到文件'));
     await waitFor(() => document.body.textContent!.includes('已取消导出'));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(await readBackupMeta(db)).toEqual(previous);
+    const result = document.querySelector('[aria-label="导出结果"]')!;
+    expect(result.textContent).toContain(newCopy.name);
+    await click(button('查看缓存文件'));
+    expect(document.activeElement?.querySelector('.backup-cache__name')?.textContent).toBe(newCopy.name);
+    expect(document.activeElement?.querySelector('.backup-cache__share')?.textContent).toBe('另存');
+
+    mocks.list.mockResolvedValue([file]);
+    await click(button('查看缓存文件'));
+    expect(result.textContent).toContain(`暂时无法查看「${newCopy.name}」`);
+    expect(result.querySelector('button')).toBeNull();
   });
 
   it('keeps the old record when recording the user confirmation fails', async () => {

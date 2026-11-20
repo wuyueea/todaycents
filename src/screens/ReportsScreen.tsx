@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { CachedFileList } from '../components/CachedFileList';
+import { CachedFileList, useCachedFileFocus } from '../components/CachedFileList';
+import type { CachedFileListProps } from '../components/CachedFileList';
+import { ExportResultPanel } from '../components/ExportResultPanel';
+import type { ExportFileNotice } from '../components/ExportResultPanel';
 import type { Db } from '../db/driver';
 import { monthReport, yearReport } from '../db/repos/reports';
 import type {
@@ -7,11 +10,12 @@ import type {
   MonthExtreme,
   MonthPoint,
   MonthReport,
+  ReportCategory,
   YearReport,
 } from '../db/repos/reports';
 import { formatCentsDisplay } from '../components/AmountText';
 import { ReportPie, sliceShade } from '../components/ReportPie';
-import { Toast, useToast } from '../components/Toast';
+import { ReportCategoryDetails } from '../components/ReportCategoryDetails';
 import { useDb, useQuery } from '../store/useDb';
 import { cachedReports, deviceBinaryFileWriter } from '../backup/device';
 import type { CachedFile, ShareOutcome } from '../backup/device';
@@ -185,6 +189,9 @@ export interface ReportsViewProps {
   /** True while the workbook is being built or shared. */
   exporting?: boolean;
   feedback?: ExportFeedback | null;
+  exportResult?: ExportFileNotice | null;
+  onViewCached?: (fileName: string) => Promise<boolean>;
+  cacheFocusRequest?: CachedFileListProps['focusRequest'];
   cachedFiles?: readonly CachedFile[];
   cacheReadFailed?: boolean;
   sharing?: boolean;
@@ -192,6 +199,7 @@ export interface ReportsViewProps {
   onModeChange(mode: ReportMode): void;
   onMonthChange(monthKey: string): void;
   onYearChange(year: number): void;
+  onCategorySelect(category: ReportCategory): void;
 }
 
 /**
@@ -212,6 +220,9 @@ export function ReportsView({
   onExport,
   exporting = false,
   feedback = null,
+  exportResult = null,
+  onViewCached,
+  cacheFocusRequest,
   cachedFiles = [],
   cacheReadFailed = false,
   sharing = false,
@@ -219,6 +230,7 @@ export function ReportsView({
   onModeChange,
   onMonthChange,
   onYearChange,
+  onCategorySelect,
 }: ReportsViewProps) {
   const isMonth = mode === 'month';
   const monthData = data !== null && data.kind === 'month' ? data.report : null;
@@ -343,17 +355,24 @@ export function ReportsView({
           {categories.length > 0 && (
             <section className="reports-card reports-rankings" aria-label="分类排行">
               {categories.map((row, index) => (
-                <div className="reports-rank" key={row.categoryId === '' ? `row-${index}` : row.categoryId}>
+                <button
+                  className="reports-rank"
+                  key={row.categoryId}
+                  type="button"
+                  aria-haspopup="dialog"
+                  onClick={() => onCategorySelect(row)}
+                >
                   <span
                     className={`reports-rank__swatch reports-rank__swatch--${sliceShade(index)}`}
                     aria-hidden="true"
                   />
-                  <span className="reports-rank__name">{row.name}</span>
+                  <span className="reports-rank__name">{row.name || '未命名分类'}</span>
                   <span className="reports-rank__amount num">
                     {formatCentsDisplay(row.cents)}
                   </span>
                   <span className="reports-rank__percent num">{row.percent}%</span>
-                </div>
+                  <span className="reports-rank__arrow" aria-hidden="true" />
+                </button>
               ))}
             </section>
           )}
@@ -455,6 +474,14 @@ export function ReportsView({
           </button>
         </>
       )}
+      {exportResult !== null && (
+        <ExportResultPanel
+          result={exportResult}
+          cachedFiles={cachedFiles}
+          onViewCached={onViewCached}
+          busy={exporting || sharing}
+        />
+      )}
       {feedback !== null && (
         <p
           className={feedback.kind === 'error' ? 'reports-note reports-note--error' : 'reports-note'}
@@ -470,6 +497,7 @@ export function ReportsView({
           now={new Date()}
           busy={exporting || sharing}
           onShare={onShareCached}
+          focusRequest={cacheFocusRequest}
           title="应用缓存中的报表"
         >
           <p className="backup-cache__note">
@@ -496,14 +524,16 @@ export default function ReportsScreen() {
   const [mode, setMode] = useState<ReportMode>('month');
   const [monthKey, setMonthKey] = useState(currentMonthKey);
   const [year, setYear] = useState(currentYear);
+  const [categoryDetail, setCategoryDetail] = useState<{ category: ReportCategory; period: string | number } | null>(null);
   const [operation, setOperation] = useState<'export' | 'share' | null>(null);
   const operating = useRef(false);
   const [feedback, setFeedback] = useState<ExportFeedback | null>(null);
+  const [exportResult, setExportResult] = useState<ExportFileNotice | null>(null);
   const [cachedFiles, setCachedFiles] = useState<CachedFile[]>([]);
   const [cacheReadFailed, setCacheReadFailed] = useState(false);
   const [cacheRevision, setCacheRevision] = useState(0);
   const { db } = useDb();
-  const { toast, showToast, clearToast } = useToast();
+  const cacheFocus = useCachedFileFocus(cachedReports.list, setCachedFiles);
 
   useEffect(() => {
     let current = true;
@@ -535,12 +565,22 @@ export default function ReportsScreen() {
       ? query.data
       : null;
 
+  function handleModeChange(nextMode: ReportMode) {
+    if (mode === 'month' && nextMode === 'year') {
+      setYear(Number(monthKey.slice(0, 4)));
+    }
+    setMode(nextMode);
+  }
+
   async function perform(kind: 'export' | 'share', action: () => Promise<void>) {
     if (operating.current) return;
     operating.current = true;
     setOperation(kind);
     setFeedback(null);
-    clearToast();
+    if (kind === 'export') {
+      setExportResult(null);
+      cacheFocus.clear();
+    }
     try {
       await action();
     } catch (reason) {
@@ -563,9 +603,13 @@ export default function ReportsScreen() {
         ? await exportMonthWorkbook(database, deviceBinaryFileWriter, monthKey)
         : await exportYearWorkbook(database, deviceBinaryFileWriter, year);
       if (result.kind === 'folder' || result.kind === 'download') {
-        showToast(exportToast(result));
+        setExportResult({ ...result, text: exportToast(result) });
       } else {
-        setFeedback(shareFeedback(result.fileName, result.kind === 'canceled' ? 'canceled' : 'shared'));
+        setExportResult({
+          kind: 'cache',
+          fileName: result.fileName,
+          text: shareFeedback(result.fileName, result.kind === 'canceled' ? 'canceled' : 'shared').text,
+        });
       }
     });
   }
@@ -590,14 +634,18 @@ export default function ReportsScreen() {
         exporting={operation === 'export'}
         sharing={operation === 'share'}
         feedback={feedback}
+        exportResult={exportResult}
+        onViewCached={cacheFocus.locate}
+        cacheFocusRequest={cacheFocus.focusRequest}
         cachedFiles={cachedFiles}
         cacheReadFailed={cacheReadFailed}
         onShareCached={handleShareCached}
-        onModeChange={setMode}
+        onModeChange={handleModeChange}
         onMonthChange={setMonthKey}
         onYearChange={setYear}
+        onCategorySelect={category => setCategoryDetail({ category, period: mode === 'month' ? monthKey : year })}
       />
-      {toast !== null && <Toast text={toast} />}
+      {categoryDetail && <ReportCategoryDetails {...categoryDetail} onClose={() => setCategoryDetail(null)} />}
     </>
   );
 }

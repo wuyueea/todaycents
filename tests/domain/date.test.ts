@@ -10,6 +10,7 @@ import {
   monthRange,
   shiftMonthKey,
   todayLocalISO,
+  weekdayIndex,
 } from '../../src/domain/date';
 
 describe('date', () => {
@@ -63,6 +64,13 @@ describe('month browsing helpers', () => {
     for (const value of ['', '2026-1', '2026-13', '2026-00', '202610', '2026-10-01']) {
       expect(isMonthKey(value)).toBe(false);
     }
+  });
+
+  it('keeps early four-digit calendar dates valid when browsing', () => {
+    expect(shiftMonthKey('0100-01', -1)).toBe('0099-12');
+    expect(monthRange('0000-02')).toEqual({ start: '0000-02-01', end: '0000-02-29' });
+    expect(weekdayIndex('0001-01-01')).toBe(1);
+    expect(weekdayIndex('2024-02-29')).toBe(4);
   });
 });
 

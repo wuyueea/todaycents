@@ -431,21 +431,31 @@ export async function listTxnsByMonth(db: Db, monthKey: string): Promise<TxnRow[
  * transaction must look identical wherever it is listed, and a soft-deleted
  * row is not a recent expense.
  */
-const LIST_BY_PROJECT = `SELECT ${TXN_COLUMNS}
+const PROJECT_TXNS = `SELECT ${TXN_COLUMNS}
  FROM txn t
  JOIN account a ON a.id = t.account_id
  LEFT JOIN category c ON c.id = t.category_id
  ${TXN_PROJECT_JOIN}
- WHERE t.deleted_at IS NULL AND t.project_id = ?
- ORDER BY t.occurred_date DESC, t.created_at DESC, t.id DESC
- LIMIT ?`;
+ WHERE t.deleted_at IS NULL AND t.project_id = ?`;
+const PROJECT_TXN_ORDER = 'ORDER BY t.occurred_date DESC, t.created_at DESC, t.id DESC';
 
 export async function listTxnsByProject(
   db: Db,
   projectId: string,
   limit: number
 ): Promise<TxnRow[]> {
-  const rows = await db.all<RawTxnRow>(LIST_BY_PROJECT, [projectId, limit]);
+  const rows = await db.all<RawTxnRow>(
+    `${PROJECT_TXNS} ${PROJECT_TXN_ORDER} LIMIT ?`,
+    [projectId, limit]
+  );
+  return rows.map(toTxnRow);
+}
+
+export async function listProjectIncomeAndExpenses(db: Db, projectId: string): Promise<TxnRow[]> {
+  const rows = await db.all<RawTxnRow>(
+    `${PROJECT_TXNS} AND t.direction IN ('expense', 'income') ${PROJECT_TXN_ORDER}`,
+    [projectId]
+  );
   return rows.map(toTxnRow);
 }
 
@@ -477,12 +487,14 @@ export interface EntryDefaults {
 const LAST_ENTRY_DEFAULTS = `SELECT category_id, account_id
  FROM txn
  WHERE direction = ? AND deleted_at IS NULL
- ORDER BY occurred_date DESC, created_at DESC, id DESC
+ ORDER BY julianday(created_at) DESC, rowid DESC
  LIMIT 1`;
 
 /**
- * The category and account of the newest live row of one direction.
+ * The category and account of the most recently created live row of one direction.
  *
+ * Creation time is independent of the ledger date. SQLite also normalizes older
+ * timestamp formats here; ties follow insertion order, which backups preserve.
  * Quick entry uses this so the common case only needs an amount and a submit.
  * The ids are returned exactly as stored, even when the category or account
  * has since been archived: this module has no idea what a picker may show, so
@@ -538,27 +550,20 @@ export interface CategoryShareRow {
   cents: number;
 }
 
-/**
- * Expense totals per first-level category, largest first.
- *
- * A second-level category's cents roll into its parent: 午餐 and 晚餐 are both
- * 饮食 in the report. The parent join is why the key is COALESCE(parent_id,
- * category_id) rather than t.category_id. Each null category collapses into
- * the single 未分类 bucket represented by an empty id, so the bucket is stable
- * across months. Summing the buckets equals monthSummary.expenseCents because
- * both queries take the same live expense rows and joins.
- */
-const SHARES_BY_MONTH = `SELECT COALESCE(c.parent_id, t.category_id) AS category_id,
-        COALESCE(p.name, c.name) AS name,
-        SUM(-t.amount_cents) AS cents
- FROM txn t
+// The ranking and its details must use the same parent key and expense rows.
+const EXPENSE_CATEGORY_KEY = 'COALESCE(c.parent_id, t.category_id)';
+const LIVE_EXPENSES_IN_RANGE = `FROM txn t
  JOIN account a ON a.id = t.account_id
  LEFT JOIN category c ON c.id = t.category_id
  LEFT JOIN category p ON p.id = c.parent_id
  WHERE t.deleted_at IS NULL AND t.direction = 'expense'
-   AND t.occurred_date >= ? AND t.occurred_date <= ?
- GROUP BY COALESCE(c.parent_id, t.category_id)
- ORDER BY cents DESC`;
+   AND t.occurred_date >= ? AND t.occurred_date <= ?`;
+
+const EXPENSE_SHARES_IN_RANGE = `SELECT ${EXPENSE_CATEGORY_KEY} AS category_id,
+        COALESCE(p.name, c.name) AS name,
+        SUM(-t.amount_cents) AS cents
+ ${LIVE_EXPENSES_IN_RANGE}
+ GROUP BY ${EXPENSE_CATEGORY_KEY}`;
 
 export interface CategoryShare {
   /** '' for 未分类: both a NULL category_id and the system row collapse here. */
@@ -601,8 +606,39 @@ export function mergeCategoryShares(rows: readonly CategoryShareRow[]): Category
 
 export async function categoryShares(db: Db, monthKey: string): Promise<CategoryShare[]> {
   const { start, end } = monthRange(monthKey);
-  const rows = await db.all<CategoryShareRow>(SHARES_BY_MONTH, [start, end]);
+  const rows = await db.all<CategoryShareRow>(`${EXPENSE_SHARES_IN_RANGE} ORDER BY cents DESC`, [start, end]);
   return mergeCategoryShares(rows);
+}
+
+export async function categorySharesInRange(db: Db, start: string, end: string): Promise<CategoryShare[]> {
+  const rows = await db.all<CategoryShareRow>(EXPENSE_SHARES_IN_RANGE, [start, end]);
+  return mergeCategoryShares(rows);
+}
+
+export interface CategoryExpense {
+  id: string;
+  occurredDate: string;
+  categoryName: string | null;
+  accountName: string;
+  note: string | null;
+  cents: number;
+}
+
+export async function listCategoryExpensesInRange(
+  db: Db,
+  start: string,
+  end: string,
+  categoryId: string
+): Promise<CategoryExpense[]> {
+  // Match the empty ranking key used by mergeCategoryShares for NULL and the system id.
+  return db.all<CategoryExpense>(
+    `SELECT t.id, t.occurred_date AS occurredDate, c.name AS categoryName,
+            a.name AS accountName, t.note, -t.amount_cents AS cents
+     ${LIVE_EXPENSES_IN_RANGE}
+       AND COALESCE(NULLIF(${EXPENSE_CATEGORY_KEY}, ?), '') = ?
+     ORDER BY t.occurred_date DESC, t.created_at DESC, t.rowid DESC`,
+    [start, end, UNCATEGORIZED_CATEGORY_ID, categoryId]
+  );
 }
 
 /**

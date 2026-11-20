@@ -94,7 +94,7 @@ describe('SettingsScreen', () => {
       imported: { fileName: '记账本-20261020-2214.ledger', rows: 231 },
     });
 
-    expect(html).toContain('已导入「记账本-20261020-2214.ledger」 · 231 笔');
+    expect(html).toContain('已导入「记账本-20261020-2214.ledger」 · 231 行流水记录');
     expect(html).toMatch(/class="toast"[^>]*role="status"/);
   });
 
@@ -119,7 +119,7 @@ describe('SettingsScreen', () => {
       },
     });
 
-    expect(html).toContain('已导入「x.ledger」 · 231 笔');
+    expect(html).toContain('已导入「x.ledger」 · 231 行流水记录');
     expect(html).not.toContain('导入前的备份');
   });
 
@@ -132,7 +132,7 @@ describe('SettingsScreen', () => {
       },
     });
 
-    expect(html).toContain('已导入「x.ledger」 · 231 笔');
+    expect(html).toContain('已导入「x.ledger」 · 231 行流水记录');
     expect(html).not.toContain('导入前的备份');
   });
 
@@ -145,7 +145,7 @@ describe('SettingsScreen', () => {
       },
     });
 
-    expect(html).toContain('231 笔；2 笔流水的项目在文件里找不到，已清空');
+    expect(html).toContain('231 行流水记录；2 笔流水的项目在文件里找不到，已清空');
   });
 
   it('treats a nonsense repaired count as nothing repaired', () => {
@@ -153,7 +153,7 @@ describe('SettingsScreen', () => {
       const html = renderSettings({
         imported: { fileName: 'x.ledger', rows: 231, clearedProjectRefs: bad },
       });
-      expect(html).toContain('已导入「x.ledger」 · 231 笔');
+      expect(html).toContain('已导入「x.ledger」 · 231 行流水记录');
       expect(html).not.toContain('项目在文件里找不到');
     }
   });
@@ -228,7 +228,8 @@ describe('ResetConfirmSheet', () => {
     );
 
     expect(html).toContain('清除所有数据');
-    expect(html).toContain('将删除 5 笔流水、7 个账户、13 个分类、2 个标签、2 个项目。');
+    expect(html).toContain('将删除 5 行流水记录、7 个账户、13 个分类、2 个标签、2 个项目。');
+    expect(html).toContain('每笔转账的转出和转入各计 1 行，已删除的流水也计入。');
     // The starter set survives, exactly as a first launch writes it.
     expect(html).toContain('只留下 3 个账户和 12 个分类');
     expect(html).toContain('不能撤销');

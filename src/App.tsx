@@ -5,7 +5,7 @@ import AppDock from './components/AppDock';
 import GlobalPurgeUndo from './components/GlobalPurgeUndo';
 import { Toast } from './components/Toast';
 import { TxnDeleteProvider } from './components/TxnDelete';
-import { useTxnEditReturn } from './components/TxnEditNavigation';
+import { projectTransactionsParent, useTxnEditReturn } from './components/TxnEditNavigation';
 import TodayScreen from './screens/TodayScreen';
 import QuickEntryScreen from './screens/QuickEntryScreen';
 import type { QuickEntrySessionDraft } from './screens/QuickEntryScreen';
@@ -18,6 +18,7 @@ import TagsScreen from './screens/TagsScreen';
 import CategoriesScreen from './screens/CategoriesScreen';
 import ProjectsScreen from './screens/ProjectsScreen';
 import ProjectDetailScreen from './screens/ProjectDetailScreen';
+import ProjectTransactionsScreen from './screens/ProjectTransactionsScreen';
 import FixedCostsScreen from './screens/FixedCostsScreen';
 import ReportsScreen from './screens/ReportsScreen';
 import StorageScreen from './screens/StorageScreen';
@@ -78,14 +79,14 @@ export default function App() {
   const isEntryOpen = location.pathname === '/add';
   const locationState = location.state as {
     backgroundLocation?: typeof location;
-    /** 账户 was opened from 随手记's empty-account link. */
+    /** 账户 was opened from 随手记 to add or restore an account. */
     quickEntryOpen?: boolean;
   } | null;
   // Opening 随手记 keeps the page underneath mounted: the + navigates to /add
   // with the current location in state, and the base Routes render that saved
   // location. A direct /add (a stale link) has no saved page, so 今天 stands in.
   const backgroundLocation = locationState?.backgroundLocation;
-  // 账户 can be opened from 随手记 when no account exists. Keep the sheet
+  // 账户 can be opened from 随手记 when accounts are missing. Keep the sheet
   // mounted underneath (hidden) so the typed draft survives the detour; the
   // account screen returns by stepping back, which reveals the same instance.
   const quickEntryOpen =
@@ -117,7 +118,8 @@ export default function App() {
     baseLocation.pathname === '/settings/backup' ||
     baseLocation.pathname === '/settings/storage';
   const status = db ? null : error ? '数据层未就绪' : '正在加载数据…';
-  const onTxnList = /^(\/|\/ledger\/?|\/settings\/projects\/[^/]+\/?)$/.test(location.pathname);
+  const onTxnList = /^(\/|\/ledger\/?|\/settings\/projects\/[^/]+\/?)$/.test(location.pathname)
+    || projectTransactionsParent(location.pathname) !== null;
 
   return (
     <div
@@ -140,6 +142,7 @@ export default function App() {
           db={db}
           bump={bump}
           routeKey={location.key}
+          routePath={location.pathname}
           onListPage={onTxnList}
           dock={!isFullScreen}
           stacked={undoVisible}
@@ -159,6 +162,7 @@ export default function App() {
             <Route path="/settings/categories" element={<CategoriesScreen />} />
             <Route path="/settings/projects" element={<ProjectsScreen />} />
             <Route path="/settings/projects/:id" element={<ProjectDetailScreen editReturn={txnEditReturn} />} />
+            <Route path="/settings/projects/:id/transactions" element={<ProjectTransactionsScreen editReturn={txnEditReturn} />} />
             <Route path="/settings/fixed" element={<FixedCostsScreen />} />
             {/* Unknown paths go back to 今天 rather than rendering a blank page. */}
             <Route path="*" element={<Navigate to="/" replace />} />

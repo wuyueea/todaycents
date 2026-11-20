@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { TxnDeleteRow } from '../components/TxnDelete';
-import { TxnEditLink, useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
+import { ProjectTxnList } from '../components/ProjectTxnList';
+import { useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
 import type { TxnEditOrigin } from '../components/TxnEditNavigation';
-import { AmountText } from '../components/AmountText';
 import { Sheet } from '../components/Sheet';
 import { CategoryBar } from '../components/CategoryBar';
 import { AmountKeypadField } from '../components/AmountKeypadField';
@@ -19,9 +18,7 @@ import {
   unarchiveProject,
 } from '../db/repos/projects';
 import type { Project, ProjectDetail } from '../db/repos/projects';
-import type { TxnRow } from '../db/repos/txns';
 import type { Db } from '../db/driver';
-import { formatMonthDay } from '../domain/date';
 import { formatCents } from '../domain/money';
 import { formatCentsDisplay } from '../components/AmountText';
 import { sharePercentTenths } from '../domain/report';
@@ -147,19 +144,6 @@ export function ProjectArchiveSheet({
   );
 }
 
-/** What sits in a recent row's category slot, with the row's own kind first. */
-function recentRowParts(row: TxnRow): { title: string; meta: string } {
-  const category = row.categoryName ?? '未分类';
-  const day = formatMonthDay(row.occurredDate);
-  if (row.direction === 'transfer') return { title: row.note !== '' ? row.note : '转账', meta: day };
-  if (row.direction === 'adjust') return { title: row.note !== '' ? row.note : '调整', meta: day };
-  // A note is the title (as in the prototype); without one the category is the
-  // title and the date alone is enough, so nothing is printed twice.
-  return row.note !== ''
-    ? { title: row.note, meta: `${day} · ${category}` }
-    : { title: category, meta: day };
-}
-
 export default function ProjectDetailScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
   const { db, bump } = useDb();
   const params = useParams<{ id: string }>();
@@ -270,40 +254,6 @@ export default function ProjectDetailScreen({ editReturn = null }: { editReturn?
     }
   };
 
-  const renderRecent = (row: TxnRow) => {
-    const { title, meta } = recentRowParts(row);
-    const body = (
-      <>
-        <span className="project-txn__body">
-          <span className="project-txn__title">{title}</span>
-          <span className="project-txn__meta">{meta}</span>
-        </span>
-        <AmountText cents={row.amountCents} direction={row.direction} />
-      </>
-    );
-
-    if (row.direction === 'transfer') {
-      return (
-        <TxnDeleteRow key={row.id} row={row} label={title}>
-          <div className="project-txn project-txn--readonly" data-txn-id={row.id}>
-            {body}
-          </div>
-        </TxnDeleteRow>
-      );
-    }
-
-    return (
-      <TxnDeleteRow key={row.id} row={row} label={title}>
-        <TxnEditLink
-          className="project-txn"
-          txnId={row.id}
-        >
-          {body}
-        </TxnEditLink>
-      </TxnDeleteRow>
-    );
-  };
-
   return (
     <div className="project-detail-screen project-detail-screen--v1">
       <header className="settings-header">
@@ -371,7 +321,15 @@ export default function ProjectDetailScreen({ editReturn = null }: { editReturn?
           {data.detail.recentTxns.length > 0 && (
             <section className="project-section-block" aria-label="最近几笔">
               <h2 className="project-section">最近几笔</h2>
-              <ul className="project-recent">{data.detail.recentTxns.map(renderRecent)}</ul>
+              <ProjectTxnList rows={data.detail.recentTxns} />
+              {txnCount > data.detail.recentTxns.length && (
+                <Link
+                  className="project-view-all"
+                  to={`/settings/projects/${encodeURIComponent(data.detail.project.id)}/transactions`}
+                >
+                  查看全部流水 <span aria-hidden="true">›</span>
+                </Link>
+              )}
             </section>
           )}
 

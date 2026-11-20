@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { CachedFile } from '../backup/device';
 import { fileSizeText, formatBackupTime } from '../backup/format';
@@ -10,20 +10,48 @@ export interface CachedFileListProps {
   onShare(file: CachedFile): void;
   onRestore?(file: CachedFile): void;
   highlightedName?: string;
+  focusRequest?: { name: string } | null;
+}
+
+/** Recheck the cache before focusing a file that might have been removed. */
+export function useCachedFileFocus(
+  load: () => Promise<CachedFile[]>,
+  onRead: (files: CachedFile[]) => void
+) {
+  const [focusRequest, setFocusRequest] = useState<CachedFileListProps['focusRequest']>();
+  const latestRequest = useRef(0);
+
+  async function locate(name: string): Promise<boolean> {
+    const request = ++latestRequest.current;
+    const files = await load();
+    if (request !== latestRequest.current) return false;
+    onRead(files);
+    const available = files.some(file => file.name === name && file.unavailableReason === undefined);
+    if (available) setFocusRequest({ name });
+    return available;
+  }
+
+  function clear() {
+    latestRequest.current += 1;
+    setFocusRequest(null);
+  }
+
+  return { focusRequest, locate, clear };
 }
 
 export function CachedFileList({
-  files, now, busy, onShare, onRestore, highlightedName, title, children,
+  files, now, busy, onShare, onRestore, highlightedName, focusRequest, title, children,
 }: CachedFileListProps & { title: string; children: ReactNode }) {
   const titleId = useId();
   const highlightedRow = useRef<HTMLLIElement>(null);
-  const highlighted = files.find(file => file.name === highlightedName);
+  const targetName = focusRequest === undefined ? highlightedName : focusRequest?.name;
+  const highlighted = files.find(file => file.name === targetName);
   const highlightedKey = highlighted?.name;
   useEffect(() => {
     const row = highlightedRow.current;
     row?.scrollIntoView?.({ block: 'nearest' });
     row?.focus({ preventScroll: true });
-  }, [highlightedKey]);
+  }, [highlightedKey, focusRequest]);
   if (files.length === 0) return null;
 
   return (

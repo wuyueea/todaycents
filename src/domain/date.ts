@@ -5,7 +5,7 @@ function pad2(value: number): string {
 /** Today on the local calendar as YYYY-MM-DD; never derived from UTC. */
 export function todayLocalISO(): string {
   const now = new Date();
-  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  return `${String(now.getFullYear()).padStart(4, '0')}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
 }
 
 /** Month bucket of a YYYY-MM-DD date, taken from the string prefix only. */
@@ -62,18 +62,14 @@ export function shiftMonthKey(monthKey: string, delta: number): string {
   const totalMonths = year * 12 + (month - 1) + delta;
   const nextYear = Math.floor(totalMonths / 12);
   const nextMonth = totalMonths - nextYear * 12 + 1;
-  return `${nextYear}-${pad2(nextMonth)}`;
+  const yearLabel = nextYear < 0 ? String(nextYear) : String(nextYear).padStart(4, '0');
+  return `${yearLabel}-${pad2(nextMonth)}`;
 }
 
 /** First and last day of a YYYY-MM month, inclusive on both ends. */
 export function monthRange(monthKey: string): { start: string; end: string } {
   const [year, month] = monthKey.split('-').map(Number);
-  // Day 0 of the following month is the last day of the requested month; the
-  // date is built locally, so 28/29/30/31-day months need no special casing.
-  const lastDay = new Date(year, month, 0).getDate();
-  const start = `${year}-${pad2(month)}-01`;
-  const end = `${year}-${pad2(month)}-${pad2(lastDay)}`;
-  return { start, end };
+  return { start: `${monthKey}-01`, end: `${monthKey}-${pad2(daysInCivilMonth(year, month))}` };
 }
 
 const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -81,6 +77,10 @@ const DAYS_IN_MONTH = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 /** Gregorian leap rule, including the century exceptions. */
 function isLeapYear(year: number): boolean {
   return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+}
+
+function daysInCivilMonth(year: number, month: number): number {
+  return month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
 }
 
 interface CivilDay {
@@ -108,7 +108,7 @@ function parseCivilDay(dateISO: string): CivilDay {
   if (month < 1 || month > 12) {
     throw new RangeError(`date must be YYYY-MM-DD, received ${dateISO}`);
   }
-  const lastDay = month === 2 && isLeapYear(year) ? 29 : DAYS_IN_MONTH[month - 1];
+  const lastDay = daysInCivilMonth(year, month);
   if (day < 1 || day > lastDay) {
     throw new RangeError(`date must be YYYY-MM-DD, received ${dateISO}`);
   }
@@ -182,4 +182,10 @@ export function daysBetweenISO(fromISO: string, toISO: string): number {
   return (
     daysFromCivil(to.year, to.month, to.day) - daysFromCivil(from.year, from.month, from.day)
   );
+}
+
+/** Weekday of a civil date, with Sunday at index 0. */
+export function weekdayIndex(dateISO: string): number {
+  const offset = daysBetweenISO('1970-01-01', dateISO) + 4;
+  return ((offset % 7) + 7) % 7;
 }

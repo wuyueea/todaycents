@@ -180,6 +180,7 @@ function quickEntryData(overrides: Partial<QuickEntryData> = {}): QuickEntryData
   return {
     categories: [FOOD, SPORT, SHUTTLECOCK, REIMBURSEMENT],
     accounts: [CARD, WECHAT],
+    hasArchivedAccounts: false,
     tags: [NIGHT, ROOMMATE, MOVED],
     projects: [TRIP, OLD_PROJECT],
     lastUsed: {
@@ -969,6 +970,38 @@ describe('lastEntryDefaults', () => {
       accountId: null,
     });
   });
+
+  it('orders by normalized creation time, then insertion order, skipping deleted rows', async () => {
+    const db = await createTestDb();
+    await seedDefaults(db);
+    await db.run(`
+      WITH sample(position, id, occurred_date, account_name, category_name, created_at, deleted_at) AS (
+        VALUES
+          (1, 'today', '2026-10-20', '微信', '饮食', '2026-10-20T08:00:00.100Z', NULL),
+          (2, 'z-backdated', '2026-10-01', '支付宝', '运动', '2026-10-20T08:00:00.200Z', NULL),
+          (3, 'a-tie', '2026-09-01', '银行卡', '交通', '2026-10-20T02:00:00.200-06:00', NULL),
+          (4, 'older-import', '2026-10-19', '微信', '饮食', '2026-10-20T08:00:00.150Z', NULL),
+          (5, 'deleted', '2026-10-20', '微信', '饮食', '2026-10-20T08:00:00.300Z', '2026-10-20T08:00:01Z')
+      )
+      INSERT INTO txn (id, occurred_date, account_id, direction, category_id, amount_cents, created_at, deleted_at)
+      SELECT s.id, s.occurred_date, a.id, 'expense', c.id, -100, s.created_at, s.deleted_at
+      FROM sample s JOIN account a ON a.name = s.account_name
+      JOIN category c ON c.name = s.category_name AND c.kind = 'expense'
+      ORDER BY s.position;
+    `);
+    const categories = await listCategories(db, 'expense');
+    const accounts = await listAccounts(db);
+
+    expect(await lastEntryDefaults(db, 'expense')).toEqual({
+      categoryId: categories.find(category => category.name === '交通')!.id,
+      accountId: accounts.find(account => account.name === '银行卡')!.id,
+    });
+    await db.run("UPDATE txn SET deleted_at = '2026-10-20T08:00:01Z' WHERE id = 'a-tie'");
+    expect(await lastEntryDefaults(db, 'expense')).toEqual({
+      categoryId: categories.find(category => category.name === '运动')!.id,
+      accountId: accounts.find(account => account.name === '支付宝')!.id,
+    });
+  });
 });
 
 describe('applyAmountKey', () => {
@@ -1157,6 +1190,18 @@ it('opens as a bottom sheet on 支出 with the last used category and account se
     expect(html).not.toContain('确认转账');
   });
 
+  it('explains when transfer has no active account and offers archived recovery', () => {
+    store.data = quickEntryData({ accounts: [], hasArchivedAccounts: true });
+    const html = renderScreen('transfer');
+
+    expect(html).toContain('转账需要两个可用账户。目前没有可用账户。');
+    expect(html).toContain('>新增账户</a>');
+    expect(html).toContain('>恢复已归档账户</a>');
+    expect(html).not.toContain('data-from-account-id=');
+    expect(html).not.toContain('data-to-account-id=');
+    expect(openingTag(html, 'data-action="save"')).toContain('disabled');
+  });
+
   it('falls back to no selected category when the last one is no longer live', () => {
     store.data = quickEntryData({
       lastUsed: {
@@ -1170,6 +1215,22 @@ it('opens as a bottom sheet on 支出 with the last used category and account se
     // Top categories are still offered, but none claims to be chosen.
     expect(html).toContain('data-category-id="c-food"');
     expect(html.match(/data-category-id="[^"]+"[^>]*aria-pressed="true"/g) ?? []).toHaveLength(0);
+  });
+
+  it('does not prefill an orphaned child or an archived account from the latest row', () => {
+    store.data = quickEntryData({
+      categories: [FOOD, SHUTTLECOCK, REIMBURSEMENT],
+      lastUsed: {
+        expense: { categoryId: SHUTTLECOCK.id, accountId: BANK.id },
+        income: { categoryId: REIMBURSEMENT.id, accountId: CARD.id },
+      },
+    });
+    const html = renderScreen();
+
+    expect(openingTag(html, 'data-category-id="c-food"')).toContain('aria-pressed="false"');
+    expect(html).not.toContain(`data-subcategory-id="${SHUTTLECOCK.id}"`);
+    expect(html).not.toContain(`data-account-id="${BANK.id}"`);
+    expect(openingTag(html, 'data-account-id="a-card"')).toContain('aria-pressed="true"');
   });
 
   it('sends the retired /transfer route to /add instead of the old transfer form', () => {

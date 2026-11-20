@@ -84,6 +84,38 @@
   line-height: 1.65;
 }
 
+.export-result {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--v1-s2);
+  overflow-wrap: anywhere;
+}
+
+.app-shell .export-result > p {
+  margin: 0;
+  color: var(--v1-ink);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.app-shell .export-result > .export-result__notice {
+  margin-top: 6px;
+}
+
+.export-result__action {
+  min-height: 44px;
+  margin-top: 6px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--v1-card);
+  color: var(--v1-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .backup-screen--v1 .backup-button {
   width: 100%;
   min-height: 44px;
@@ -289,7 +321,7 @@
   background: var(--v1-amb);
 }
 
-.backup-screen--v1 .backup-cache__row[tabindex="-1"] {
+:is(.backup-screen--v1, .reports-screen) .backup-cache__row[tabindex="-1"] {
   background: var(--v1-s2);
 }
 

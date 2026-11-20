@@ -71,4 +71,13 @@ describe('folder bridge', () => {
     expect(await access.write('x.xlsx', 'AAEC')).toEqual({ saved: true, name: 'x (2).xlsx' });
     expect(writeFile).toHaveBeenCalledWith({ name: 'x.xlsx', base64: 'AAEC' });
   });
+
+  it('passes the written folder identity when opening an export result', async () => {
+    const openFolder = vi.fn<FolderPlugin['openFolder']>()
+      .mockResolvedValueOnce({ opened: false }).mockResolvedValueOnce({ opened: true });
+    const access = createFolderAccess(async () => fake({ openFolder }));
+    expect(await access.open('written-tree')).toBe(false);
+    expect(await access.open()).toBe(true);
+    expect(openFolder.mock.calls).toEqual([[{ folderId: 'written-tree' }], []]);
+  });
 });

@@ -337,7 +337,7 @@ describe('TodayScreen', () => {
     expect(html).not.toContain('¥');
   });
 
-  it('renders a transfer leg read-only with a 转账 label and no edit link', () => {
+  it('links the transfer leg to its detail with a 转账 label', () => {
     const today = todayLocalISO();
     store.data = todayData([
       txn({
@@ -356,11 +356,10 @@ describe('TodayScreen', () => {
 
     expect(html).toContain('转账');
     expect(html).toContain('−600.00');
-    expect(card(html, 'txn-leg-out')).toContain('today-card--readonly');
     const tag = openingTag(html, 'data-txn-id="txn-leg-out"');
-    expect(tag.startsWith('<a ')).toBe(false);
+    expect(tag.startsWith('<a ')).toBe(true);
     expect(tag).toContain('data-direction="transfer"');
-    expect(html).not.toContain('/txn/txn-leg-out');
+    expect(tag).toContain('href="/txn/txn-leg-out"');
   });
 
   it('labels an adjustment as 调整 rather than as an uncategorised expense', () => {

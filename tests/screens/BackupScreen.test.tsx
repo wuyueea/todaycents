@@ -76,7 +76,8 @@ describe('BackupScreen', () => {
     expect(html).toContain('<h1>备份与恢复</h1>');
     expect(html).toContain('最近一次确认备份');
     expect(html).toContain('昨天 22:14');
-    expect(html).toContain('231 笔流水 · 46 KB');
+    expect(html).toContain('231 行流水记录 · 46 KB');
+    expect(html).toContain('每笔转账的转出和转入各计 1 行，已删除的流水也计入。');
     expect(html).toContain('导出到文件');
     expect(html).toContain('从文件导入');
     expect(html).toContain('backup-button--primary');
@@ -89,7 +90,7 @@ describe('BackupScreen', () => {
 
     expect(html).toContain('还没有确认保存的备份');
     expect(html).not.toContain('最近一次恢复');
-    expect(html).not.toContain('笔流水 ·');
+    expect(html).not.toContain('行流水记录 ·');
     expect(html).toContain('导出到文件');
   });
 
@@ -123,11 +124,12 @@ describe('ImportConfirmSheet', () => {
     expect(html).toContain('从文件导入');
     expect(html).toContain('版本 1');
     expect(html).toContain('记账本-20261020-2214.ledger');
-    expect(html).toContain('231 笔 · 46 KB');
+    expect(html).toContain('46 KB');
     expect(html).toContain('流水日期 · 2025-11-10 至 2026-10-20');
     expect(html).toContain('未归档账户 · 2 个');
     expect(html).toContain('10月20日 22:14');
-    expect(html).toContain('本机现在有 12 笔');
+    expect(html).toContain('本机现在有 12 行流水记录，备份文件有 231 行流水记录。');
+    expect(html).toContain('每笔转账的转出和转入各计 1 行，已删除的流水也计入。');
     expect(html).toContain('会整体替换');
     expect(html).toContain('当前的记录不保留，也不能撤销');
     expect(html).toContain('会先把现在的账本导出成一份备份');
@@ -220,7 +222,7 @@ describe('ImportFailureSheet', () => {
       <ImportFailureSheet
         copy={importFailureCopy(new Error('备份文件的 tables 缺少数据表：tag。'))}
         fileName="broken.ledger"
-        fileMeta="231 笔 · 46 KB"
+        fileMeta="231 行流水记录 · 46 KB"
         onClose={() => {}}
       />
     );

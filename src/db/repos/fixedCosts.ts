@@ -17,6 +17,7 @@
  */
 import type { Db } from '../driver';
 import { newId } from '../id';
+import { monthKeyOf, todayLocalISO } from '../../domain/date';
 import { findRecurringRuns, monthEndClampedPlusOneMonth } from '../../domain/recurring';
 import type { RecurringRow, RecurringRun } from '../../domain/recurring';
 import { UNCATEGORIZED_CATEGORY_ID, UNCATEGORIZED_CATEGORY_NAME } from '../schema';
@@ -50,7 +51,7 @@ export interface FixedCost {
   categoryId: string | null;
   categoryName: string | null;
   payee: string | null;
-  /** The newest flagged bill's amount, positive integer cents. */
+  /** The latest matched bill's amount, positive integer cents. */
   monthlyCents: number;
   lastDate: string;
   nextDate: string;
@@ -58,6 +59,11 @@ export interface FixedCost {
   dayOfMonth: number;
   /** How many live flagged rows stand behind this line. */
   occurrences: number;
+}
+
+export interface FixedCostListItem extends FixedCost {
+  /** Actual matched expenses in the current local month, in positive integer cents. */
+  recordedCents: number;
 }
 
 /** Everything detectCandidates accepts; `now` exists so tests can pin the stamp. */
@@ -192,8 +198,6 @@ interface FlaggedGroup {
   categoryId: string | null;
   payee: string | null;
   categoryName: string | null;
-  /** Newest bill of the identity, flagged or not. */
-  latest: BillRow;
   /** Newest bill the owner actually flagged; the walk's starting point. */
   anchor: BillRow;
   occurrences: number;
@@ -481,16 +485,15 @@ async function categoryNameOf(db: Db, categoryId: string | null): Promise<string
  * The confirmed list, built from the live flagged expense rows.
  *
  * Rows are grouped by the same identity detection uses — category plus payee —
- * and each group becomes one line: the newest bill supplies the amount, the
- * date and the day of the month, and the clamped next date is the month after
- * it. Only the latest amount counts, never the sum of every flagged row; the
- * list answers "what will next month cost", not "what did this pattern cost".
+ * and each group becomes one line. The last matched bill supplies the estimate.
+ * The recorded total counts the group's explicitly flagged bills and later
+ * matched bills for the current month through today.
  *
  * Rows whose category was archived or deleted still count: 历史保留. A flagged
  * row in a deleted category has been reflowed into 未分类 by then, which is why
  * the join is a LEFT JOIN and the name falls back to the payee.
  */
-export async function listFixedCosts(db: Db): Promise<FixedCost[]> {
+export async function listFixedCosts(db: Db, today = todayLocalISO()): Promise<FixedCostListItem[]> {
   const rows = await db.all<BillRow>(FLAGGED_SQL);
   const groups = new Map<string, FlaggedGroup>();
   for (const row of rows) {
@@ -504,27 +507,27 @@ export async function listFixedCosts(db: Db): Promise<FixedCost[]> {
         categoryId: row.category_id,
         payee,
         categoryName: row.category_name,
-        latest: row,
         anchor: row,
         occurrences: 1,
         rows: [row],
       });
     } else {
-      existing.latest = row; // rows arrive oldest first
       existing.rows.push(row);
       existing.occurrences += 1;
       if (row.is_fixed_cost === 1) existing.anchor = row;
     }
   }
 
+  const monthStart = `${monthKeyOf(today)}-01`;
   const items = [...groups.values()].map(group => {
-    const bill = latestPlausibleOccurrence(group);
+    const { bill, recordedCents } = summarizeOccurrences(group, monthStart, today);
     return {
       name: displayName(group.payee, group.categoryName),
       categoryId: group.categoryId,
       categoryName: group.categoryName,
       payee: group.payee,
       monthlyCents: -bill.amount_cents,
+      recordedCents,
       lastDate: bill.occurred_date,
       nextDate: monthEndClampedPlusOneMonth(bill.occurred_date),
       dayOfMonth: dayOfMonth(bill.occurred_date),
@@ -541,24 +544,31 @@ export async function listFixedCosts(db: Db): Promise<FixedCost[]> {
 }
 
 /**
- * The bill the line currently points at.
+ * The latest matching bill and the month's actual recorded amount.
  *
  * Starts from the row the owner actually flagged, then walks forward through the
  * identity's later bills, accepting one only when its amount is within the
  * detector's own ±15%. A month that looks like the same charge moves the date
  * and the amount; a one-off shopping trip in the same category does not.
  */
-function latestPlausibleOccurrence(group: FlaggedGroup): BillRow {
-  let current = group.anchor;
+function summarizeOccurrences(
+  group: FlaggedGroup,
+  monthStart: string,
+  today: string
+): { bill: BillRow; recordedCents: number } {
+  let bill = group.anchor;
+  let recordedCents = 0;
   for (const row of group.rows) {
-    if (row.occurred_date <= current.occurred_date) continue;
-    if (row.is_fixed_cost === 1) {
-      current = row;
-      continue;
+    if (row.is_fixed_cost !== 1) {
+      if (row.occurred_date <= bill.occurred_date ||
+          !withinTolerance(row.amount_cents, bill.amount_cents)) continue;
+      bill = row;
     }
-    if (withinTolerance(row.amount_cents, current.amount_cents)) current = row;
+    if (row.occurred_date >= monthStart && row.occurred_date <= today) {
+      recordedCents -= row.amount_cents;
+    }
   }
-  return current;
+  return { bill, recordedCents };
 }
 
 /** Same tolerance the detector uses: 15%, compared in integers. */
@@ -592,11 +602,7 @@ export async function setTxnFixedCost(db: Db, txnId: string, on: boolean): Promi
 }
 
 /**
- * What the confirmed list costs per month, in integer cents.
- *
- * Summed from listFixedCosts on purpose: the header and the lines can never
- * disagree, because there is exactly one derivation of "每月多少钱". This is
- * the money already promised — not what this month's ledger happens to show.
+ * The estimated monthly total for the confirmed list, in integer cents.
  */
 export async function monthlyTotalCents(db: Db): Promise<number> {
   const items = await listFixedCosts(db);

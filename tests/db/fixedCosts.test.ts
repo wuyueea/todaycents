@@ -365,7 +365,7 @@ describe('confirmCandidate', () => {
       dayOfMonth: 1,
       occurrences: 5,
     });
-    expect(await listFixedCosts(db)).toEqual([item]);
+    expect(await listFixedCosts(db)).toMatchObject([item]);
     expect(await monthlyTotalCents(db)).toBe(5988);
     expect(await listCandidates(db)).toEqual([]);
     expect(await hintRows(db)).toMatchObject([{ status: 'confirmed' }]);
@@ -542,13 +542,14 @@ describe('listFixedCosts and monthlyTotalCents', () => {
     });
     await db.run('UPDATE txn SET is_fixed_cost = 1 WHERE id = ?', [id]);
 
-    expect(await listFixedCosts(db)).toEqual([
+    expect(await listFixedCosts(db, '2026-10-06')).toEqual([
       {
         name: '视频会员',
         categoryId: subs,
         categoryName: '订阅',
         payee: '视频会员',
         monthlyCents: 2500,
+        recordedCents: 2500,
         lastDate: '2026-10-05',
         nextDate: '2026-11-05',
         dayOfMonth: 5,
@@ -556,6 +557,30 @@ describe('listFixedCosts and monthlyTotalCents', () => {
       },
     ]);
     expect(await monthlyTotalCents(db)).toBe(2500);
+  });
+
+  it('counts live flagged and later matching bills once, in the local month through today', async () => {
+    const { db, card, phone } = await fixture();
+    for (const [date, cents] of [['2025-12-08', 4500], ['2026-01-03', 4400], ['2026-01-03', 4500]] as const) {
+      const id = await bill(db, { date, cents, categoryId: phone, accountId: card, payee: '话费' });
+      await setTxnFixedCost(db, id, true);
+    }
+    const deleted = await bill(db, {
+      date: '2026-01-05', cents: 4500, categoryId: phone, accountId: card, payee: '话费',
+    });
+    await setTxnFixedCost(db, deleted, true);
+    await softDeleteTxn(db, deleted);
+    for (const [date, cents] of [['2026-01-06', 4700], ['2026-01-07', 19000]] as const) {
+      await bill(db, { date, cents, categoryId: phone, accountId: card, payee: '话费' });
+    }
+
+    expect(await listFixedCosts(db, '2026-01-31')).toMatchObject([
+      { recordedCents: 13600, monthlyCents: 4700, lastDate: '2026-01-06', nextDate: '2026-02-06' },
+    ]);
+    expect(await listFixedCosts(db, '2026-01-05')).toMatchObject([{ recordedCents: 8900 }]);
+    expect(await listFixedCosts(db, '2026-02-01')).toMatchObject([
+      { recordedCents: 0, monthlyCents: 4700 },
+    ]);
   });
 
   it('takes the newest flagged row as the amount and the date', async () => {

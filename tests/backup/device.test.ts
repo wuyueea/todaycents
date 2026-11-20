@@ -25,6 +25,7 @@ interface HarnessOptions {
   /** Simulates a bridge that answers but did not save. */
   saved?: boolean;
   actualName?: string;
+  folderId?: string;
   cachedName?: string;
   /** Simulates the owner dismissing the system share sheet. */
   share?: ShareOutcome;
@@ -39,6 +40,7 @@ function harness({
   folder,
   saved = true,
   actualName,
+  folderId,
   cachedName,
   share = 'shared',
   folderWriteError,
@@ -60,7 +62,7 @@ function harness({
     write: async (name, base64) => {
       folderWrites.push({ name, base64 });
       if (folderWriteError !== undefined) throw folderWriteError;
-      return { saved, name: actualName ?? name };
+      return { saved, name: actualName ?? name, folderId };
     },
   };
 
@@ -70,7 +72,8 @@ function harness({
     writeCacheFile: async (fileName, text) => {
       if (cacheTextError !== undefined) throw cacheTextError;
       cacheText.push({ fileName, text });
-      return { fileName, uri: `file:///cache/${fileName}` };
+      const name = cachedName ?? fileName;
+      return { fileName: name, uri: `file:///cache/${name}` };
     },
     writeCachedReport: async (fileName, bytes) => {
       cacheBytes.push({ fileName, bytes });
@@ -127,10 +130,12 @@ describe('deviceFileWriter with a chosen folder', () => {
   });
 
   it('writes workbook bytes into the folder without a second encoding', async () => {
-    const h = harness({ native: true, folder: FOLDER });
+    const h = harness({ native: true, folder: FOLDER, folderId: 'local-tree', actualName: '记账本 (2).xlsx' });
     const bytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x00, 0xff]);
 
-    await h.writers.binary.writeForShare('记账本-2026-10.xlsx', bytes, XLSX_MIME_TYPE);
+    await expect(h.writers.binary.writeForShare('记账本-2026-10.xlsx', bytes, XLSX_MIME_TYPE)).resolves.toEqual({
+      kind: 'folder', folderName: 'Books', folderId: 'local-tree', fileName: '记账本 (2).xlsx',
+    });
 
     expect(h.folderWrites).toEqual([
       { name: '记账本-2026-10.xlsx', base64: bytesToBase64(bytes) },
@@ -162,7 +167,7 @@ describe('deviceFileWriter when the chosen folder write rejects', () => {
 
     const destination = await h.writers.text.writeForShare('a.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'share' });
+    expect(destination).toEqual({ kind: 'share', fileName: 'a.ledger' });
     expect(h.folderWrites).toHaveLength(1);
     expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
     expect(h.shared).toEqual([
@@ -176,11 +181,12 @@ describe('deviceFileWriter when the chosen folder write rejects', () => {
       folder: FOLDER,
       folderWriteError: folderError,
       share: 'canceled',
+      cachedName: 'a (2).ledger',
     });
 
     const destination = await h.writers.text.writeForShare('a.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'canceled' });
+    expect(destination).toEqual({ kind: 'canceled', fileName: 'a (2).ledger' });
     expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
     expect(h.shared).toHaveLength(1);
   });
@@ -250,7 +256,7 @@ describe('deviceFileWriter without a chosen folder', () => {
 
     const destination = await h.writers.text.writeForShare('a.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'share' });
+    expect(destination).toEqual({ kind: 'share', fileName: 'a.ledger' });
     expect(h.folderWrites).toHaveLength(0);
     expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
     expect(h.shared).toEqual([{ fileName: 'a.ledger', uri: 'file:///cache/a.ledger' }]);
@@ -272,7 +278,7 @@ describe('deviceFileWriter without a chosen folder', () => {
 
     const destination = await h.writers.text.writeForShare('a.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'share' });
+    expect(destination).toEqual({ kind: 'share', fileName: 'a.ledger' });
     expect(h.folderWrites).toHaveLength(1);
     expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
     expect(h.shared).toHaveLength(1);
@@ -294,7 +300,7 @@ describe('deviceFileWriter without a chosen folder', () => {
 
     const destination = await h.writers.text.writeForShare('a.ledger', 'text');
 
-    expect(destination).toEqual({ kind: 'canceled' });
+    expect(destination).toEqual({ kind: 'canceled', fileName: 'a.ledger' });
     // The cache file is still there; canceling the share does not delete it.
     expect(h.cacheText).toEqual([{ fileName: 'a.ledger', text: 'text' }]);
     expect(h.shared).toHaveLength(1);

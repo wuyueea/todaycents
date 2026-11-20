@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   AmountKeypad,
   applyAmountKey,
@@ -7,7 +7,7 @@ import {
 import { Sheet } from '../components/Sheet';
 import { createSaveExit } from '../components/saveExit';
 import { isPlainLinkClick } from '../components/TxnEditNavigation';
-import type { ChangeEvent, FormEvent } from 'react';
+import type { ChangeEvent, FormEvent, MouseEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { createTagForPicker } from '../components/createTagForPicker';
 import { useDb, useQuery } from '../store/useDb';
@@ -24,7 +24,8 @@ import type { EntryDefaults } from '../db/repos/txns';
 import { UNCATEGORIZED_CATEGORY_ID } from '../db/schema';
 import type { Db } from '../db/driver';
 import type { Account, Direction } from '../domain/types';
-import { formatMonthDay, todayLocalISO } from '../domain/date';
+import { formatMonthDay } from '../domain/date';
+import { useToday } from '../store/useToday';
 import { parseAmountToCents } from '../domain/money';
 
 /**
@@ -41,6 +42,7 @@ export interface QuickEntryData {
   /** Live categories of both kinds; the screen filters by direction. */
   categories: Category[];
   accounts: Account[];
+  hasArchivedAccounts: boolean;
   /** Every known tag; the sheet filters archived rows out. */
   tags: Tag[];
   /** Live projects only: a finished trip must not receive a new row. */
@@ -75,7 +77,7 @@ export interface QuickEntrySessionDraft {
   direction: EntryDirection;
   amount: string;
   categoryChoices: Partial<Record<CategoryDirection, string | null>>;
-  accountChoice?: string;
+  accountChoices: Partial<Record<CategoryDirection, string>>;
   fromChoice?: string;
   toChoice?: string;
   dateChoice?: string;
@@ -400,8 +402,33 @@ type QuickEntryDestination = 'close' | 'ledger';
 
 function defaultEntryCategory(data: QuickEntryData | null, direction: CategoryDirection): string | null {
   const id = data?.lastUsed[direction].categoryId;
-  if (!id || id === UNCATEGORIZED_CATEGORY_ID) return null;
-  return data?.categories.some(category => category.id === id && category.kind === direction) ? id : null;
+  if (data === null || !id || id === UNCATEGORIZED_CATEGORY_ID) return null;
+  const category = data.categories.find(category => category.id === id && category.kind === direction);
+  if (!category) return null;
+  if (category.parentId === null) return id;
+  const hasLiveParent = data.categories.some(parent =>
+    parent.id === category.parentId && parent.kind === direction && parent.parentId === null
+  );
+  return hasLiveParent ? id : null;
+}
+
+function defaultEntryAccount(data: QuickEntryData | null, direction: CategoryDirection): string {
+  if (!data) return '';
+  const id = data.lastUsed[direction].accountId;
+  return id !== null && data.accounts.some(account => account.id === id) ? id : (data.accounts[0]?.id ?? '');
+}
+
+function revealSelectedCategory(row: HTMLDivElement | null) {
+  const selected = row?.querySelector('button[aria-pressed="true"]');
+  if (!row || !selected) return;
+
+  const rowBounds = row.getBoundingClientRect();
+  const bounds = selected.getBoundingClientRect();
+  if (bounds.left < rowBounds.left) {
+    row.scrollLeft += Math.floor(bounds.left - rowBounds.left);
+  } else if (bounds.right > rowBounds.right) {
+    row.scrollLeft += Math.ceil(bounds.right - rowBounds.right);
+  }
 }
 
 /**
@@ -427,10 +454,12 @@ export default function QuickEntryScreen({
 }: QuickEntryScreenProps = {}) {
   const { db, bump } = useDb();
   const navigate = useNavigate();
-  const today = todayLocalISO();
+  const today = useToday();
   const newTagRef = useRef<HTMLInputElement>(null);
   const fieldsRef = useRef<HTMLDivElement>(null);
   const tagRowRef = useRef<HTMLDivElement>(null);
+  const topCategoryRowRef = useRef<HTMLDivElement>(null);
+  const subCategoryRowRef = useRef<HTMLDivElement>(null);
 
   const [direction, setDirection] = useState<EntryDirection>(keptDraft?.direction ?? initialDirection);
   const [amount, setAmount] = useState(keptDraft?.amount ?? '');
@@ -446,12 +475,14 @@ export default function QuickEntryScreen({
   const [categoryChoices, setCategoryChoices] = useState<
     Partial<Record<CategoryDirection, string | null>>
   >(keptDraft?.categoryChoices ?? {});
-  const [accountChoice, setAccountChoice] = useState(keptDraft?.accountChoice);
+  const [categoriesExpanded, setCategoriesExpanded] = useState(false);
+  const [accountChoices, setAccountChoices] = useState<Partial<Record<CategoryDirection, string>>>(
+    keptDraft?.accountChoices ?? {}
+  );
   // The transfer pair has its own choices, so switching to 支出 and back keeps
   // both of them; undefined means "use the computed default".
   const [fromChoice, setFromChoice] = useState(keptDraft?.fromChoice);
   const [toChoice, setToChoice] = useState(keptDraft?.toChoice);
-  const [openingDate] = useState(today);
   const [dateChoice, setDateChoice] = useState(keptDraft?.dateChoice);
   const [note, setNote] = useState(keptDraft?.note ?? '');
   const [problems, setProblems] = useState<QuickEntryProblems>(noProblems);
@@ -463,20 +494,30 @@ export default function QuickEntryScreen({
 
   const query = useQuery<QuickEntryData>(async database => {
     const categories = await listCategories(database);
-    const accounts = await listAccounts(database);
+    const allAccounts = await listAccounts(database, { includeArchived: true });
+    const accounts = allAccounts.filter(account => account.archivedAt === null);
     const tags = await listTags(database, { includeArchived: true });
     const projects = await listProjects(database);
     // Last used is read for both category-bearing directions up front: the
     // toggle then never needs a refetch, and neither half can lag behind.
     const expense = await lastEntryDefaults(database, 'expense');
     const income = await lastEntryDefaults(database, 'income');
-    return { categories, accounts, tags, projects, lastUsed: { expense, income } };
+    return {
+      categories,
+      accounts,
+      hasArchivedAccounts: accounts.length !== allAccounts.length,
+      tags,
+      projects,
+      lastUsed: { expense, income },
+    };
   }, []);
 
   const close = onClose ?? (() => navigate('/'));
   const exit = createSaveExit(submitting, () => requestLeave('close'));
   const data = query.data;
   const isTransfer = direction === 'transfer';
+  const transferNeedsAccounts = isTransfer && data !== null && data.accounts.length < 2;
+  const saveDisabled = submitting || db === null || data === null || transferNeedsAccounts;
 
 
 
@@ -513,33 +554,34 @@ export default function QuickEntryScreen({
     selectedTopId === null
       ? []
       : liveCategories.filter(category => category.parentId === selectedTopId);
+  const categoryRowClass = `entry-chips entry-chips--categories${categoriesExpanded ? ' entry-chips--wrap' : ''}`;
 
-  // An id that points at a since-archived account would render the wrong
-  // option, so the default is only used when the account is still live.
-  const lastAccountId =
-    data === null || isTransfer ? null : data.lastUsed[direction].accountId;
-  const defaultAccountId =
-    data === null || isTransfer
-      ? ''
-      : lastAccountId !== null && data.accounts.some(account => account.id === lastAccountId)
-        ? lastAccountId
-        : (data.accounts[0]?.id ?? '');
-  const accountId = accountChoice ?? defaultAccountId;
+  useLayoutEffect(() => {
+    if (!active || isTransfer || categoriesExpanded) return;
+    revealSelectedCategory(topCategoryRowRef.current);
+    revealSelectedCategory(subCategoryRowRef.current);
+  }, [active, isTransfer, categoriesExpanded, selectedTopId, categoryId, data]);
+
+  const accountId = isTransfer ? '' : (accountChoices[direction] ?? defaultEntryAccount(data, direction));
 
   const transferDefaults = pickTransferDefaults(data?.accounts ?? []);
   const fromAccountId = fromChoice ?? transferDefaults.fromAccountId;
   const toAccountId = toChoice ?? transferDefaults.toAccountId;
-  const date = dateChoice ?? openingDate;
+  const date = dateChoice ?? today;
 
   const categoryChanged = (['expense', 'income'] as const).some(kind => {
     const choice = categoryChoices[kind];
     return choice !== undefined && choice !== defaultEntryCategory(data, kind);
   });
+  const accountChanged = (['expense', 'income'] as const).some(kind => {
+    const choice = accountChoices[kind];
+    return choice !== undefined && choice !== defaultEntryAccount(data, kind);
+  });
   const hasDraftInput =
     direction !== initialDirection || amount !== '' || note !== '' || newTag !== '' ||
     tagIds.length > 0 || projectId !== null || categoryChanged ||
-    accountId !== defaultAccountId || fromAccountId !== transferDefaults.fromAccountId ||
-    toAccountId !== transferDefaults.toAccountId || date !== openingDate;
+    accountChanged || fromAccountId !== transferDefaults.fromAccountId ||
+    toAccountId !== transferDefaults.toAccountId || date !== today;
 
   const liveTags = (data?.tags ?? []).filter(tag => tag.archivedAt === null);
   // Newly created tags go first: the created chip is the confirmation that the
@@ -582,7 +624,7 @@ export default function QuickEntryScreen({
   function finishLeaving(keep: boolean) {
     if (leaveFor === null) return;
     onDraftChange?.(keep && hasDraftInput ? {
-      direction, amount, categoryChoices, accountChoice, fromChoice, toChoice,
+      direction, amount, categoryChoices, accountChoices, fromChoice, toChoice,
       dateChoice, note, tagIds, newTag, projectId,
     } : null);
     leave(leaveFor);
@@ -590,7 +632,7 @@ export default function QuickEntryScreen({
 
   /**
    * The keypad is the amount's keyboard, not a permanent footer. Focusing a
-   * text field (note, new tag, date) puts it away so the system keyboard has
+   * text field (note, new tag) puts it away so the system keyboard has
    * the space; tapping the amount brings it back. The save button stays either
    * way, so a note can be finished and saved without reopening the keypad.
    */
@@ -599,6 +641,22 @@ export default function QuickEntryScreen({
     setKeypadActive(true);
   };
   const deactivateKeypad = () => setKeypadActive(false);
+
+  function openDatePicker(event: MouseEvent<HTMLInputElement>) {
+    // Closing on focus moves the scroll area before Android finishes the tap.
+    // Open the picker during the trusted click, then let React change the layout.
+    try {
+      if (typeof event.currentTarget.showPicker === 'function') {
+        event.currentTarget.showPicker();
+        event.preventDefault();
+        deactivateKeypad();
+        return;
+      }
+    } catch {
+      // Keep native click behavior if this browser rejects showPicker().
+    }
+    if (keypadActive) window.requestAnimationFrame(deactivateKeypad);
+  }
 
   // Only show the fade while there is more content below. A sheet whose fields
   // already fit (e.g. 转账) must not end with a grey band over its last row.
@@ -648,7 +706,8 @@ export default function QuickEntryScreen({
   };
 
   const changeAccount = (id: string) => {
-    setAccountChoice(id);
+    if (isTransfer) return;
+    setAccountChoices(previous => ({ ...previous, [direction]: id }));
     clearProblem('accountInvalid');
     setErrorText(null);
   };
@@ -704,7 +763,8 @@ export default function QuickEntryScreen({
   };
 
   const changeDate = (value: string) => {
-    setDateChoice(clampEntryDate(value, today));
+    const next = clampEntryDate(value, today);
+    setDateChoice(next === value ? next : undefined);
     setErrorText(null);
   };
 
@@ -715,7 +775,7 @@ export default function QuickEntryScreen({
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (db === null || data === null || submitting || leaveFor !== null) return;
+    if (db === null || data === null || submitting || leaveFor !== null || transferNeedsAccounts) return;
 
     setSubmitting(true);
     try {
@@ -822,10 +882,27 @@ export default function QuickEntryScreen({
               {errorText}
             </p>
           )}
+          {transferNeedsAccounts && (
+            <div className="entry-noacc entry-noacc--transfer">
+              <p role="status">
+                转账需要两个可用账户。{data.accounts.length === 1 ? '目前只有一个。' : '目前没有可用账户。'}
+              </p>
+              <div className="entry-noacc__actions">
+                <Link to="/accounts" state={{ quickEntryOpen: true, accountAction: 'create' }}>
+                  新增账户
+                </Link>
+                {data.hasArchivedAccounts && (
+                  <Link to="/accounts" state={{ quickEntryOpen: true, accountAction: 'restore' }}>
+                    恢复已归档账户
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="entry-fields-wrap">
             <div className="entry-fields" ref={fieldsRef}>
-            {data !== null && data.accounts.length === 0 && (
+            {!isTransfer && data !== null && data.accounts.length === 0 && (
               <div className="entry-noacc">
                 <span>无可用账户</span>
                 <Link to="/accounts" state={{ quickEntryOpen: true }}>
@@ -835,7 +912,7 @@ export default function QuickEntryScreen({
             )}
 
             {isTransfer ? (
-              <>
+              !transferNeedsAccounts && <>
                 <div className="entry-group">
                   <div className="entry-group__head">
                     <span>从</span>
@@ -884,11 +961,23 @@ export default function QuickEntryScreen({
             ) : (
               <>
                 <div className="entry-group">
-                  <div className="entry-group__head">
-                    <span>分类</span>
-                    {problems.categoryInvalid && <span className="entry-group__error">请选择</span>}
+                  <div className="entry-group__head entry-group__head--categories">
+                    <span>
+                      分类{problems.categoryInvalid && <span className="entry-group__error"> 请选择</span>}
+                    </span>
+                    {topCategories.length > 0 && (
+                      <button
+                        type="button"
+                        className="entry-chip entry-category-toggle"
+                        aria-expanded={categoriesExpanded}
+                        aria-controls={subCategories.length > 0 ? 'entry-top-categories entry-sub-categories' : 'entry-top-categories'}
+                        onClick={() => setCategoriesExpanded(expanded => !expanded)}
+                      >
+                        {categoriesExpanded ? '收起分类' : '全部分类'}
+                      </button>
+                    )}
                   </div>
-                  <div className="entry-chips">
+                  <div className={categoryRowClass} ref={topCategoryRowRef} id="entry-top-categories">
                     {topCategories.map(category => (
                       <button
                         key={category.id}
@@ -909,7 +998,7 @@ export default function QuickEntryScreen({
                     <div className="entry-group__head">
                       <span>细分（可不选）</span>
                     </div>
-                    <div className="entry-chips">
+                    <div className={categoryRowClass} ref={subCategoryRowRef} id="entry-sub-categories">
                       <button
                         type="button"
                         className={chipClass(categoryId === selectedTopId, true)}
@@ -1060,7 +1149,7 @@ export default function QuickEntryScreen({
               <div className="entry-date-row">
                 {quickDates.map(option => (
                   <button
-                    key={option.value}
+                    key={option.label}
                     type="button"
                     className={chipClass(date === option.value, true)}
                     data-date={option.value}
@@ -1078,7 +1167,7 @@ export default function QuickEntryScreen({
                   max={today}
                   aria-label="日期"
                   aria-describedby={dateHint === null ? undefined : 'add-date-hint'}
-                  onFocus={deactivateKeypad}
+                  onClick={openDatePicker}
                   onChange={(event: ChangeEvent<HTMLInputElement>) =>
                     changeDate(event.target.value)
                   }
@@ -1134,7 +1223,7 @@ export default function QuickEntryScreen({
               value={amount}
               onChange={changeAmountDraft}
               actionLabel={submitting ? '保存中…' : '保存'}
-              actionDisabled={submitting || db === null || data === null}
+              actionDisabled={saveDisabled}
               actionType="submit"
             />
           ) : (
@@ -1143,7 +1232,7 @@ export default function QuickEntryScreen({
                 type="submit"
                 className="entry-savebar__button"
                 data-action="save"
-                disabled={submitting || db === null || data === null}
+                disabled={saveDisabled}
               >
                 {submitting ? '保存中…' : '保存'}
               </button>

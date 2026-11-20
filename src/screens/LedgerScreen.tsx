@@ -1,20 +1,24 @@
 import { useEffect, useRef, useState } from 'react';
 import { AmountText, formatCentsDisplay } from '../components/AmountText';
+import { LedgerCalendar } from '../components/LedgerCalendar';
 import { TxnDeleteRow } from '../components/TxnDelete';
 import { TxnEditLink, useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
 import type { TxnEditOrigin } from '../components/TxnEditNavigation';
 import { ProjectMark, UncategorisedLabel, isUncategorised } from '../components/TxnMarks';
 import { countMovements, orderTransferLegs } from '../components/txnOrder';
 import { useQuery } from '../store/useDb';
+import { useToday } from '../store/useToday';
 import { listTxnsByMonth, monthSummary } from '../db/repos/txns';
 import type { TxnRow } from '../db/repos/txns';
 import type { Db } from '../db/driver';
 import {
+  daysBetweenISO,
   formatMonthDay,
   formatMonthLabel,
   monthKeyOf,
+  monthRange,
   shiftMonthKey,
-  todayLocalISO,
+  weekdayIndex,
 } from '../domain/date';
 
 /**
@@ -103,20 +107,6 @@ export function groupTxnsByDate(rows: readonly TxnRow[]): LedgerDayGroup[] {
 
 const WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'] as const;
 
-/** Calendar-day arithmetic on the date string, free of local time zones. */
-function utcDayMillis(dateISO: string): number {
-  const [year, month, day] = dateISO.split('-').map(Number);
-  return Date.UTC(year, month - 1, day);
-}
-
-function previousDayISO(dateISO: string): string {
-  const previous = new Date(utcDayMillis(dateISO) - 86_400_000);
-  const year = previous.getUTCFullYear();
-  const month = String(previous.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(previous.getUTCDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 /**
  * A card heading: "10月21日 今天", "10月20日 昨天", otherwise the weekday.
  *
@@ -128,8 +118,8 @@ function previousDayISO(dateISO: string): string {
 export function ledgerDayLabel(dateISO: string, todayISO: string): string {
   const day = formatMonthDay(dateISO);
   if (dateISO === todayISO) return `${day} 今天`;
-  if (dateISO === previousDayISO(todayISO)) return `${day} 昨天`;
-  const weekday = WEEKDAYS[new Date(utcDayMillis(dateISO)).getUTCDay()];
+  if (daysBetweenISO(dateISO, todayISO) === 1) return `${day} 昨天`;
+  const weekday = WEEKDAYS[weekdayIndex(dateISO)];
   return `${day} ${weekday}`;
 }
 
@@ -161,8 +151,7 @@ export function dailyExpenseBars(
   monthKey: string,
   todayISO: string
 ): LedgerDayBar[] {
-  const [year, month] = monthKey.split('-').map(Number);
-  const days = new Date(year, month, 0).getDate();
+  const days = Number(monthRange(monthKey).end.slice(-2));
   const expenseByDay = new Map<string, number>();
   const busyDays = new Set<string>();
 
@@ -179,7 +168,7 @@ export function dailyExpenseBars(
 
   const bars: LedgerDayBar[] = [];
   for (let day = 1; day <= days; day += 1) {
-    const date = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const date = `${monthKey}-${String(day).padStart(2, '0')}`;
     bars.push({
       date,
       day,
@@ -227,8 +216,8 @@ function ledgerLabel(row: TxnRow): string {
   return row.categoryName ?? '未分类';
 }
 
-// Both transfer legs share one delete target, and neither opens an editor.
-function LedgerRowView({ row, monthKey }: { row: TxnRow; monthKey: string }) {
+// Transfer legs share one edit and delete target while retaining their row identity.
+function LedgerRowView({ row, monthKey, calendarDay }: { row: TxnRow; monthKey: string; calendarDay?: string }) {
   const isTransfer = row.direction === 'transfer';
   const meta = isTransfer
     ? `${row.amountCents < 0 ? '转出' : '转入'} · ${row.accountName}${
@@ -270,24 +259,13 @@ function LedgerRowView({ row, monthKey }: { row: TxnRow; monthKey: string }) {
     </>
   );
 
-  if (isTransfer) {
-    return (
-      <div
-        className="ledger-row ledger-row--readonly"
-        data-txn-id={row.id}
-        data-direction={row.direction}
-      >
-        {body}
-      </div>
-    );
-  }
-
   return (
     <TxnEditLink
       className="ledger-row"
       txnId={row.id}
       direction={row.direction}
       monthKey={monthKey}
+      calendarDay={calendarDay}
     >
       {body}
     </TxnEditLink>
@@ -351,10 +329,26 @@ function LedgerBars({
   );
 }
 
+function scrollToLedgerDay(date: string, throughCalendar = false) {
+  const target = document.getElementById(`ledger-day-${date}`);
+  if (target === null) return;
+  if (throughCalendar) target.querySelector('h2')?.focus({ preventScroll: true });
+  // Keep the day heading below the translucent Android status bar.
+  const inset = document.querySelector('.status-veil')?.getBoundingClientRect().height ?? 0;
+  const top = target.getBoundingClientRect().top + window.scrollY - inset - 8;
+  window.scrollTo({ top: Math.max(0, top), behavior: throughCalendar ? 'auto' : 'smooth' });
+}
+
 export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
-  const today = todayLocalISO();
+  const today = useToday();
   const currentMonthKey = monthKeyOf(today);
   const [monthKey, setMonthKey] = useState(editReturn?.monthKey ?? currentMonthKey);
+  const [calendarOpen, setCalendarOpen] = useState(false);
+  const [dayJump, setDayJump] = useState<{ date: string } | null>(() =>
+    editReturn?.calendarDay === undefined ? null : { date: editReturn.calendarDay }
+  );
+  // The return restores the row's scroll position while keeping the date feedback.
+  const handledJump = useRef(dayJump);
   const lastPositionedMonth = useRef(editReturn?.monthKey);
   const query = useQuery<LedgerData>(
     database => loadLedgerData(database, monthKey),
@@ -368,27 +362,33 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
   const groups = data === null ? [] : groupTxnsByDate(data.rows);
   const bars = dailyExpenseBars(data?.rows ?? [], monthKey, today);
   const atCurrentMonth = monthKey >= currentMonthKey;
-  const previousMonth = shiftMonthKey(monthKey, -1);
-  const nextMonth = shiftMonthKey(monthKey, 1);
+  const atFirstMonth = monthKey === '0000-01';
+  const previousMonth = atFirstMonth ? monthKey : shiftMonthKey(monthKey, -1);
+  const nextMonth = atCurrentMonth ? monthKey : shiftMonthKey(monthKey, 1);
+  const monthLabel = formatMonthLabel(monthKey);
+  const ready = data !== null && !query.loading;
+  const selectedDay = dayJump?.date ?? null;
+  const hasSelectedDay = groups.some(group => group.date === selectedDay);
+  const emptyDay = selectedDay !== null && ready && !hasSelectedDay
+    ? `${monthLabel}${Number(selectedDay.slice(-2))}日没有流水。` : null;
 
   useEffect(() => {
     if (lastPositionedMonth.current === monthKey) return;
     lastPositionedMonth.current = monthKey;
     window.scrollTo({ top: 0 });
   }, [monthKey]);
-  useRestoreTxnEditScroll(editReturn, data !== null && !query.loading);
+  useRestoreTxnEditScroll(editReturn, ready);
+  useEffect(() => {
+    if (dayJump === null || !ready || handledJump.current === dayJump) return;
+    handledJump.current = dayJump;
+    if (hasSelectedDay) scrollToLedgerDay(dayJump.date, true);
+    else window.scrollTo({ top: 0 });
+  }, [dayJump, ready, hasSelectedDay]);
 
-  const jumpToDay = (date: string) => {
-    const target = document.getElementById(`ledger-day-${date}`);
-    if (target === null) return;
-    // Keep the day header below the translucent status bar, not under it.
-    // scrollIntoView aligns to the viewport top, which the edge-to-edge WebView
-    // shares with the status bar, so both the inset and a small gap are removed.
-    const veil = document.querySelector('.status-veil');
-    const inset = veil === null ? 0 : veil.getBoundingClientRect().height;
-    const top =
-      target.getBoundingClientRect().top + window.scrollY - inset - 8;
-    window.scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  const showMonth = (next: string) => {
+    setDayJump(null);
+    setMonthKey(next);
+    if (next === monthKey) window.scrollTo({ top: 0 });
   };
 
   return (
@@ -397,7 +397,12 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
         <div className="ledger-month">
           <div>
             <p className="ledger-month__eyebrow">流水</p>
-            <h1 className="ledger-month__title">{formatMonthLabel(monthKey)}</h1>
+            <h1 className="ledger-month__title">
+              <button type="button" className="ledger-month__calendar" aria-haspopup="dialog"
+                aria-expanded={calendarOpen} title="选择日期" onClick={() => setCalendarOpen(true)}>
+                {monthLabel}<span className="ledger-month__calendar-icon" aria-hidden="true" />
+              </button>
+            </h1>
           </div>
           {data !== null && (
             <span className="ledger-month__count">{countMovements(data.rows)} 笔</span>
@@ -419,9 +424,13 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
       </header>
 
       {data !== null && data.rows.length > 0 && (
-        <LedgerBars bars={bars} onJump={jumpToDay} />
+        <LedgerBars bars={bars} onJump={date => {
+          setDayJump(null);
+          scrollToLedgerDay(date);
+        }} />
       )}
 
+      {emptyDay !== null && <p className="ledger-note ledger-note--empty-day" role="status">{emptyDay}</p>}
       {data === null ? (
         query.error !== null ? (
           <p className="ledger-note ledger-note--error" role="alert">
@@ -433,18 +442,19 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
           </p>
         )
       ) : groups.length === 0 ? (
-        <p className="ledger-note">本月还没有流水</p>
+        emptyDay !== null ? null : <p className="ledger-note">本月还没有流水</p>
       ) : (
         <div className="ledger-days">
           {groups.map(group => (
             <section
               className="ledger-day"
               data-date={group.date}
+              data-calendar-selected={selectedDay === group.date || undefined}
               id={`ledger-day-${group.date}`}
               key={group.date}
             >
               <header className="ledger-day__head">
-                <h2 className="ledger-day__date">
+                <h2 className="ledger-day__date" tabIndex={-1}>
                   <time dateTime={group.date}>{ledgerDayLabel(group.date, today)}</time>
                 </h2>
                 <p className="ledger-day__totals">
@@ -459,7 +469,7 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
               <ul className="ledger-day__rows">
                 {orderTransferLegs(group.rows).map(row => (
                   <TxnDeleteRow key={row.id} row={row} label={ledgerLabel(row)}>
-                    <LedgerRowView row={row} monthKey={monthKey} />
+                    <LedgerRowView row={row} monthKey={monthKey} calendarDay={selectedDay ?? undefined} />
                   </TxnDeleteRow>
                 ))}
               </ul>
@@ -472,21 +482,35 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
         <button
           type="button"
           aria-label="上个月"
-          onClick={() => setMonthKey(previousMonth)}
+          disabled={atFirstMonth}
+          onClick={() => showMonth(previousMonth)}
         >
-          ‹ {Number(previousMonth.slice(5, 7))}月
+          {atFirstMonth ? '已是最早月份' : `‹ ${Number(previousMonth.slice(5, 7))}月`}
         </button>
         <button
           type="button"
           aria-label="下个月"
           disabled={atCurrentMonth}
           onClick={() => {
-            if (!atCurrentMonth) setMonthKey(nextMonth);
+            if (!atCurrentMonth) showMonth(nextMonth);
           }}
         >
           {atCurrentMonth ? '已是本月' : `${Number(nextMonth.slice(5, 7))}月 ›`}
         </button>
       </div>
+      {calendarOpen && (
+        <LedgerCalendar monthKey={monthKey} today={today} selectedDay={selectedDay}
+          onClose={() => setCalendarOpen(false)}
+          onMonth={key => {
+            setCalendarOpen(false);
+            showMonth(key);
+          }}
+          onDay={date => {
+            setCalendarOpen(false);
+            setDayJump({ date });
+            setMonthKey(monthKeyOf(date));
+          }} />
+      )}
     </div>
   );
 }

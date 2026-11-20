@@ -11,7 +11,7 @@ export const XLSX_MIME_TYPE =
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 export type BinaryExportDestination =
-  | { kind: 'folder'; fileName: string; folderName: string }
+  | { kind: 'folder'; fileName: string; folderName: string; folderId?: string }
   | { kind: 'download' }
   | { kind: 'share' | 'canceled'; fileName: string };
 

@@ -32,10 +32,9 @@ import { countTxnRows, recordRestoreMeta } from './meta';
  * That is why the screen asks before recording a share as 上次备份.
  */
 export type ExportDestination =
-  | { kind: 'folder'; folderName: string; fileName?: string }
-  | { kind: 'share' }
-  | { kind: 'download' }
-  | { kind: 'canceled' };
+  | { kind: 'folder'; folderName: string; folderId?: string; fileName?: string }
+  | { kind: 'share' | 'canceled'; fileName?: string }
+  | { kind: 'download' };
 
 /**
  * Where the automatic before-copy went. `none` is the browser preview, which
@@ -56,7 +55,7 @@ export interface BackupFileWriter {
 
 export interface ExportResult {
   fileName: string;
-  /** Transaction rows in the file, matching the plan's "笔流水". */
+  /** Transaction rows in the file, including both transfer legs and soft deletions. */
   rows: number;
   bytes: number;
   meta: BackupMeta;
@@ -109,7 +108,7 @@ export async function exportBackup(
   const bytes = utf8ByteLength(text);
   const meta: BackupMeta = { at: now.toISOString(), rows: file.counts.txn, bytes };
 
-  const savedName = destination.kind === 'folder' ? destination.fileName ?? fileName : fileName;
+  const savedName = destination.kind === 'download' ? fileName : destination.fileName ?? fileName;
   return { fileName: savedName, rows: meta.rows, bytes, meta, destination };
 }
 
