@@ -1,6 +1,8 @@
 import type { Db, DbParam } from '../driver';
 import { newId } from '../id';
 import type { Account, AccountType } from '../../domain/types';
+import { localDateISO, monthKeyOf, todayLocalISO } from '../../domain/date';
+import { deleteAccountBudgetHistory, recordAccountBudget } from './accountBudgets';
 import { recordAdjustment } from './txns';
 
 /** Everything createAccount needs; money values are integer cents. */
@@ -31,6 +33,8 @@ interface AccountRow {
 
 const ACCOUNT_COLUMNS =
   'id, name, type, initial_balance_cents, monthly_budget_cents, sort, archived_at, created_at';
+
+export const EMPTY_ACCOUNTS_META_KEY = 'accounts-intentionally-empty';
 
 const UPDATABLE_COLUMNS: Record<keyof UpdateAccountPatch, string> = {
   name: 'name',
@@ -78,24 +82,20 @@ export async function createAccount(db: Db, input: CreateAccountInput): Promise<
     assertIntegerCents(monthlyBudgetCents, 'monthlyBudgetCents');
   }
 
-  const sort = input.sort ?? (await nextSort(db));
-  const id = newId();
+  return db.transaction(async tx => {
+    const sort = input.sort ?? (await nextSort(tx));
+    const id = newId();
+    const createdAt = new Date();
 
-  await db.run(
-    `INSERT INTO account
-       (id, name, type, initial_balance_cents, monthly_budget_cents, sort, archived_at, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
-    [
-      id,
-      input.name,
-      input.type,
-      initialBalanceCents,
-      monthlyBudgetCents,
-      sort,
-      new Date().toISOString(),
-    ]
-  );
-  return id;
+    await tx.run(
+      `INSERT INTO account
+         (id, name, type, initial_balance_cents, monthly_budget_cents, sort, archived_at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+      [id, input.name, input.type, initialBalanceCents, monthlyBudgetCents, sort, createdAt.toISOString()]
+    );
+    await recordAccountBudget(tx, id, monthKeyOf(localDateISO(createdAt)), monthlyBudgetCents);
+    return id;
+  });
 }
 
 export async function listAccounts(
@@ -107,6 +107,36 @@ export async function listAccounts(
     `SELECT ${ACCOUNT_COLUMNS} FROM account ${archivedFilter} ORDER BY sort, created_at`
   );
   return rows.map(toAccount);
+}
+
+/** Saves the visible order while keeping archived accounts in their existing slots. */
+export async function reorderActiveAccounts(
+  db: Db,
+  ids: readonly string[],
+  previousIds: readonly string[]
+): Promise<void> {
+  await db.transaction(async tx => {
+    const all = await listAccounts(tx, { includeArchived: true });
+    const activeIds = all.filter(account => account.archivedAt === null).map(account => account.id);
+    if (activeIds.length !== previousIds.length || activeIds.some((id, index) => id !== previousIds[index])) {
+      throw new Error('账户列表已变化，请重新排序。');
+    }
+    const requested = new Set(ids);
+    if (ids.length !== activeIds.length || requested.size !== activeIds.length ||
+        activeIds.some(id => !requested.has(id))) {
+      throw new Error('账户顺序不完整，请重新排序。');
+    }
+    if (ids.every((id, index) => id === activeIds[index])) return;
+
+    const byId = new Map(all.map(account => [account.id, account]));
+    let nextActive = 0;
+    for (const [sort, account] of all.entries()) {
+      const id = account.archivedAt === null ? ids[nextActive++] : account.id;
+      if (byId.get(id)?.sort !== sort) {
+        await tx.run('UPDATE account SET sort = ? WHERE id = ?', [sort, id]);
+      }
+    }
+  });
 }
 
 /**
@@ -129,15 +159,6 @@ export async function updateAccount(
   }
   if (patch.initialBalanceCents !== undefined) {
     assertIntegerCents(patch.initialBalanceCents, 'initialBalanceCents');
-    const row = await db.get<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM txn WHERE account_id = ?',
-      [id]
-    );
-    if ((row?.n ?? 0) > 0) {
-      throw new Error(
-        `cannot change the opening balance of account ${id}: it already has transactions; use an adjustment instead`
-      );
-    }
   }
 
   const sets: string[] = [];
@@ -150,8 +171,28 @@ export async function updateAccount(
   }
   if (sets.length === 0) return;
 
-  params.push(id);
-  await db.run(`UPDATE account SET ${sets.join(', ')} WHERE id = ?`, params);
+  await db.transaction(async tx => {
+    if (patch.initialBalanceCents !== undefined) {
+      const row = await tx.get<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM txn WHERE account_id = ?', [id]
+      );
+      if ((row?.n ?? 0) > 0) {
+        throw new Error(
+          `cannot change the opening balance of account ${id}: it already has transactions; use an adjustment instead`
+        );
+      }
+    }
+    const budget = patch.monthlyBudgetCents;
+    const previous = budget === undefined ? undefined : await tx.get<{ monthly_budget_cents: number | null }>(
+      'SELECT monthly_budget_cents FROM account WHERE id = ?', [id]
+    );
+    const effectiveMonth = monthKeyOf(todayLocalISO());
+
+    await tx.run(`UPDATE account SET ${sets.join(', ')} WHERE id = ?`, [...params, id]);
+    if (budget !== undefined && previous !== undefined && previous.monthly_budget_cents !== budget) {
+      await recordAccountBudget(tx, id, effectiveMonth, budget);
+    }
+  });
 }
 
 /** Soft-hides an account. The row and its transactions are never deleted. */
@@ -171,6 +212,39 @@ export async function archiveAccount(db: Db, id: string): Promise<void> {
  */
 export async function unarchiveAccount(db: Db, id: string): Promise<void> {
   await db.run('UPDATE account SET archived_at = NULL WHERE id = ?', [id]);
+}
+
+/** Account defaults are retained in legacy templates and in backups. */
+export async function accountIdsInLegacyTemplates(db: Db): Promise<Set<string>> {
+  const rows = await db.all<{ account_id: string }>(
+    `SELECT DISTINCT default_account_id AS account_id FROM template
+      WHERE default_account_id IS NOT NULL`
+  );
+  return new Set(rows.map(row => row.account_id));
+}
+
+/** Removes an unreferenced account and its settings as a single write. */
+export async function deleteAccount(db: Db, id: string): Promise<void> {
+  await db.transaction(async tx => {
+    const account = await tx.get<{ name: string; has_txn: number; has_template: number }>(
+      `SELECT a.name,
+          EXISTS (SELECT 1 FROM txn WHERE account_id = a.id) AS has_txn,
+          EXISTS (SELECT 1 FROM template WHERE default_account_id = a.id) AS has_template
+        FROM account a WHERE a.id = ?`,
+      [id]
+    );
+    if (account === undefined) throw new Error('这个账户已不存在。');
+    if (account.has_txn) throw new Error(`账户「${account.name}」有流水历史，请使用归档。`);
+    if (account.has_template) throw new Error(`账户「${account.name}」仍被旧模板引用，请使用归档。`);
+
+    await tx.run('DELETE FROM account WHERE id = ?', [id]);
+    await deleteAccountBudgetHistory(tx, id);
+    await tx.run(
+      `INSERT OR IGNORE INTO app_meta (key, value)
+       SELECT ?, '1' WHERE NOT EXISTS (SELECT 1 FROM account)`,
+      [EMPTY_ACCOUNTS_META_KEY]
+    );
+  });
 }
 
 /**

@@ -26,7 +26,8 @@ export function readTxnEditOrigin(state: unknown): TxnEditOrigin | null {
   if (!origin || typeof origin.pathname !== 'string') return null;
   const ledger = /^\/ledger\/?$/.test(origin.pathname);
   const project = /^\/settings\/projects\/[^/?#]+\/?$/.test(origin.pathname);
-  if (origin.pathname !== '/' && !ledger && !project && projectTransactionsParent(origin.pathname) === null) return null;
+  const fixedCosts = /^\/settings\/fixed\/?$/.test(origin.pathname);
+  if (origin.pathname !== '/' && !ledger && !project && !fixedCosts && projectTransactionsParent(origin.pathname) === null) return null;
   if (ledger && (typeof origin.monthKey !== 'string' || !isMonthKey(origin.monthKey))) return null;
   if (ledger && origin.calendarDay !== undefined) {
     if (typeof origin.calendarDay !== 'string' || origin.calendarDay.slice(0, 7) !== origin.monthKey) return null;

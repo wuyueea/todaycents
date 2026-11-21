@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Db } from '../db/driver';
 import {
@@ -6,11 +6,17 @@ import {
   countExpenseMonths,
   detectCandidates,
   dismissCandidate,
+  listDismissedCandidates,
   listFixedCosts,
+  listStoppedFixedCosts,
+  restoreDismissedCandidate,
+  resumeFixedCost,
+  stopFixedCost,
   unmarkFixed,
 } from '../db/repos/fixedCosts';
-import type { FixedCostCandidate, FixedCostListItem } from '../db/repos/fixedCosts';
+import type { FixedCostCandidate, FixedCostListItem, FixedCostUndo, StoppedFixedCost } from '../db/repos/fixedCosts';
 import { formatCentsDisplay } from '../components/AmountText';
+import { TxnEditLink, useRestoreTxnEditScroll, type TxnEditOrigin } from '../components/TxnEditNavigation';
 import { formatMonthDay, todayLocalISO } from '../domain/date';
 import { useDb, useQuery } from '../store/useDb';
 
@@ -25,14 +31,17 @@ import { useDb, useQuery } from '../store/useDb';
  *   update under it;
  * - an empty state that says how much history is missing rather than "暂无".
  *
- * Nothing is booked here. Confirming only flags existing rows; undoing clears
- * the same flags. Both totals are based on the same list of recorded expenses.
+ * Both totals are based on the active list. Stopped items and ignored
+ * suggestions have their own recovery entries.
  */
 
 /** One line after a confirm: enough to replace the prompt without a reload. */
 export interface FixedConfirmation {
   hintId: string;
   name: string;
+  categoryId: string | null;
+  payee: string | null;
+  undo: FixedCostUndo | null;
 }
 
 /** Everything the screen renders from, loaded as one snapshot. */
@@ -41,6 +50,8 @@ export interface FixedCostsData {
   candidates: FixedCostCandidate[];
   /** The confirmed list, already ordered by estimated date. */
   items: FixedCostListItem[];
+  stopped: StoppedFixedCost[];
+  dismissed: FixedCostCandidate[];
   recordedCents: number;
   expectedCents: number;
   today: string;
@@ -60,8 +71,10 @@ function estimatedDateText(bill: { lastDate: string; nextDate: string }, today: 
 /** Run detection before reading the confirmed list and its totals. */
 export async function loadFixedCostsData(db: Db, today = todayLocalISO()): Promise<FixedCostsData> {
   const candidates = await detectCandidates(db);
-  const [items, expenseMonthCount] = await Promise.all([
+  const [items, stopped, dismissed, expenseMonthCount] = await Promise.all([
     listFixedCosts(db, today),
+    listStoppedFixedCosts(db),
+    listDismissedCandidates(db),
     countExpenseMonths(db),
   ]);
   const totals = { recordedCents: 0, expectedCents: 0 };
@@ -69,7 +82,7 @@ export async function loadFixedCostsData(db: Db, today = todayLocalISO()): Promi
     totals.recordedCents += item.recordedCents;
     totals.expectedCents += item.monthlyCents;
   }
-  return { candidates, items, ...totals, today, expenseMonthCount };
+  return { candidates, items, stopped, dismissed, ...totals, today, expenseMonthCount };
 }
 
 /** Confirms one prompt and returns the line it became. */
@@ -78,15 +91,15 @@ export async function confirmFixedCost(
   candidate: FixedCostCandidate
 ): Promise<FixedConfirmation> {
   const item = await confirmCandidate(db, candidate.id);
-  return { hintId: candidate.id, name: item.name };
+  return { hintId: candidate.id, name: item.name, categoryId: item.categoryId, payee: item.payee, undo: item.undo };
 }
 
 /** Undoes one confirm; the prompt is back on the next read. */
 export async function undoFixedCost(
   db: Db,
   confirmation: FixedConfirmation
-): Promise<FixedCostCandidate> {
-  return unmarkFixed(db, confirmation.hintId);
+): Promise<void> {
+  if (confirmation.undo !== null) await unmarkFixed(db, confirmation.undo);
 }
 
 function reasonText(reason: unknown): string {
@@ -158,14 +171,11 @@ export function ConfirmedPrompt({ confirmation, busy, onUndo }: ConfirmedPromptP
   return (
     <div className="fixed-flash" data-fixed-confirmed role="status">
       <span className="fixed-flash__text">{confirmation.name} 已加入清单</span>
-      <button
-        className="fixed-flash__undo"
-        type="button"
-        disabled={busy}
-        onClick={onUndo}
-      >
-        撤销
-      </button>
+      {confirmation.undo !== null && (
+        <button className="fixed-flash__undo" type="button" disabled={busy} onClick={onUndo}>
+          撤销
+        </button>
+      )}
     </div>
   );
 }
@@ -173,27 +183,90 @@ export function ConfirmedPrompt({ confirmation, busy, onUndo }: ConfirmedPromptP
 export interface FixedCostRowProps {
   item: FixedCostListItem;
   today: string;
+  busy: boolean;
+  onStop(): void;
+}
+
+function itemLabel(item: { name: string; categoryName: string | null }): string {
+  return item.categoryName !== null && item.categoryName !== item.name
+    ? `${item.name}（${item.categoryName}）`
+    : item.name;
 }
 
 /** One confirmed bill: name / day of month / amount / next date. */
-export function FixedCostRow({ item, today }: FixedCostRowProps) {
+export function FixedCostRow({ item, today, busy, onStop }: FixedCostRowProps) {
   return (
     <li className="fixed-row">
-      <span className="fixed-row__main">
-        <span className="fixed-row__name">{item.name}</span>
-        <span className="fixed-row__meta">
-          每月约 {item.dayOfMonth} 日
-          {item.categoryName !== null ? ` · ${item.categoryName}` : ''}
+      <TxnEditLink className="fixed-row__link" txnId={item.sourceTxnId}>
+        <span className="fixed-row__main">
+          <span className="fixed-row__name">{item.name}</span>
+          <span className="fixed-row__meta">
+            每月约 {item.dayOfMonth} 日
+            {item.categoryName !== null ? ` · ${item.categoryName}` : ''}
+          </span>
+          <span className="fixed-row__source">查看来源流水 <span aria-hidden="true">›</span></span>
         </span>
-      </span>
-      <span className="fixed-row__numbers">
-        <span className="fixed-row__estimate">
-          预计月额 <span className="fixed-row__amount">{formatCentsDisplay(item.monthlyCents)}</span>
+        <span className="fixed-row__numbers">
+          <span className="fixed-row__estimate">
+            预计月额 <span className="fixed-row__amount">{formatCentsDisplay(item.monthlyCents)}</span>
+          </span>
+          <span className="fixed-row__next">{estimatedDateText(item, today)}</span>
         </span>
-        <span className="fixed-row__next">{estimatedDateText(item, today)}</span>
-      </span>
+      </TxnEditLink>
+      <button
+        type="button"
+        className="fixed-item-action"
+        aria-label={`停用 ${itemLabel(item)}`}
+        disabled={busy}
+        onClick={onStop}
+      >
+        停用
+      </button>
     </li>
   );
+}
+
+function FixedManagementList<T extends { name: string; categoryName: string | null }>({
+  title,
+  items,
+  action,
+  busy,
+  itemKey,
+  onAction,
+}: {
+  title: string;
+  items: T[];
+  action: string;
+  busy: boolean;
+  itemKey(item: T): string;
+  onAction(item: T): void;
+}) {
+  if (items.length === 0) return null;
+  return (
+    <details className="fixed-management">
+      <summary>{title} · {items.length} 项</summary>
+      <ul className="fixed-list">
+        {items.map(item => (
+          <li className="fixed-row fixed-management__row" key={itemKey(item)}>
+            <span className="fixed-management__name">{itemLabel(item)}</span>
+            <button
+              type="button"
+              className="fixed-item-action"
+              aria-label={`${action} ${itemLabel(item)}`}
+              disabled={busy}
+              onClick={() => onAction(item)}
+            >
+              {action}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+function itemKey(item: Pick<FixedCostListItem, 'categoryId' | 'payee'>): string {
+  return JSON.stringify([item.categoryId, item.payee]);
 }
 
 export interface FixedCostEmptyProps {
@@ -229,9 +302,13 @@ export interface FixedCostViewProps {
   confirmation: FixedConfirmation | null;
   busy: boolean;
   notice: string | null;
+  feedback: string | null;
   onConfirm(candidate: FixedCostCandidate): void;
   onDismiss(candidate: FixedCostCandidate): void;
   onUndo(): void;
+  onStop(item: FixedCostListItem): void;
+  onResume(item: StoppedFixedCost): void;
+  onRestoreDetection(candidate: FixedCostCandidate): void;
 }
 
 /**
@@ -247,10 +324,19 @@ export function FixedCostsView({
   confirmation,
   busy,
   notice,
+  feedback,
   onConfirm,
   onDismiss,
   onUndo,
+  onStop,
+  onResume,
+  onRestoreDetection,
 }: FixedCostViewProps) {
+  const feedbackRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (feedback !== null) feedbackRef.current?.focus({ preventScroll: true });
+  }, [feedback]);
+
   return (
     <div className="fixed-screen fixed-screen--v1">
       <header className="settings-header">
@@ -262,6 +348,17 @@ export function FixedCostsView({
           <span className="settings-header__meta">{data.items.length} 项</span>
         )}
       </header>
+
+      {feedback !== null && (
+        <p className="fixed-note" role="status" tabIndex={-1} ref={feedbackRef}>
+          {feedback}
+        </p>
+      )}
+      {notice !== null && (
+        <p className="fixed-note fixed-note--error" role="alert">
+          {notice}
+        </p>
+      )}
 
       {data === null ? (
         error !== null ? (
@@ -315,7 +412,34 @@ export function FixedCostsView({
             </h2>
             <p className="fixed-section__copy">在流水里挑一笔</p>
 
-            {data.items.length === 0 ? (
+            {(data.items.length > 0 || data.stopped.length > 0) && (
+              <dl className="fixed-total" data-fixed-total>
+                <div className="fixed-total__line">
+                  <dt className="fixed-total__label">本月已记</dt>
+                  <dd className="fixed-total__value">{formatCentsDisplay(data.recordedCents)}</dd>
+                </div>
+                <div className="fixed-total__line">
+                  <dt className="fixed-total__label">预计月额</dt>
+                  <dd className="fixed-total__value">{formatCentsDisplay(data.expectedCents)}</dd>
+                </div>
+              </dl>
+            )}
+
+            {data.items.length > 0 ? (
+              <ul className="fixed-list" data-fixed-list>
+                {data.items.map(item => (
+                  <FixedCostRow
+                    key={itemKey(item)}
+                    item={item}
+                    today={data.today}
+                    busy={busy}
+                    onStop={() => onStop(item)}
+                  />
+                ))}
+              </ul>
+            ) : data.stopped.length > 0 ? (
+              <p className="fixed-section__empty">没有启用的固定支出。可在「已停用」中恢复。</p>
+            ) : (
               <div className="fixed-empty-card">
                 <p className="fixed-empty-card__title">还没有固定支出</p>
                 <p className="fixed-empty-card__body">
@@ -325,89 +449,54 @@ export function FixedCostsView({
                   去流水 →
                 </Link>
               </div>
-            ) : (
-              <>
-                <dl className="fixed-total" data-fixed-total>
-                  <div className="fixed-total__line">
-                    <dt className="fixed-total__label">本月已记</dt>
-                    <dd className="fixed-total__value">{formatCentsDisplay(data.recordedCents)}</dd>
-                  </div>
-                  <div className="fixed-total__line">
-                    <dt className="fixed-total__label">预计月额</dt>
-                    <dd className="fixed-total__value">{formatCentsDisplay(data.expectedCents)}</dd>
-                  </div>
-                </dl>
-
-                <ul className="fixed-list" data-fixed-list>
-                  {data.items.map(item => (
-                    <FixedCostRow
-                      key={[item.categoryId ?? '', item.payee ?? '', item.lastDate].join('|')}
-                      item={item}
-                      today={data.today}
-                    />
-                  ))}
-                </ul>
-              </>
             )}
           </section>
 
-          {notice !== null && (
-            <p className="fixed-note fixed-note--error" role="alert">
-              {notice}
-            </p>
-          )}
+          <FixedManagementList<StoppedFixedCost>
+            title="已停用"
+            items={data.stopped}
+            action="恢复启用"
+            busy={busy}
+            itemKey={itemKey}
+            onAction={onResume}
+          />
+          <FixedManagementList
+            title="已忽略建议"
+            items={data.dismissed}
+            action="恢复识别"
+            busy={busy}
+            itemKey={candidate => candidate.id}
+            onAction={onRestoreDetection}
+          />
+
         </>
       )}
     </div>
   );
 }
 
-export default function FixedCostsScreen() {
+export default function FixedCostsScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
   const { db, bump } = useDb();
   const query = useQuery<FixedCostsData>(loadFixedCostsData, []);
+  useRestoreTxnEditScroll(editReturn, !query.loading);
   const [confirmation, setConfirmation] = useState<FixedConfirmation | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<string | null>(null);
 
-  const confirm = async (candidate: FixedCostCandidate) => {
-    if (db === null || busy) return;
+  const runAction = async (
+    failure: string,
+    action: (database: Db) => Promise<string | null>
+  ) => {
+    if (db === null || busy || query.loading) return;
     setBusy(true);
     setNotice(null);
+    setFeedback(null);
     try {
-      const next = await confirmFixedCost(db, candidate);
-      setConfirmation(next);
+      setFeedback(await action(db));
       bump();
     } catch (reason) {
-      setNotice(`加入清单失败：${reasonText(reason)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const dismiss = async (candidate: FixedCostCandidate) => {
-    if (db === null || busy) return;
-    setBusy(true);
-    setNotice(null);
-    try {
-      await dismissCandidate(db, candidate.id);
-      bump();
-    } catch (reason) {
-      setNotice(`忽略失败：${reasonText(reason)}`);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const undo = async () => {
-    if (db === null || confirmation === null || busy) return;
-    setBusy(true);
-    setNotice(null);
-    try {
-      await undoFixedCost(db, confirmation);
-      setConfirmation(null);
-      bump();
-    } catch (reason) {
-      setNotice(`撤销失败：${reasonText(reason)}`);
+      setNotice(`${failure}。${reasonText(reason)}`);
     } finally {
       setBusy(false);
     }
@@ -418,16 +507,49 @@ export default function FixedCostsScreen() {
       data={query.data}
       error={query.error}
       confirmation={confirmation}
-      busy={busy}
+      busy={busy || query.loading}
       notice={notice}
+      feedback={feedback}
       onConfirm={candidate => {
-        void confirm(candidate);
+        void runAction('加入清单失败', async database => {
+          setConfirmation(await confirmFixedCost(database, candidate));
+          return null;
+        });
       }}
       onDismiss={candidate => {
-        void dismiss(candidate);
+        void runAction('忽略建议失败', async database => {
+          await dismissCandidate(database, candidate.id);
+          return `已忽略${itemLabel(candidate)}。可在「已忽略建议」中恢复识别。`;
+        });
       }}
       onUndo={() => {
-        void undo();
+        if (confirmation === null) return;
+        void runAction('撤销加入失败', async database => {
+          await undoFixedCost(database, confirmation);
+          setConfirmation(null);
+          return `已撤销${confirmation.name}的加入。`;
+        });
+      }}
+      onStop={item => {
+        void runAction('停用固定支出失败', async database => {
+          await stopFixedCost(database, item);
+          setConfirmation(current => current !== null && itemKey(current) === itemKey(item) ? null : current);
+          return `${itemLabel(item)}已停用。可在「已停用」中恢复。`;
+        });
+      }}
+      onResume={item => {
+        void runAction('恢复启用失败', async database => {
+          await resumeFixedCost(database, item);
+          return `${itemLabel(item)}已恢复启用。`;
+        });
+      }}
+      onRestoreDetection={candidate => {
+        void runAction('恢复识别失败', async database => {
+          const result = await restoreDismissedCandidate(database, candidate.id);
+          if (result === 'suggested') return `已恢复识别。可在「建议标记」中查看${candidate.name}。`;
+          if (result === 'stopped') return '已恢复识别。该项停用期间暂停显示建议。';
+          return '已恢复识别。当前有效流水还不足以形成建议。';
+        });
       }}
     />
   );

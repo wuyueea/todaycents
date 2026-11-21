@@ -1,5 +1,13 @@
 import { test, expect, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import { readZipStrict } from '../export/zipReader';
+
+function expectSpendingSummary(bytes: Uint8Array) {
+  const parts = readZipStrict(bytes);
+  const readPart = (name: string) => new TextDecoder().decode(parts.find(part => part.name === name)?.data);
+  expect(readPart('xl/workbook.xml')).toContain('<sheet name="支出汇总"');
+  expect(readPart('xl/worksheets/sheet2.xml')).toContain('>支出总计<');
+}
 
 async function sql<T>(page: Page, statement: string, params: (string | number | null)[] = []): Promise<T[]> {
   return page.evaluate(async ({ statement, params }) => {
@@ -424,12 +432,67 @@ test('downloads the xlsx directly in a browser without a native cache list', asy
   await page.getByRole('button', { name: '导出这个月为表格（.xlsx）', exact: true }).click();
   const file = await downloaded;
   expect(file.suggestedFilename()).toBe('记账本-2026-01.xlsx');
-  expect((await readFile(await file.path())).subarray(0, 4)).toEqual(Buffer.from([0x50, 0x4b, 3, 4]));
+  expectSpendingSummary(await readFile(await file.path()));
   const result = page.getByRole('region', { name: '导出结果' });
   await expect(result).toContainText(file.suggestedFilename());
   await expect(result.getByRole('button')).toHaveCount(0);
   await expect(page.getByText('应用缓存中的报表', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveCount(0);
+});
+
+test('preserves January’s budget when changing and clearing the account budget in February', async ({ page }) => {
+  const setBudget = async (amount: string) => {
+    await page.getByRole('link', { name: '设置', exact: true }).click();
+    await page.getByRole('link', { name: '账户', exact: true }).click();
+    const row = page.getByRole('button', { name: /^微信/ });
+    const account = page.getByRole('listitem').filter({ has: row });
+    await row.click();
+    await account.getByRole('button', { name: '编辑', exact: true }).click();
+    const editor = page.locator('form.accounts-edit');
+    await expect(editor.getByText('从本月起生效，留空表示不设额度。', { exact: true })).toBeVisible();
+    await editor.getByRole('button', { name: /^月度额度 / }).click();
+    const keypad = page.getByRole('dialog', { name: '月度额度键盘' });
+    if (amount === '') {
+      await keypad.getByRole('button', { name: '清空', exact: true }).click();
+    } else {
+      for (const digit of amount) await keypad.getByRole('button', { name: digit, exact: true }).click();
+    }
+    await keypad.getByRole('button', { name: '完成', exact: true }).click();
+    await editor.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(page.getByText('账户已更新', { exact: true })).toBeVisible();
+    await page.getByRole('link', { name: '返回设置', exact: true }).click();
+  };
+  const report = page.getByRole('link', { name: '报表', exact: true });
+  const comparison = page.getByRole('region', { name: '预算对实际' });
+  const readMonth = (value: string) => expect(comparison.getByText(value, { exact: true })).toBeVisible();
+  const previousMonth = page.getByRole('button', { name: '上个月', exact: true });
+  const addExpense = (date: string, cents: number) => sql(page, `
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, created_at)
+    SELECT 'budget-' || ?, ?, account.id, ?, 'expense', ? || 'T00:00:00Z'
+      FROM account WHERE account.name = '微信'
+  `, [date, date, -cents, date]);
+
+  await page.clock.setFixedTime(new Date('2026-01-31T23:55:00+08:00'));
+  await setBudget('100');
+  await addExpense('2026-01-30', 1225);
+  await report.click();
+  await readMonth('12.25 / 100.00');
+
+  await page.clock.setFixedTime(new Date('2026-02-01T00:05:00+08:00'));
+  await setBudget('200');
+  await addExpense('2026-02-01', 2000);
+  await report.click();
+  await readMonth('20.00 / 200.00');
+  await previousMonth.click();
+  await readMonth('12.25 / 100.00');
+
+  await setBudget('');
+  await report.click();
+  await expect(comparison.getByText('该月未设置账户额度。', { exact: true })).toBeVisible();
+  await page.reload();
+  await previousMonth.click();
+  await readMonth('12.25 / 100.00');
+  await noHorizontalOverflow(page);
 });
 
 test('opens the displayed month’s year report and restores that month after browsing years', async ({ page }) => {
@@ -459,7 +522,9 @@ test('opens the displayed month’s year report and restores that month after br
   await expect(total).toHaveText('37.50');
   const downloaded = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出全年为表格（.xlsx）', exact: true }).click();
-  expect((await downloaded).suggestedFilename()).toBe('记账本-2025.xlsx');
+  const file = await downloaded;
+  expect(file.suggestedFilename()).toBe('记账本-2025.xlsx');
+  expectSpendingSummary(await readFile(await file.path()));
 
   await page.getByRole('button', { name: '上一年', exact: true }).click();
   await expect(period).toHaveText('2024 年');
@@ -1383,6 +1448,255 @@ test('adds an account from the empty-account state and keeps the entry draft', a
   expect(await sql(page, 'SELECT amount_cents FROM txn')).toEqual([{ amount_cents: -1230 }]);
 });
 
+test('inserts a held account, remembers its order, and shares the order with quick entry', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T12:00:00+08:00') });
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '账户', exact: true }).click();
+  const rows = page.locator('.accounts-row');
+  const names = rows.locator('.accounts-row__name');
+  const firstOrder = ['微信', '支付宝', '银行卡'];
+  await expect(names).toHaveText(firstOrder);
+  const bank = rows.filter({ hasText: '银行卡' });
+  const preview = page.locator('.reorder-preview');
+  const insertion = page.locator('[data-reorder-drop-edge="before"]');
+  const cdp = await page.context().newCDPSession(page);
+
+  const dragToFirst = async () => {
+    const source = (await bank.boundingBox())!;
+    const first = (await rows.first().boundingBox())!;
+    const x = Math.round(source.x + source.width / 2);
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x, y: Math.round(source.y + source.height / 2) }],
+    });
+    await page.clock.runFor(500);
+    await expect(preview).toHaveText('银行卡');
+    await cdp.send('Input.dispatchTouchEvent', {
+      type: 'touchMove',
+      touchPoints: [{ x, y: Math.round(first.y + 6) }],
+    });
+    await expect(insertion).toContainText('微信');
+  };
+
+  await dragToFirst();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchCancel', touchPoints: [] });
+  await expect(preview).toHaveCount(0);
+  await expect(names).toHaveText(firstOrder);
+  await dragToFirst();
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(names).toHaveText(['银行卡', '微信', '支付宝']);
+  await expect(page.getByRole('button', { name: '下移', exact: true })).toHaveCount(0);
+  await page.reload();
+  await expect(names).toHaveText(['银行卡', '微信', '支付宝']);
+
+  await bank.click();
+  await page.getByRole('button', { name: '下移', exact: true }).click();
+  const savedOrder = ['微信', '银行卡', '支付宝'];
+  await expect(names).toHaveText(savedOrder);
+  await expect(bank).toBeFocused();
+  await page.getByRole('link', { name: '返回设置', exact: true }).click();
+  await page.getByRole('link', { name: '今天', exact: true }).click();
+  await page.getByRole('link', { name: '记一笔', exact: true }).click();
+  const entry = page.getByRole('dialog', { name: '随手记', exact: true });
+  await expect(entry.locator('[data-account-id]')).toHaveText(savedOrder);
+  await entry.getByRole('button', { name: '收入', exact: true }).click();
+  await expect(entry.locator('[data-account-id]')).toHaveText(savedOrder);
+  await entry.getByRole('button', { name: '转账', exact: true }).click();
+  await expect(entry.locator('[data-from-account-id]')).toHaveText(savedOrder);
+  await expect(entry.locator('[data-to-account-id]')).toHaveText(savedOrder);
+  await noHorizontalOverflow(page);
+});
+
+test('scrolls a long account list during a held drag', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-01-01T12:00:00+08:00') });
+  await sql(page, `
+    WITH RECURSIVE samples(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM samples WHERE n < 20)
+    INSERT INTO account (id, name, type, sort, created_at)
+    SELECT 'sort-sample-' || n, printf('测试账户 %02d', n), 'cash', 20 + n, '2025-12-01T00:00:00Z'
+      FROM samples
+  `);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '账户', exact: true }).click();
+  const rows = page.locator('.accounts-row');
+  await expect(rows).toHaveCount(23);
+  const source = (await rows.first().boundingBox())!;
+  const x = Math.round(source.x + source.width / 2);
+  const bottom = page.viewportSize()!.height;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchStart',
+    touchPoints: [{ x, y: Math.round(source.y + source.height / 2) }],
+  });
+  await page.clock.runFor(500);
+  await expect(page.locator('.reorder-preview')).toHaveText('微信');
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: bottom - 16 }] });
+  await page.clock.runFor(2200);
+  await expect(rows.last()).toBeInViewport();
+  expect(await page.evaluate(() => window.scrollY)).toBeGreaterThan(400);
+  const last = (await rows.last().boundingBox())!;
+  await cdp.send('Input.dispatchTouchEvent', {
+    type: 'touchMove',
+    touchPoints: [{ x, y: Math.min(bottom - 2, Math.round(last.y + last.height * .75)) }],
+  });
+  await expect(page.locator('[data-reorder-drop-edge="after"]')).toContainText('测试账户 20');
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(rows.last()).toContainText('微信');
+});
+
+test('sorts category siblings by touch and shares their order with both entry screens', async ({ page }) => {
+  await page.clock.install({ time: new Date('2026-02-01T12:00:00+08:00') });
+  await sql(page, "DELETE FROM category WHERE id <> 'uncategorized'");
+  await sql(page, `
+    INSERT INTO category (id, parent_id, name, kind, sort, archived_at) VALUES
+      ('order-food', NULL, '饮食', 'expense', 0, NULL),
+      ('order-daily', NULL, '日用', 'expense', 1, NULL),
+      ('order-home', NULL, '居住', 'expense', 2, NULL),
+      ('order-breakfast', 'order-food', '早餐', 'expense', 0, NULL),
+      ('order-lunch', 'order-food', '午餐', 'expense', 1, NULL),
+      ('order-paper', 'order-daily', '纸品', 'expense', 0, NULL),
+      ('order-rent', 'order-home', '房租', 'expense', 0, NULL),
+      ('order-income-1', NULL, '工资', 'income', 0, NULL),
+      ('order-income-2', NULL, '奖金', 'income', 1, NULL),
+      ('order-archived', NULL, '旧分类', 'expense', 3, '2026-01-10T00:00:00Z')
+  `);
+  await sql(page, `
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, category_id, created_at)
+    SELECT 'category-order-txn', '2026-01-30', id, -1500, 'expense', 'order-breakfast', '2026-01-30T00:00:00Z'
+      FROM account WHERE name = '微信'
+  `);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '分类', exact: true }).click();
+  const expenses = page.locator('[aria-labelledby="categories-expense-title"]');
+  const income = page.locator('[aria-labelledby="categories-income-title"]');
+  const row = (id: string) => page.locator(`.category-row[data-category-id="order-${id}"]`);
+  const names = expenses.locator('.category-row__name');
+  const original = ['饮食', '早餐', '午餐', '日用', '纸品', '居住', '房租'];
+  await expect(names).toHaveText(original);
+  await expect(row('archived')).not.toHaveAttribute('data-reorder-handle');
+  await expect(page.locator('[data-category-id="uncategorized"]')).not.toHaveAttribute('data-reorder-handle');
+
+  const cdp = await page.context().newCDPSession(page);
+  const point = async (id: string, fraction: number) => {
+    const box = (await row(id).boundingBox())!;
+    return { x: Math.round(box.x + box.width / 2), y: Math.round(box.y + box.height * fraction) };
+  };
+  const begin = async (id: string, label: string) => {
+    await row(id).scrollIntoViewIfNeeded();
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [await point(id, .5)] });
+    await page.clock.runFor(500);
+    await expect(page.locator('.reorder-preview')).toHaveText(label);
+  };
+  const move = async (id: string, fraction: number) => {
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [await point(id, fraction)] });
+  };
+  const drop = () => cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+  await begin('lunch', '午餐');
+  await expect(page.locator('.categories-add')).toBeHidden();
+  await move('paper', .5);
+  await expect(page.locator('[data-reorder-drop-edge]')).toHaveCount(0);
+  await drop();
+  await expect(names).toHaveText(original);
+  await expect(page.locator('.categories-add')).toBeVisible();
+  await begin('lunch', '午餐');
+  await move('breakfast', .2);
+  await expect(row('breakfast')).toHaveAttribute('data-reorder-drop-edge', 'before');
+  await drop();
+  await expect(names).toHaveText(['饮食', '午餐', '早餐', '日用', '纸品', '居住', '房租']);
+  await begin('food', '饮食');
+  await expect(page.getByRole('status').filter({ hasText: '已更新分类顺序' })).toHaveCSS('position', 'static');
+  await expect(row('lunch')).toHaveAttribute('data-reorder-dragging', 'true');
+  await move('rent', .8);
+  await expect(row('rent')).toHaveAttribute('data-reorder-drop-edge', 'after');
+  await drop();
+  await expect(names).toHaveText(['日用', '纸品', '居住', '房租', '饮食', '午餐', '早餐']);
+  await page.reload();
+  await expect(names).toHaveText(['日用', '纸品', '居住', '房租', '饮食', '午餐', '早餐']);
+  await row('food').getByRole('button', { name: '饮食的菜单' }).click();
+  await page.getByRole('button', { name: '上移', exact: true }).click();
+  await expect(names).toHaveText(['日用', '纸品', '饮食', '午餐', '早餐', '居住', '房租']);
+
+  await page.getByRole('button', { name: '收入', exact: true }).click();
+  await expect(income.locator('.category-row__name')).toHaveText(['工资', '奖金']);
+  await begin('income-2', '奖金');
+  await move('income-1', .1);
+  await drop();
+  await expect(income.locator('.category-row__name')).toHaveText(['奖金', '工资']);
+  await page.getByRole('link', { name: '返回设置' }).click();
+  await page.getByRole('link', { name: '今天', exact: true }).click();
+  await page.getByRole('link', { name: '记一笔', exact: true }).click();
+  const entry = page.getByRole('dialog', { name: '随手记', exact: true });
+  await expect(entry.locator('[data-category-id]')).toHaveText(['日用', '饮食', '居住', '未分类']);
+  await entry.getByRole('button', { name: '饮食', exact: true }).click();
+  await expect(entry.locator('[data-subcategory-id]')).toHaveText(['不细分', '午餐', '早餐']);
+  await entry.getByRole('button', { name: '收入', exact: true }).click();
+  await expect(entry.locator('[data-category-id]')).toHaveText(['奖金', '工资']);
+
+  await page.goto('/#/txn/category-order-txn');
+  await expect(page.locator('[data-category-id]')).toHaveText(['日用', '饮食', '居住', '未分类']);
+  await expect(page.locator('[data-subcategory-id]')).toHaveText(['不细分', '午餐', '早餐']);
+  await expect(page.locator('[data-subcategory-id="order-breakfast"]')).toHaveAttribute('aria-pressed', 'true');
+  expect(await sql(page, "SELECT category_id FROM txn WHERE id='category-order-txn'"))
+    .toEqual([{ category_id: 'order-breakfast' }]);
+  await noHorizontalOverflow(page);
+});
+
+test('deletes unused active and archived accounts after confirmation and protects history', async ({ page }) => {
+  await sql(page, `
+    INSERT INTO account (id, name, type, initial_balance_cents, archived_at, created_at) VALUES
+      ('unused-live', '删除样本活跃', 'cash', 1234, NULL, '2025-12-01T00:00:00Z'),
+      ('unused-archived', '删除样本归档', 'cash', 0, '2025-12-31T00:00:00Z', '2025-12-01T00:00:00Z'),
+      ('used-account', '删除样本流水历史', 'cash', 0, NULL, '2025-12-01T00:00:00Z'),
+      ('template-account', '删除样本旧模板', 'cash', 0, NULL, '2025-12-01T00:00:00Z')
+  `);
+  await sql(page, `
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, deleted_at, created_at)
+    VALUES ('account-old-txn', '2025-12-20', 'used-account', -100, 'expense',
+            '2025-12-28T00:00:00Z', '2025-12-20T00:00:00Z')
+  `);
+  await sql(page, `
+    INSERT INTO template (id, slot_key, label, default_account_id, active)
+    VALUES ('account-ref', 'account-ref', '旧模板', 'template-account', 0)
+  `);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '账户', exact: true }).click();
+  const row = (name: string) => page.getByRole('button', { name: new RegExp('^' + name) });
+  const remove = page.getByRole('button', { name: '删除账户', exact: true });
+  const sheet = page.getByRole('dialog', { name: '删除账户', exact: true });
+  const cancel = sheet.getByRole('button', { name: '取消', exact: true });
+  const confirm = sheet.getByRole('button', { name: '确认删除', exact: true });
+  const total = page.getByRole('region', { name: '账户余额', exact: true }).locator('.num');
+  await expect(total).toHaveText('12.34');
+  await row('删除样本活跃').click();
+  await noHorizontalOverflow(page);
+  await remove.click();
+  await expect(cancel).toBeFocused();
+  await expect(sheet).toContainText('12.34');
+  await cancel.click();
+  await expect(remove).toBeFocused();
+  await expect(total).toHaveText('12.34');
+  await remove.click();
+  await confirm.click();
+  await expect(row('删除样本活跃')).toHaveCount(0);
+  await expect(total).toHaveText('0.00');
+  await expect(page.getByRole('status').filter({ hasText: '已删除账户' })).toBeVisible();
+
+  await row('删除样本流水历史').click();
+  await expect(remove).toHaveCount(0);
+  await row('删除样本旧模板').click();
+  await expect(remove).toHaveCount(0);
+  await page.getByRole('checkbox', { name: '显示已归档', exact: true }).check();
+  await row('删除样本归档').click();
+  await remove.click();
+  await confirm.click();
+  await expect(row('删除样本归档')).toHaveCount(0);
+  expect(await sql(page, "SELECT id FROM account WHERE id LIKE 'unused-%'")).toEqual([]);
+  expect(await sql(page, "SELECT id FROM txn WHERE id = 'account-old-txn'")).toEqual([{ id: 'account-old-txn' }]);
+  expect(await sql(page, "SELECT default_account_id FROM template WHERE id = 'account-ref'"))
+    .toEqual([{ default_account_id: 'template-account' }]);
+  await noHorizontalOverflow(page);
+});
+
 test('reconciles an account only after an explicit balance and shows the delta before saving', async ({ page }) => {
   await sql(page, 'UPDATE account SET initial_balance_cents = ? WHERE name = ?', [10000, '微信']);
   await sql(page, 'UPDATE account SET initial_balance_cents = ?, archived_at = ? WHERE name = ?',
@@ -1536,7 +1850,61 @@ test('saves the fixed-cost switch with the note and keeps both edits on failure'
   expect(await readStored()).toEqual([{ note: '新备注', is_fixed_cost: 0 }]);
 });
 
-test('shows overdue fixed costs apart from expenses actually recorded this month', async ({ page }) => {
+test('manages fixed cost stops and ignored suggestions without losing manual marks', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-05-10T12:00:00+08:00'));
+  await sql(page, `
+    WITH bills(month, marked) AS (VALUES ('03', 1), ('04', 0), ('05', 0))
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, category_id,
+                     payee, is_fixed_cost, created_at)
+    SELECT 'fixed-stop-' || month, '2026-' || month || '-01', account.id, -3990, 'expense',
+           (SELECT id FROM category WHERE name = '通讯'), '话费复验', marked, '2026-03-01T00:00:00Z'
+      FROM bills CROSS JOIN account WHERE account.name = '微信'
+  `);
+  const readFlags = () => sql<{ id: string; is_fixed_cost: number }>(page,
+    "SELECT id, is_fixed_cost FROM txn WHERE id LIKE 'fixed-stop-%' ORDER BY id");
+  const flagsBefore = await readFlags();
+  expect(flagsBefore).toHaveLength(3);
+
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: /^固定支出/ }).click();
+  const totals = page.locator('[data-fixed-total]').locator('dd');
+  const suggestion = page.getByRole('region', { name: '固定支出候选' });
+  const stop = page.getByRole('button', { name: /^停用 话费复验/ });
+  const confirmation = page.locator('[data-fixed-confirmed]');
+  await expect(totals).toHaveText(['39.90', '39.90']);
+  await suggestion.getByRole('button', { name: '确认，是固定支出' }).click();
+  await expect(confirmation).toContainText('话费复验 已加入清单');
+  expect((await readFlags()).map(row => row.is_fixed_cost)).toEqual([1, 1, 1]);
+  await confirmation.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(suggestion).toContainText('话费复验');
+  expect(await readFlags()).toEqual(flagsBefore);
+
+  expect((await stop.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await stop.click();
+  await expect(totals).toHaveText(['0.00', '0.00']);
+  await expect(suggestion).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '已停用。' })).toBeFocused();
+  expect(await readFlags()).toEqual(flagsBefore);
+  await page.reload();
+  const stopped = page.getByText('已停用 · 1 项', { exact: true });
+  await expect(totals).toHaveText(['0.00', '0.00']);
+  await stopped.click();
+  await page.getByRole('button', { name: /^恢复启用 话费复验/ }).click();
+  await expect(totals).toHaveText(['39.90', '39.90']);
+  await expect(stopped).toHaveCount(0);
+
+  await suggestion.getByRole('button', { name: '不是', exact: true }).click();
+  await expect(suggestion).toHaveCount(0);
+  const ignored = page.getByText('已忽略建议 · 1 项', { exact: true });
+  await ignored.click();
+  await page.getByRole('button', { name: /^恢复识别 话费复验/ }).click();
+  await expect(suggestion).toContainText('话费复验');
+  await expect(ignored).toHaveCount(0);
+  expect(await readFlags()).toEqual(flagsBefore);
+  await noHorizontalOverflow(page);
+});
+
+test('shows fixed cost estimates and opens their actual source transactions', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-02-09T12:00:00+08:00'));
   await sql(page, `
     INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, category_id,
@@ -1551,11 +1919,19 @@ test('shows overdue fixed costs apart from expenses actually recorded this month
   const fixed = page.getByRole('link', { name: /^固定支出/ });
   const totals = page.locator('[data-fixed-total]');
   const list = page.locator('[data-fixed-list]');
+  const source = list.getByRole('link', { name: /查看来源流水/ });
+  const note = page.getByRole('textbox', { name: '备注', exact: true });
   await fixed.click();
   await expect(totals.locator('dt')).toHaveText(['本月已记', '预计月额']);
   await expect(totals.locator('dd')).toHaveText(['0.00', '45.00']);
   await expect(list).toContainText('待核对 · 上次实记 2026-01-08');
   await expect(list).not.toContainText('2月8日');
+  await expect(source).toHaveAttribute('href', '#/txn/fixed-january');
+  await source.click();
+  await expect(note).toHaveValue('一月实记');
+  await expect(page.getByRole('link', { name: '返回固定支出', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => window.__todaycentsBack?.())).toBe(1);
+  await expect(source).toBeFocused();
   await noHorizontalOverflow(page);
 
   await page.getByRole('link', { name: '返回设置', exact: true }).click();
@@ -1570,11 +1946,64 @@ test('shows overdue fixed costs apart from expenses actually recorded this month
   await expect(totals.locator('dd')).toHaveText(['47.00', '47.00']);
   await expect(list).toContainText('预计下次 3月9日');
   await expect(list).not.toContainText('待核对');
+  const [latest] = await sql<{ id: string }>(page, "SELECT id FROM txn WHERE note = '二月实记'");
+  await expect(source).toHaveAttribute('href', '#/txn/' + latest.id);
+  const originalTop = await source.evaluate(element => element.getBoundingClientRect().top);
+  await source.click();
+  await expect(note).toHaveValue('二月实记');
+  await expect(page.getByRole('switch', { name: '固定支出', exact: true })).toHaveAttribute('aria-checked', 'false');
+  await note.fill('二月实记已核对');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await expectRestoredRow(source, originalTop);
   expect(await sql(page, 'SELECT amount_cents, is_fixed_cost FROM txn ORDER BY occurred_date')).toEqual([
     { amount_cents: -4500, is_fixed_cost: 1 },
     { amount_cents: -4700, is_fixed_cost: 0 },
   ]);
+  await sql(page, "UPDATE txn SET deleted_at = '2026-02-09T12:00:00Z' WHERE id = ?", [latest.id]);
+  await page.getByRole('link', { name: '返回设置', exact: true }).click();
+  await fixed.click();
+  await expect(source).toHaveAttribute('href', '#/txn/fixed-january');
+  await expect(totals.locator('dd')).toHaveText(['0.00', '45.00']);
   await noHorizontalOverflow(page);
+});
+
+test('names ledger day bars by their live records and moves keyboard focus to the selected day', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-05-10T12:00:00+08:00'));
+  await sql(page, `
+    WITH records(id, day, account, cents, direction, pair, deleted) AS (VALUES
+      ('read-adjust', '04', '微信', 500, 'adjust', NULL, NULL),
+      ('read-out', '05', '微信', -1000, 'transfer', 'read-pair', NULL),
+      ('read-in', '05', '支付宝', 1000, 'transfer', 'read-pair', NULL),
+      ('read-expense', '06', '微信', -1250, 'expense', NULL, NULL),
+      ('read-income', '06', '微信', 3000, 'income', NULL, NULL),
+      ('read-deleted', '07', '微信', 3000, 'income', NULL, '2026-05-08T00:00:00Z')
+    )
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, transfer_group_id,
+                     deleted_at, created_at)
+    SELECT records.id, '2026-05-' || day, account.id, cents, direction, pair, deleted,
+           '2026-05-' || day || 'T00:00:00Z'
+      FROM records JOIN account ON account.name = records.account
+  `);
+  await page.getByRole('link', { name: '流水', exact: true }).click();
+  const bar = (name: string) => page.getByRole('button', { name, exact: true });
+  const adjust = bar('5月4日 无支出，有 1 笔调整');
+  const transfer = bar('5月5日 无支出，有 1 笔转账');
+  await expect(adjust).toBeEnabled();
+  await expect(transfer).toBeEnabled();
+  await expect(bar('5月6日 支出 12.50 元，有 1 笔收入')).toBeEnabled();
+  await expect(bar('5月7日 无流水')).toBeDisabled();
+  await expect(bar('5月8日 无流水')).toBeDisabled();
+  await expect(bar('5月11日 未来日期')).toBeDisabled();
+
+  await adjust.focus();
+  await page.keyboard.press('Tab');
+  await expect(transfer).toBeFocused();
+  await adjust.press('Enter');
+  await expect(page.getByRole('heading', { name: /^5月4日/, level: 2 })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('[data-txn-id="read-adjust"]')).toBeFocused();
+  await transfer.click();
+  await expect(page.getByRole('heading', { name: /^5月5日/, level: 2 })).toBeFocused();
 });
 
 test('jumps to a month or a specific day from the ledger title', async ({ page }) => {
@@ -1815,6 +2244,54 @@ test('opens all project transactions and restores an older row after editing', a
   expect(await page.evaluate(() => window.__todaycentsBack?.())).toBe(1);
   await expect(page.getByRole('heading', { name: '跨年项目', exact: true })).toBeVisible();
   await expect(preview.locator('.project-txn')).toHaveCount(5);
+});
+
+test('deletes an unused project and rechecks its references after the sheet opens', async ({ page }) => {
+  await sql(page, `
+    INSERT INTO project (id, name, status, created_at) VALUES
+      ('unused-project', '待删除测试项目', 'active', '2025-12-01T00:00:00Z'),
+      ('archived-project', '待删除归档项目', 'archived', '2025-12-01T00:00:00Z'),
+      ('referenced-project', '稍后新增流水', 'active', '2025-12-01T00:00:00Z')
+  `);
+  await page.getByRole('link', { name: '设置', exact: true }).click();
+  await page.getByRole('link', { name: '项目', exact: true }).click();
+  const projectLink = (name: string) => page.getByRole('link').filter({ hasText: name });
+  const remove = page.getByRole('button', { name: '删除项目', exact: true });
+  const sheet = page.getByRole('dialog', { name: '删除项目', exact: true });
+  const cancel = sheet.getByRole('button', { name: '取消', exact: true });
+  const confirm = sheet.getByRole('button', { name: '确认删除', exact: true });
+
+  await projectLink('待删除测试项目').click();
+  await remove.click();
+  await expect(cancel).toBeFocused();
+  await expect(sheet).toContainText('待删除测试项目');
+  await cancel.click();
+  await expect(remove).toBeFocused();
+  await remove.click();
+  await confirm.click();
+  await expect(page.getByRole('heading', { name: '项目', exact: true })).toBeFocused();
+  await expect(projectLink('待删除测试项目')).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: '已删除项目' })).toBeVisible();
+
+  await projectLink('待删除归档项目').click();
+  await remove.click();
+  await confirm.click();
+  await expect(projectLink('待删除归档项目')).toHaveCount(0);
+
+  await projectLink('稍后新增流水').click();
+  await remove.click();
+  await sql(page, `
+    INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, project_id, deleted_at, created_at)
+    SELECT 'project-old-txn', '2025-12-20', id, -200, 'expense', 'referenced-project',
+           '2025-12-28T00:00:00Z', '2025-12-20T00:00:00Z'
+      FROM account WHERE name = '微信'
+  `);
+  await confirm.click();
+  await expect(sheet.getByRole('alert')).toContainText('还有 1 笔流水');
+  await cancel.click();
+  await expect(remove).toHaveCount(0);
+  expect(await sql(page, 'SELECT id FROM project ORDER BY id')).toEqual([{ id: 'referenced-project' }]);
+  await noHorizontalOverflow(page);
 });
 
 test('edits a project with real keypad, scroll and touch targets', async ({ page }) => {

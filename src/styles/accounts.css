@@ -143,8 +143,15 @@
 
 .accounts-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin: 0 0 12px;
+}
+
+.accounts-order-hint {
+  margin: 8px 4px;
+  color: var(--v1-t2);
+  font-size: 13px;
 }
 
 .accounts-action {

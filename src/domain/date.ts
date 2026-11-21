@@ -2,10 +2,13 @@ function pad2(value: number): string {
   return String(value).padStart(2, '0');
 }
 
-/** Today on the local calendar as YYYY-MM-DD; never derived from UTC. */
+/** A date on the local calendar as YYYY-MM-DD; never derived from UTC. */
+export function localDateISO(date: Date): string {
+  return `${String(date.getFullYear()).padStart(4, '0')}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+}
+
 export function todayLocalISO(): string {
-  const now = new Date();
-  return `${String(now.getFullYear()).padStart(4, '0')}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}`;
+  return localDateISO(new Date());
 }
 
 /** Month bucket of a YYYY-MM-DD date, taken from the string prefix only. */

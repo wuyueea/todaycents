@@ -352,6 +352,8 @@ a.project-txn:focus-visible {
 }
 
 .project-actions {
+  display: grid;
+  gap: 8px;
   margin-top: 26px;
 }
 
@@ -375,6 +377,11 @@ a.project-txn:focus-visible {
 .project-archive:focus-visible {
   outline: 2px solid var(--ink);
   outline-offset: 2px;
+}
+
+.project-delete {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 
 /* 改名与预算：同一张纸上的字段行，不另起一张卡。 */

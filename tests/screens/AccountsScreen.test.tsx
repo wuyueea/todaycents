@@ -69,6 +69,7 @@ function accountsData(overrides: Partial<AccountsData> = {}): AccountsData {
     accounts: [CAT, TRIP],
     balances: { 'a-cat': 12345, 'a-trip': -700 },
     txnCounts: {},
+    legacyTemplateAccountIds: new Set(),
     ...overrides,
   };
 }
@@ -376,7 +377,7 @@ describe('AccountsScreen', () => {
     store.data = accountsData();
     const html = renderScreen();
 
-    expect(html).toContain('<h1>账户</h1>');
+    expect(html).toMatch(/<h1[^>]*>账户<\/h1>/);
     expect(html).toContain('猫咪基金');
     expect(html).toContain('旅行基金');
     expect(html).toContain('电子钱包');

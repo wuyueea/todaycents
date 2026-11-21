@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
-import { createCategory, listCategories } from '../../src/db/repos/categories';
+import { createCategory, listCategories, reorderCategories, unarchiveCategory } from '../../src/db/repos/categories';
 import { seedDefaults } from '../../src/db/seed';
-import { listAccounts } from '../../src/db/repos/accounts';
+import { createAccount, listAccounts } from '../../src/db/repos/accounts';
+import { buildBackup, restoreBackup } from '../../src/db/backup';
 
 /** The system row exists in every migrated database; count only user rows. */
 const SYSTEM_ID = 'uncategorized';
@@ -30,6 +31,65 @@ describe('categories', () => {
 });
 
 describe('category ordering', () => {
+  it('persists each sibling order through backup while preserving archived slots and history', async () => {
+    const db = await createTestDb();
+    const food = await createCategory(db, { name: '饮食', kind: 'expense' });
+    const daily = await createCategory(db, { name: '日用', kind: 'expense' });
+    const sport = await createCategory(db, { name: '运动', kind: 'expense' });
+    const income = await createCategory(db, { name: '生活费', kind: 'income' });
+    const breakfast = await createCategory(db, { name: '早餐', kind: 'expense', parentId: food });
+    const lunch = await createCategory(db, { name: '午餐', kind: 'expense', parentId: food });
+    const equipment = await createCategory(db, { name: '装备', kind: 'expense', parentId: sport });
+    const accountId = await createAccount(db, { name: '测试钱包', type: 'cash' });
+    const date = '2025-10-01T12:00:00Z';
+    await db.run('UPDATE category SET archived_at = ? WHERE id = ?', [date, daily]);
+    await db.run(`
+      INSERT INTO txn (id, occurred_date, account_id, amount_cents, direction, category_id, created_at)
+      VALUES ('old', '2025-10-01', ?, -100, 'expense', ?, ?)
+    `, [accountId, breakfast, date]);
+    const system = (await listCategories(db)).find(category => category.id === SYSTEM_ID);
+
+    await reorderCategories(db, 'expense', null, [sport, food], [food, sport]);
+    await reorderCategories(db, 'expense', food, [lunch, breakfast], [breakfast, lunch]);
+    const restored = await createTestDb();
+    await restoreBackup(restored, await buildBackup(db));
+    await unarchiveCategory(restored, daily);
+
+    const expense = await listCategories(restored, 'expense');
+    expect(expense.filter(category => category.parentId === null).map(category => category.id))
+      .toEqual([sport, daily, food, SYSTEM_ID]);
+    expect(expense.filter(category => category.parentId === food).map(category => category.id))
+      .toEqual([lunch, breakfast]);
+    expect(expense.find(category => category.id === equipment)).toMatchObject({ parentId: sport, sort: 0 });
+    expect(expense.at(-1)).toEqual(system);
+    expect((await listCategories(restored, 'income')).map(category => category.id)).toEqual([income]);
+    expect(await restored.get('SELECT category_id, amount_cents FROM txn WHERE id = ?', ['old']))
+      .toEqual({ category_id: breakfast, amount_cents: -100 });
+  });
+
+  it('refuses cross-group, system and stale moves, and rolls back a partial write', async () => {
+    const db = await createTestDb();
+    const first = await createCategory(db, { name: '乙', kind: 'expense', sort: 3 });
+    const second = await createCategory(db, { name: '甲', kind: 'expense', sort: 4 });
+    const child = await createCategory(db, { name: '细分', kind: 'expense', parentId: first });
+    const otherKind = await createCategory(db, { name: '工资', kind: 'income' });
+    const before = await listCategories(db);
+
+    for (const invalid of [[child, first], [otherKind, first], [SYSTEM_ID, first], [first, first]]) {
+      await expect(reorderCategories(db, 'expense', null, invalid, [first, second]))
+        .rejects.toThrow('只能在同级分类之间排序');
+    }
+    await expect(reorderCategories(db, 'expense', null, [first, second], [second, first]))
+      .rejects.toThrow('分类列表已变化');
+    await expect(reorderCategories(db, 'expense', otherKind, [], []))
+      .rejects.toThrow('父级已不可用');
+    await db.run(`CREATE TRIGGER block_category_order BEFORE UPDATE OF sort ON category
+      WHEN OLD.sort = 3 BEGIN SELECT RAISE(ABORT, 'blocked order'); END`);
+    await expect(reorderCategories(db, 'expense', null, [second, first], [first, second]))
+      .rejects.toThrow('blocked order');
+    expect(await listCategories(db)).toEqual(before);
+  });
+
   it('numbers siblings from zero inside each kind and each parent', async () => {
     const db = await createTestDb();
     const food = await createCategory(db, { name: '饮食', kind: 'expense' });

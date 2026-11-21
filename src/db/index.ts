@@ -1,5 +1,6 @@
 import type { Db } from './driver';
 import { migrate } from './migrate';
+import { initializeAccountBudgetHistory } from './repos/accountBudgets';
 import { seedDefaults } from './seed';
 
 /**
@@ -18,6 +19,7 @@ async function openLedger(): Promise<Db> {
   const db = await openCapacitorDb();
   await migrate(db);
   await seedDefaults(db);
+  await initializeAccountBudgetHistory(db);
   return db;
 }
 

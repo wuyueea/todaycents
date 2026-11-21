@@ -163,7 +163,7 @@ export default function App() {
             <Route path="/settings/projects" element={<ProjectsScreen />} />
             <Route path="/settings/projects/:id" element={<ProjectDetailScreen editReturn={txnEditReturn} />} />
             <Route path="/settings/projects/:id/transactions" element={<ProjectTransactionsScreen editReturn={txnEditReturn} />} />
-            <Route path="/settings/fixed" element={<FixedCostsScreen />} />
+            <Route path="/settings/fixed" element={<FixedCostsScreen editReturn={txnEditReturn} />} />
             {/* Unknown paths go back to 今天 rather than rendering a blank page. */}
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

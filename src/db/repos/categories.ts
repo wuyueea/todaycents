@@ -189,6 +189,50 @@ export async function listCategories(
   return rows.map(toCategory);
 }
 
+export function compareCategoryOrder(left: Category, right: Category): number {
+  return left.sort - right.sort || left.name.localeCompare(right.name, 'zh-Hans-CN');
+}
+
+/** Saves the order of one live sibling group, keeping archived sibling slots. */
+export async function reorderCategories(
+  db: Db,
+  kind: CategoryKind,
+  parentId: string | null,
+  ids: readonly string[],
+  previousIds: readonly string[]
+): Promise<void> {
+  await db.transaction(async tx => {
+    const categories = await listCategories(tx, kind, { includeArchived: true });
+    if (parentId !== null && !categories.some(category =>
+      category.id === parentId && category.parentId === null && category.archivedAt === null &&
+      category.id !== UNCATEGORIZED_CATEGORY_ID
+    )) {
+      throw new Error('该分类的父级已不可用。');
+    }
+    const siblings = categories
+      .filter(category => category.parentId === parentId && category.id !== UNCATEGORIZED_CATEGORY_ID)
+      .sort(compareCategoryOrder);
+    const active = siblings.filter(category => category.archivedAt === null);
+    if (active.length !== previousIds.length || active.some(({ id }, index) => id !== previousIds[index])) {
+      throw new Error('分类列表已变化，请重新排序。');
+    }
+    const requested = new Set(ids);
+    if (ids.length !== active.length || requested.size !== active.length || active.some(({ id }) => !requested.has(id))) {
+      throw new Error('只能在同级分类之间排序。');
+    }
+    if (active.every(({ id }, index) => id === ids[index])) return;
+
+    const byId = new Map(siblings.map(category => [category.id, category]));
+    let nextActive = 0;
+    for (const [sort, category] of siblings.entries()) {
+      const id = category.archivedAt === null ? ids[nextActive++] : category.id;
+      if (byId.get(id)?.sort !== sort) {
+        await tx.run('UPDATE category SET sort = ? WHERE id = ?', [sort, id]);
+      }
+    }
+  });
+}
+
 /** The system category's forbidden operations share one message shape. */
 function assertNotSystem(
   id: string,

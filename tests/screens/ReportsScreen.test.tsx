@@ -80,6 +80,7 @@ const MONTH_REPORT: MonthReport = {
   restNames: '通讯 订阅 医疗',
   monthlySeries: SERIES,
   budgets: [CARD, OVER],
+  hasUnrecordedBudgets: false,
 };
 
 const YEAR_REPORT: YearReport = {
@@ -265,8 +266,16 @@ describe('报表 · 月', () => {
     const html = renderScreen();
 
     expect(html).toContain('预算对实际');
-    expect(html).toContain('还没有设过额度');
+    expect(html).toContain('该月未设置账户额度');
     expect(html).not.toContain('reports-budget__track');
+  });
+
+  it('shows the missing-record notice alongside available budget rows', () => {
+    store.data = monthData({ budgets: [CARD], hasUnrecordedBudgets: true });
+    const html = renderScreen();
+    expect(html).toContain('该月有账户的历史额度未记录');
+    expect(html).toContain('711.55 / 750.00');
+    expect(html).not.toContain('该月未设置账户额度');
   });
 
   it('offers the month as a real .xlsx download instead of a dead button', () => {

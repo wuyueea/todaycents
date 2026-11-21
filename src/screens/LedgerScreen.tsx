@@ -136,49 +136,58 @@ export interface LedgerDayBar {
   isToday: boolean;
   /** True when the day carries any live row (including transfers). */
   hasRows: boolean;
+  incomeCount: number;
+  transferCount: number;
+  adjustmentCount: number;
 }
 
 /**
- * Builds the month's day bars from the same rows the list uses.
+ * Builds the month's day bars from the same groups the list renders.
  *
- * Every calendar day gets a bar, including zero days and future days. Only
- * expense rows contribute height; income, transfers and adjustments do not.
- * Future days are marked so they can be drawn blank, and hasRows keeps a
- * zero-expense day with a transfer clickable.
+ * Only spending affects the height. The other movement counts describe
+ * which records an enabled bar opens.
  */
 export function dailyExpenseBars(
-  rows: readonly TxnRow[],
+  groups: readonly LedgerDayGroup[],
   monthKey: string,
   todayISO: string
 ): LedgerDayBar[] {
   const days = Number(monthRange(monthKey).end.slice(-2));
-  const expenseByDay = new Map<string, number>();
-  const busyDays = new Set<string>();
-
-  for (const row of rows) {
-    if (row.deletedAt !== null) continue;
-    busyDays.add(row.occurredDate);
-    if (row.direction === 'expense') {
-      expenseByDay.set(
-        row.occurredDate,
-        (expenseByDay.get(row.occurredDate) ?? 0) - row.amountCents
-      );
-    }
-  }
+  const byDate = new Map(groups.map(group => [group.date, group]));
 
   const bars: LedgerDayBar[] = [];
   for (let day = 1; day <= days; day += 1) {
     const date = `${monthKey}-${String(day).padStart(2, '0')}`;
+    const group = byDate.get(date);
+    const rows = group?.rows ?? [];
     bars.push({
       date,
       day,
-      expenseCents: expenseByDay.get(date) ?? 0,
+      expenseCents: group?.expenseCents ?? 0,
       isFuture: date > todayISO,
       isToday: date === todayISO,
-      hasRows: busyDays.has(date),
+      hasRows: rows.length > 0,
+      incomeCount: rows.filter(row => row.direction === 'income').length,
+      transferCount: countMovements(rows.filter(row => row.direction === 'transfer')),
+      adjustmentCount: rows.filter(row => row.direction === 'adjust').length,
     });
   }
   return bars;
+}
+
+function ledgerBarLabel(bar: LedgerDayBar): string {
+  const date = formatMonthDay(bar.date);
+  if (bar.isFuture) return `${date} 未来日期`;
+  if (!bar.hasRows) return `${date} 无流水`;
+
+  const contents: string[] = [];
+  if (bar.incomeCount > 0) contents.push(`${bar.incomeCount} 笔收入`);
+  if (bar.transferCount > 0) contents.push(`${bar.transferCount} 笔转账`);
+  if (bar.adjustmentCount > 0) contents.push(`${bar.adjustmentCount} 笔调整`);
+  const spending = bar.expenseCents > 0 ? `支出 ${formatCentsDisplay(bar.expenseCents)} 元` : '无支出';
+  return contents.length > 0
+    ? `${date} ${spending}，有 ${contents.join('、')}`
+    : `${date} ${spending}`;
 }
 
 /** A bar's height in px: square-root scale, with a 2px floor. */
@@ -303,11 +312,7 @@ function LedgerBars({
                 .filter(Boolean)
                 .join(' ')}
               data-bar-date={bar.date}
-              aria-label={
-                bar.expenseCents > 0
-                  ? `${formatMonthDay(bar.date)} 出 ${formatCentsDisplay(bar.expenseCents)}`
-                  : `${formatMonthDay(bar.date)} 无支出`
-              }
+              aria-label={ledgerBarLabel(bar)}
               disabled={bar.isFuture || !bar.hasRows}
               onClick={() => onJump(bar.date)}
             >
@@ -332,7 +337,7 @@ function LedgerBars({
 function scrollToLedgerDay(date: string, throughCalendar = false) {
   const target = document.getElementById(`ledger-day-${date}`);
   if (target === null) return;
-  if (throughCalendar) target.querySelector('h2')?.focus({ preventScroll: true });
+  target.querySelector('h2')?.focus({ preventScroll: true });
   // Keep the day heading below the translucent Android status bar.
   const inset = document.querySelector('.status-veil')?.getBoundingClientRect().height ?? 0;
   const top = target.getBoundingClientRect().top + window.scrollY - inset - 8;
@@ -360,7 +365,7 @@ export default function LedgerScreen({ editReturn = null }: { editReturn?: TxnEd
   // month's numbers, so a snapshot from a different month is treated as absent.
   const data = query.data?.monthKey === monthKey ? query.data : null;
   const groups = data === null ? [] : groupTxnsByDate(data.rows);
-  const bars = dailyExpenseBars(data?.rows ?? [], monthKey, today);
+  const bars = dailyExpenseBars(groups, monthKey, today);
   const atCurrentMonth = monthKey >= currentMonthKey;
   const atFirstMonth = monthKey === '0000-01';
   const previousMonth = atFirstMonth ? monthKey : shiftMonthKey(monthKey, -1);

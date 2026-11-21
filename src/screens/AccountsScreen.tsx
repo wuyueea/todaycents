@@ -1,15 +1,21 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AmountText, formatCentsDisplay } from '../components/AmountText';
 import { AmountKeypadField } from '../components/AmountKeypadField';
+import { UnusedRecordDeleteSheet } from '../components/UnusedRecordDeleteSheet';
+import { reorderedIds, useReorderGesture } from '../components/useReorderGesture';
+import type { ReorderInsertion } from '../components/useReorderGesture';
 import { useDb, useQuery } from '../store/useDb';
 import {
+  accountIdsInLegacyTemplates,
   allBalances,
   archiveAccount,
   createAccount,
+  deleteAccount,
   listAccounts,
   reconcileAccountBalance,
+  reorderActiveAccounts,
   txnCountByAccount,
   unarchiveAccount,
   updateAccount,
@@ -66,6 +72,7 @@ export interface AccountsData {
   balances: Record<string, number>;
   /** Transaction rows per account, deleted rows included. */
   txnCounts: Record<string, number>;
+  legacyTemplateAccountIds: Set<string>;
 }
 
 export async function loadAccountsData(
@@ -75,7 +82,8 @@ export async function loadAccountsData(
   const accounts = await listAccounts(db, { includeArchived: opts.includeArchived });
   const balances = await allBalances(db);
   const txnCounts = await txnCountByAccount(db);
-  return { accounts, balances, txnCounts };
+  const legacyTemplateAccountIds = await accountIdsInLegacyTemplates(db);
+  return { accounts, balances, txnCounts, legacyTemplateAccountIds };
 }
 
 /**
@@ -380,6 +388,60 @@ export default function AccountsScreen() {
   const [reconcileInvalid, setReconcileInvalid] = useState(false);
   const [status, setStatus] = useState<StatusNote | null>(null);
   const [busy, setBusy] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Account | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const orderFocus = useRef<{ id: string; ids: string[] } | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const activeAccounts = accounts.filter(account => account.archivedAt === null);
+  const hasAccountOrder = activeAccounts.length > 1;
+  const canReorder = hasAccountOrder && db !== null && !query.loading && !busy &&
+    editing === null && reconciling === null && deleteTarget === null && !showCreate;
+
+  async function insertAccount(sourceId: string, insertion: ReorderInsertion, focusAfter = false) {
+    if (db === null || !canReorder) return;
+    const previousIds = activeAccounts.map(account => account.id);
+    const ids = reorderedIds(previousIds, sourceId, insertion);
+    if (ids === null) return;
+
+    setBusy(true);
+    setStatus(null);
+    try {
+      await reorderActiveAccounts(db, ids, previousIds);
+      if (focusAfter) orderFocus.current = { id: sourceId, ids };
+      setStatus({ kind: 'success', text: '已更新账户顺序' });
+    } catch (reason) {
+      setStatus({
+        kind: 'error',
+        text: `排序失败。${reason instanceof Error ? reason.message : String(reason)}`,
+      });
+    } finally {
+      bump();
+      setBusy(false);
+    }
+  }
+
+  const drag = useReorderGesture(canReorder, location.key, (id, insertion) => {
+    void insertAccount(id, insertion);
+  });
+
+  const moveAccount = (accountId: string, delta: -1 | 1) => {
+    const index = activeAccounts.findIndex(account => account.id === accountId);
+    const target = activeAccounts[index + delta];
+    if (index < 0 || target === undefined) return;
+    void insertAccount(accountId, { id: target.id, edge: delta < 0 ? 'before' : 'after' }, true);
+  };
+
+  useEffect(() => {
+    const focus = orderFocus.current;
+    if (focus === null || query.loading || data === null) return;
+    const currentIds = data.accounts.filter(account => account.archivedAt === null).map(account => account.id);
+    if (currentIds.length !== focus.ids.length || currentIds.some((id, index) => id !== focus.ids[index])) return;
+
+    const rows = listRef.current?.querySelectorAll<HTMLElement>('[data-reorder-item]');
+    Array.from(rows ?? []).find(row => row.dataset.reorderItem === focus.id)
+      ?.querySelector<HTMLButtonElement>('[data-reorder-handle]')?.focus();
+    orderFocus.current = null;
+  }, [busy, data, listRef, query.loading]);
 
   useEffect(() => {
     if (accountAction === 'create' && accountsLoaded) {
@@ -593,6 +655,26 @@ export default function AccountsScreen() {
     }
   };
 
+  const handleDelete = async () => {
+    if (db === null || deleteTarget === null || busy) return;
+    setBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount(db, deleteTarget.id);
+      setSelectedId(null);
+      setReconciling(null);
+      setDeleteTarget(null);
+      setStatus({ kind: 'success', text: `已删除账户「${deleteTarget.name}」` });
+      bump();
+      document.getElementById('accounts-heading')?.focus();
+    } catch (reason) {
+      setDeleteError(`删除失败。${reason instanceof Error ? reason.message : String(reason)}`);
+      bump();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const toggleArchived = (checked: boolean) => {
     setShowArchived(checked);
     setSelectedId(null);
@@ -620,7 +702,7 @@ export default function AccountsScreen() {
         >
           ‹
         </Link>
-        <h1>账户</h1>
+        <h1 id="accounts-heading" tabIndex={-1}>账户</h1>
       </header>
 
       {data !== null && (
@@ -643,6 +725,7 @@ export default function AccountsScreen() {
         </section>
       )}
 
+      {hasAccountOrder && <p className="accounts-order-hint">长按账户拖动排序</p>}
       {data === null ? (
         query.error !== null ? (
           <p className="accounts-note accounts-note--error" role="alert">
@@ -656,7 +739,7 @@ export default function AccountsScreen() {
       ) : accounts.length === 0 ? (
         <p className="accounts-empty">还没有账户</p>
       ) : (
-        <ul className="accounts-list">
+        <ul className="accounts-list" ref={listRef} data-reorder-list>
           {accounts.map(account => (
             <li
               className={
@@ -664,6 +747,9 @@ export default function AccountsScreen() {
               }
               key={account.id}
               data-account-id={account.id}
+              data-reorder-item={account.archivedAt === null ? account.id : undefined}
+              data-reorder-dragging={drag?.sourceId === account.id || undefined}
+              data-reorder-drop-edge={drag?.insertion?.markerId === account.id ? drag.insertion.edge : undefined}
             >
               {editing?.id === account.id ? (
                 <form className="accounts-edit" onSubmit={handleEdit}>
@@ -740,7 +826,7 @@ export default function AccountsScreen() {
                       invalid={editProblems.monthlyBudgetInvalid}
                       placeholder="0.00"
                     />
-                    <p className="accounts-hint">留空表示不设额度。</p>
+                    <p className="accounts-hint">从本月起生效，留空表示不设额度。</p>
                   </div>
 
                   {editError !== null && (
@@ -769,6 +855,7 @@ export default function AccountsScreen() {
                     className="accounts-row"
                     type="button"
                     data-account-row
+                    data-reorder-handle={canReorder && account.archivedAt === null ? account.name : undefined}
                     aria-expanded={selectedId === account.id}
                     onClick={() => selectAccount(account)}
                   >
@@ -790,9 +877,9 @@ export default function AccountsScreen() {
                     </p>
                   )}
 
-                  {selectedId === account.id &&
-                    (account.archivedAt !== null ? (
-                      <div className="accounts-actions">
+                  {selectedId === account.id && (
+                    <div className="accounts-actions">
+                      {account.archivedAt !== null ? (
                         <button
                           className="accounts-action"
                           type="button"
@@ -801,35 +888,70 @@ export default function AccountsScreen() {
                         >
                           恢复
                         </button>
-                      </div>
-                    ) : (
-                      <div className="accounts-actions">
-                        <button
-                          className="accounts-action"
-                          type="button"
-                          onClick={() => startReconcile(account)}
-                          disabled={busy}
-                        >
-                          对账
-                        </button>
-                        <button
-                          className="accounts-action"
-                          type="button"
-                          onClick={() => startEdit(account)}
-                          disabled={busy}
-                        >
-                          编辑
-                        </button>
-                        <button
-                          className="accounts-action accounts-action--danger"
-                          type="button"
-                          onClick={() => handleArchive(account)}
-                          disabled={busy}
-                        >
-                          归档
-                        </button>
-                      </div>
-                    ))}
+                      ) : (
+                        <>
+                          <button
+                            className="accounts-action"
+                            type="button"
+                            onClick={() => startReconcile(account)}
+                            disabled={busy}
+                          >
+                            对账
+                          </button>
+                          <button
+                            className="accounts-action"
+                            type="button"
+                            onClick={() => startEdit(account)}
+                            disabled={busy}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            className="accounts-action accounts-action--danger"
+                            type="button"
+                            onClick={() => handleArchive(account)}
+                            disabled={busy}
+                          >
+                            归档
+                          </button>
+                        </>
+                      )}
+                      {(data.txnCounts[account.id] ?? 0) === 0 &&
+                        !data.legacyTemplateAccountIds.has(account.id) && (
+                          <button
+                            className="accounts-action accounts-action--danger"
+                            type="button"
+                            disabled={busy || query.loading}
+                            onClick={() => {
+                              setDeleteError(null);
+                              setDeleteTarget(account);
+                            }}
+                          >
+                            删除账户
+                          </button>
+                        )}
+                      {hasAccountOrder && account.archivedAt === null && (
+                        <>
+                          <button
+                            className="accounts-action"
+                            type="button"
+                            disabled={!canReorder || activeAccounts[0]?.id === account.id}
+                            onClick={() => moveAccount(account.id, -1)}
+                          >
+                            上移
+                          </button>
+                          <button
+                            className="accounts-action"
+                            type="button"
+                            disabled={!canReorder || activeAccounts.at(-1)?.id === account.id}
+                            onClick={() => moveAccount(account.id, 1)}
+                          >
+                            下移
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
                 </>
               )}
 
@@ -1002,7 +1124,7 @@ export default function AccountsScreen() {
             invalid={createProblems.monthlyBudgetInvalid}
             placeholder="0.00"
           />
-          <p className="accounts-hint">留空表示不设额度。</p>
+          <p className="accounts-hint">从本月起生效，留空表示不设额度。</p>
         </div>
 
         {createError !== null && (
@@ -1016,6 +1138,24 @@ export default function AccountsScreen() {
         </button>
       </form>
 
+      {deleteTarget !== null && (
+        <UnusedRecordDeleteSheet
+          kind="账户"
+          name={deleteTarget.name}
+          balanceCents={deleteTarget.initialBalanceCents}
+          busy={busy}
+          error={deleteError}
+          onConfirm={handleDelete}
+          onCancel={() => {
+            if (!busy) setDeleteTarget(null);
+          }}
+        />
+      )}
+      {drag !== null && (
+        <div className="reorder-preview" style={{ top: Math.max(12, drag.point.y - 52) }} aria-hidden="true">
+          {drag.name}
+        </div>
+      )}
     </div>
   );
 }

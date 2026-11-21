@@ -439,15 +439,20 @@ export default function TxnEditScreen() {
     setBusy(false);
   };
 
+  const sourcePath = origin?.pathname ?? '';
+  let backLabel = '返回流水';
+  if (sourcePath === '/') backLabel = '返回今天';
+  else if (/^\/settings\/fixed\/?$/.test(sourcePath)) backLabel = '返回固定支出';
+  else if (projectTransactionsParent(sourcePath) !== null) backLabel = '返回项目流水';
+  else if (sourcePath.startsWith('/settings/projects/')) backLabel = '返回项目详情';
+
   return (
     <div className="txn-edit-screen txn-edit-screen--v1">
       <header className="add-header">
         <Link
           className="add-back"
           to={origin ?? '/ledger'}
-          aria-label={origin?.pathname === '/' ? '返回今天'
-            : origin && projectTransactionsParent(origin.pathname) !== null ? '返回项目流水'
-              : origin?.pathname.startsWith('/settings/projects/') ? '返回项目详情' : '返回流水'}
+          aria-label={backLabel}
           aria-disabled={exit.canLeave ? undefined : true}
           tabIndex={exit.canLeave ? undefined : -1}
           onClick={event => {

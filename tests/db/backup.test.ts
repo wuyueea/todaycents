@@ -29,11 +29,11 @@ const TABLES = [
   'app_meta',
 ] as const;
 
-/** Every row of every table, in insertion order; rowid survives a no-op restore. */
+/** Ledger rows in insertion order and metadata ordered by its key. */
 async function snapshot(db: Db): Promise<Record<string, unknown[]>> {
   const result: Record<string, unknown[]> = {};
   for (const table of TABLES) {
-    result[table] = await db.all<unknown>(`SELECT * FROM ${table} ORDER BY rowid`);
+    result[table] = await db.all<unknown>(`SELECT * FROM ${table} ORDER BY ${table === 'app_meta' ? 'key' : 'rowid'}`);
   }
   return result;
 }
@@ -152,7 +152,7 @@ describe('backup codec', () => {
       { key: '备注', value: '含中文与 emoji 🧾' },
       { key: null, value: '旧数据库允许空键' },
     ]));
-    expect(file.counts.app_meta).toBe(2);
+    expect(file.counts.app_meta).toBe(file.counts.account + 2);
     // Money is copied as integer cents; nothing is formatted or converted.
     expect(file.tables.txn.find(row => row.id === expenseId)?.amount_cents).toBe(-1250);
 
@@ -191,7 +191,7 @@ describe('backup codec', () => {
       template: 0,
       txn: 1,
       txn_tag: 0,
-      app_meta: 0,
+      app_meta: 1,
     });
     expect((await target.all<{ name: string }>('SELECT name FROM account')).map(r => r.name)).toEqual([
       '只有B',

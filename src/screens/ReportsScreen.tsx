@@ -242,6 +242,7 @@ export function ReportsView({
   const categories = monthData?.categories ?? yearData?.categories ?? [];
   const series = monthData?.monthlySeries ?? yearData?.monthlySeries ?? [];
   const budgets: readonly BudgetActual[] = monthData?.budgets ?? [];
+  const hasUnrecordedBudgets = monthData?.hasUnrecordedBudgets ?? false;
   const busiest: MonthExtreme | null = yearData?.busiestMonth ?? null;
   const quietest: MonthExtreme | null = yearData?.quietestMonth ?? null;
 
@@ -387,9 +388,7 @@ export function ReportsView({
           {isMonth ? (
             <section className="reports-card" aria-label="预算对实际">
               <h2 className="reports-card__title">预算对实际</h2>
-              {budgets.length === 0 ? (
-                <p className="reports-note">还没有设过额度</p>
-              ) : (
+              {budgets.length > 0 && (
                 <ul className="reports-budgets">
                   {budgets.map(budget => (
                     <li className="reports-budget" key={budget.accountId}>
@@ -404,7 +403,7 @@ export function ReportsView({
                       <div
                         className="reports-budget__track"
                         role="img"
-                        aria-label={`${budget.name} 本月已用 ${formatCentsDisplay(
+                        aria-label={`${budget.name} 该月已用 ${formatCentsDisplay(
                           budget.spentCents
                         )} / 额度 ${formatCentsDisplay(budget.budgetCents)}`}
                       >
@@ -425,6 +424,11 @@ export function ReportsView({
                     </li>
                   ))}
                 </ul>
+              )}
+              {hasUnrecordedBudgets ? (
+                <p className="reports-note">该月有账户的历史额度未记录。</p>
+              ) : budgets.length === 0 && (
+                <p className="reports-note">该月未设置账户额度。</p>
               )}
             </section>
           ) : (

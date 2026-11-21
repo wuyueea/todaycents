@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import type { Db } from '../../src/db/driver';
+import { buildBackup, parseBackup, restoreBackup, serializeBackup } from '../../src/db/backup';
 import { createAccount } from '../../src/db/repos/accounts';
 import { archiveCategory, createCategory } from '../../src/db/repos/categories';
 import {
@@ -15,9 +16,14 @@ import {
   detectCandidates,
   dismissCandidate,
   listCandidates,
+  listDismissedCandidates,
   listFixedCosts,
+  listStoppedFixedCosts,
   monthlyTotalCents,
+  restoreDismissedCandidate,
+  resumeFixedCost,
   setTxnFixedCost,
+  stopFixedCost,
   unmarkFixed,
 } from '../../src/db/repos/fixedCosts';
 
@@ -106,6 +112,7 @@ describe('detectCandidates', () => {
         id: expect.any(String),
         name: '话费',
         categoryId: phone,
+        categoryName: '通讯',
         payee: '话费',
         monthlyCents: 5988,
         lastDate: '2026-05-01',
@@ -352,7 +359,7 @@ describe('confirmCandidate', () => {
     const ids = await phoneRun(db, card, phone);
     const [candidate] = await detectCandidates(db);
 
-    const item = await confirmCandidate(db, candidate.id);
+    const { undo, ...item } = await confirmCandidate(db, candidate.id);
 
     expect(item).toEqual({
       name: '话费',
@@ -365,7 +372,8 @@ describe('confirmCandidate', () => {
       dayOfMonth: 1,
       occurrences: 5,
     });
-    expect(await listFixedCosts(db)).toMatchObject([item]);
+    expect(undo?.changedTxnIds).toEqual(ids);
+    expect(await listFixedCosts(db)).toMatchObject([{ ...item, sourceTxnId: ids.at(-1) }]);
     expect(await monthlyTotalCents(db)).toBe(5988);
     expect(await listCandidates(db)).toEqual([]);
     expect(await hintRows(db)).toMatchObject([{ status: 'confirmed' }]);
@@ -389,6 +397,7 @@ describe('confirmCandidate', () => {
     const again = await confirmCandidate(db, candidate.id);
 
     expect(again.occurrences).toBe(5);
+    expect(again.undo).toBeNull();
     expect(await flagCount(db)).toBe(5);
     expect(await listFixedCosts(db)).toHaveLength(1);
     expect(await monthlyTotalCents(db)).toBe(5988);
@@ -548,6 +557,7 @@ describe('listFixedCosts and monthlyTotalCents', () => {
         categoryId: subs,
         categoryName: '订阅',
         payee: '视频会员',
+        sourceTxnId: id,
         monthlyCents: 2500,
         recordedCents: 2500,
         lastDate: '2026-10-05',
@@ -561,26 +571,33 @@ describe('listFixedCosts and monthlyTotalCents', () => {
 
   it('counts live flagged and later matching bills once, in the local month through today', async () => {
     const { db, card, phone } = await fixture();
+    const flaggedIds: string[] = [];
     for (const [date, cents] of [['2025-12-08', 4500], ['2026-01-03', 4400], ['2026-01-03', 4500]] as const) {
       const id = await bill(db, { date, cents, categoryId: phone, accountId: card, payee: '话费' });
       await setTxnFixedCost(db, id, true);
+      flaggedIds.push(id);
     }
     const deleted = await bill(db, {
       date: '2026-01-05', cents: 4500, categoryId: phone, accountId: card, payee: '话费',
     });
     await setTxnFixedCost(db, deleted, true);
     await softDeleteTxn(db, deleted);
-    for (const [date, cents] of [['2026-01-06', 4700], ['2026-01-07', 19000]] as const) {
-      await bill(db, { date, cents, categoryId: phone, accountId: card, payee: '话费' });
-    }
+    const matching = await bill(db, {
+      date: '2026-01-06', cents: 4700, categoryId: phone, accountId: card, payee: '话费',
+    });
+    await bill(db, { date: '2026-01-07', cents: 19000, categoryId: phone, accountId: card, payee: '话费' });
 
     expect(await listFixedCosts(db, '2026-01-31')).toMatchObject([
-      { recordedCents: 13600, monthlyCents: 4700, lastDate: '2026-01-06', nextDate: '2026-02-06' },
+      { sourceTxnId: matching, recordedCents: 13600, monthlyCents: 4700, lastDate: '2026-01-06', nextDate: '2026-02-06' },
     ]);
     expect(await listFixedCosts(db, '2026-01-05')).toMatchObject([{ recordedCents: 8900 }]);
     expect(await listFixedCosts(db, '2026-02-01')).toMatchObject([
       { recordedCents: 0, monthlyCents: 4700 },
     ]);
+    await softDeleteTxn(db, matching);
+    const [remaining] = await listFixedCosts(db, '2026-01-31');
+    expect(remaining).toMatchObject({ recordedCents: 8900, lastDate: '2026-01-03' });
+    expect(flaggedIds.slice(1)).toContain(remaining.sourceTxnId);
   });
 
   it('takes the newest flagged row as the amount and the date', async () => {
@@ -671,16 +688,17 @@ describe('unmarkFixed', () => {
     const { db, card, phone } = await fixture();
     const ids = await phoneRun(db, card, phone);
     const [candidate] = await detectCandidates(db);
-    await confirmCandidate(db, candidate.id);
+    const { undo } = await confirmCandidate(db, candidate.id);
 
-    const restored = await unmarkFixed(db, candidate.id);
+    await unmarkFixed(db, undo!);
 
-    expect(restored).toMatchObject({ id: candidate.id, name: '话费', occurrences: 5 });
     expect(await flagCount(db)).toBe(0);
     expect(await listFixedCosts(db)).toEqual([]);
     expect(await monthlyTotalCents(db)).toBe(0);
     expect(await hintRows(db)).toMatchObject([{ id: candidate.id, status: 'candidate' }]);
-    expect((await listCandidates(db)).map(row => row.id)).toEqual([candidate.id]);
+    expect(await listCandidates(db)).toMatchObject([
+      { id: candidate.id, name: '话费', occurrences: 5 },
+    ]);
 
     // The undo touched flags only: the five rows are still there, still in 通讯.
     const rows = await db.all<{ id: string; category_id: string | null; amount_cents: number }>(
@@ -694,14 +712,151 @@ describe('unmarkFixed', () => {
     expect(await hintRows(db)).toHaveLength(1);
   });
 
+  it('keeps marks that were set before confirmation and undoes only changed rows', async () => {
+    const { db, card, phone } = await fixture();
+    const earlier = await bill(db, {
+      date: '2025-10-01', cents: 1500, categoryId: phone, accountId: card, payee: '话费',
+    });
+    const ids = await phoneRun(db, card, phone);
+    await setTxnFixedCost(db, earlier, true);
+    await setTxnFixedCost(db, ids[0], true);
+    const [candidate] = await detectCandidates(db);
+
+    const { undo } = await confirmCandidate(db, candidate.id);
+    expect(undo?.changedTxnIds).toEqual(ids.slice(1));
+    await unmarkFixed(db, undo!);
+
+    expect(await db.all('SELECT id FROM txn WHERE is_fixed_cost = 1 ORDER BY occurred_date'))
+      .toEqual([{ id: earlier }, { id: ids[0] }]);
+    expect(await listFixedCosts(db)).toMatchObject([{ name: '话费', monthlyCents: 5988 }]);
+    await expect(unmarkFixed(db, undo!)).rejects.toThrow('已无法撤销');
+  });
+
   it('refuses an unknown hint and a dismissed candidate', async () => {
     const { db, card, phone } = await fixture();
     await phoneRun(db, card, phone);
     const [candidate] = await detectCandidates(db);
     await dismissCandidate(db, candidate.id);
 
-    await expect(unmarkFixed(db, 'nope')).rejects.toThrow('没有这条固定支出候选');
-    await expect(unmarkFixed(db, candidate.id)).rejects.toThrow('忽略');
+    const undo = { hintId: candidate.id, confirmedAt: '', changedTxnIds: [] };
+    await expect(unmarkFixed(db, { ...undo, hintId: 'nope' })).rejects.toThrow('没有这条固定支出候选');
+    await expect(unmarkFixed(db, undo)).rejects.toThrow('忽略');
+  });
+});
+
+describe('stopping and resuming fixed costs', () => {
+  it('groups blank payees by category and keeps newly marked bills stopped', async () => {
+    const { db, card, phone, subs } = await fixture();
+    const january = await bill(db, {
+      date: '2026-01-01', cents: 4000, categoryId: phone, accountId: card,
+    });
+    const february = await bill(db, {
+      date: '2026-02-01', cents: 4200, categoryId: phone, accountId: card, payee: '  ',
+    });
+    const other = await bill(db, {
+      date: '2026-02-01', cents: 2400, categoryId: subs, accountId: card,
+    });
+    await setTxnFixedCost(db, january, true);
+    await setTxnFixedCost(db, other, true);
+    const phoneItem = (await listFixedCosts(db)).find(item => item.categoryId === phone)!;
+
+    await stopFixedCost(db, phoneItem);
+    await setTxnFixedCost(db, february, true);
+    expect(await listFixedCosts(db, '2026-02-10')).toMatchObject([{ categoryId: subs }]);
+    expect(await flagCount(db)).toBe(3);
+
+    const [stopped] = await listStoppedFixedCosts(db);
+    expect(stopped).toMatchObject({ categoryId: phone, payee: null });
+    await resumeFixedCost(db, stopped);
+    expect(await listFixedCosts(db, '2026-02-10')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ categoryId: phone, sourceTxnId: february, recordedCents: 4200 }),
+    ]));
+  });
+
+  it('preserves marks and suppression across a backup round trip, then uses the latest bill', async () => {
+    const { db, card, phone } = await fixture();
+    const [marked] = await phoneRun(db, card, phone);
+    const other = await bill(db, {
+      date: '2026-05-02', cents: 2800, categoryId: phone, accountId: card, payee: '校园网',
+    });
+    await setTxnFixedCost(db, marked, true);
+    await setTxnFixedCost(db, other, true);
+    const [candidate] = await detectCandidates(db);
+    const history = await listFixedCosts(db, '2026-05-10');
+    const item = history.find(row => row.payee === '话费')!;
+    expect(item.recordedCents).toBe(5988);
+
+    await stopFixedCost(db, { ...item, payee: ' 话费 ' });
+    expect(await listCandidates(db)).toEqual([]);
+    expect(await detectCandidates(db)).toEqual([]);
+    await expect(confirmCandidate(db, candidate.id)).rejects.toThrow('已停用');
+    expect(await listFixedCosts(db, '2026-05-10')).toMatchObject([
+      { name: '校园网', recordedCents: 2800, monthlyCents: 2800 },
+    ]);
+    expect(await monthlyTotalCents(db)).toBe(2800);
+    expect(await flagCount(db)).toBe(2);
+    const june = await bill(db, {
+      date: '2026-06-01', cents: 6100, categoryId: phone, accountId: card, payee: '话费',
+    });
+
+    const backup = parseBackup(serializeBackup(await buildBackup(db)));
+    expect(backup.schemaVersion).toBe(6);
+    const restored = await createTestDb();
+    await restoreBackup(restored, backup);
+    const [stopped] = await listStoppedFixedCosts(restored);
+    expect(stopped).toMatchObject({ name: '话费', categoryId: phone, payee: '话费' });
+    expect(await detectCandidates(restored)).toEqual([]);
+    expect(await flagCount(restored)).toBe(2);
+    expect(await monthlyTotalCents(restored)).toBe(2800);
+
+    await resumeFixedCost(restored, stopped);
+    expect(await listStoppedFixedCosts(restored)).toEqual([]);
+    expect(await listFixedCosts(restored, '2026-06-10')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: '话费', sourceTxnId: june, monthlyCents: 6100, recordedCents: 6100 }),
+    ]));
+    expect(await flagCount(restored)).toBe(2);
+  });
+});
+
+describe('restoring ignored suggestions', () => {
+  it('retains manual marks, refreshes the evidence, and respects a separate stop', async () => {
+    const { db, card, phone } = await fixture();
+    const [first] = await phoneRun(db, card, phone);
+    const [candidate] = await detectCandidates(db);
+    await dismissCandidate(db, candidate.id);
+    await setTxnFixedCost(db, first, true);
+    const [active] = await listFixedCosts(db);
+    await stopFixedCost(db, active);
+    await bill(db, { date: '2026-06-01', cents: 6070, categoryId: phone, accountId: card, payee: '话费' });
+    expect(await listDismissedCandidates(db)).toMatchObject([{ id: candidate.id }]);
+
+    expect(await restoreDismissedCandidate(db, candidate.id)).toBe('stopped');
+    expect(await listDismissedCandidates(db)).toEqual([]);
+    expect(await detectCandidates(db)).toEqual([]);
+    expect(await listFixedCosts(db)).toEqual([]);
+    expect(await flagCount(db)).toBe(1);
+
+    await resumeFixedCost(db, active);
+    expect(await detectCandidates(db)).toMatchObject([
+      { id: candidate.id, lastDate: '2026-06-01', occurrences: 6 },
+    ]);
+    expect(await flagCount(db)).toBe(1);
+  });
+
+  it('clears the ignore decision when the old evidence no longer qualifies', async () => {
+    const { db, card, phone } = await fixture();
+    const ids = await phoneRun(db, card, phone);
+    const [candidate] = await detectCandidates(db);
+    await dismissCandidate(db, candidate.id);
+    for (const id of ids.slice(0, 3)) await softDeleteTxn(db, id);
+
+    expect(await restoreDismissedCandidate(db, candidate.id)).toBe('insufficient');
+    expect(await listDismissedCandidates(db)).toEqual([]);
+    expect(await detectCandidates(db)).toEqual([]);
+    expect(await flagCount(db)).toBe(0);
+
+    await bill(db, { date: '2026-06-01', cents: 5988, categoryId: phone, accountId: card, payee: '话费' });
+    expect(await detectCandidates(db)).toMatchObject([{ name: '话费', occurrences: 3 }]);
   });
 });
 

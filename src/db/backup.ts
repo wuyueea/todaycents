@@ -2,9 +2,9 @@
  * Backup codec: turn the whole database into one versioned JSON document and
  * put it back atomically.
  *
- * This is pure data plumbing. It never formats money, never recomputes a
- * balance and never runs a business rule: every column is copied verbatim, so
- * integer cents stay integer cents. The export format is the v1 format in
+ * The codec copies monetary columns as integer cents and never recomputes
+ * balances. Restore also initializes metadata missing from older ledgers.
+ * The export format is the v1 format in
  * docs/superpowers/plans/2026-10-23-B-备份与导入.md.
  *
  * project IS dumped since schema v3: txn.project_id has always been a column
@@ -21,7 +21,8 @@
  * the absence of a template UI does not make these rows disposable.
  */
 import type { Db, DbParam } from './driver';
-import { assertDateISO, assertNotFutureDate, todayLocalISO } from '../domain/date';
+import { assertDateISO, assertNotFutureDate, monthKeyOf, todayLocalISO } from '../domain/date';
+import { initializeAccountBudgetHistory } from './repos/accountBudgets';
 import { LOCAL_BACKUP_META_KEYS } from '../backup/meta';
 import {
   PROJECT_SCHEMA_VERSION,
@@ -686,6 +687,7 @@ export async function restoreBackup(
   file: BackupFile,
   options: BackupDateOptions = {}
 ): Promise<RestoreResult> {
+  const today = options.today ?? todayLocalISO();
   const versionRow = await db.get<{ version: number | null }>(
     'SELECT MAX(version) AS version FROM schema_migrations'
   );
@@ -695,7 +697,7 @@ export async function restoreBackup(
   }
 
   if (Array.isArray(file.tables.txn)) {
-    assertBackupTxnDates(file.tables.txn, options.today ?? todayLocalISO());
+    assertBackupTxnDates(file.tables.txn, today);
   }
 
   let clearedProjectRefs = 0;
@@ -782,6 +784,7 @@ export async function restoreBackup(
         );
       }
     }
+    await initializeAccountBudgetHistory(tx, monthKeyOf(today));
   });
 
   return { clearedProjectRefs };

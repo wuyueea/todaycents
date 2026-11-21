@@ -15,15 +15,13 @@
  * so 清除所有数据 can write the very same starter set inside the reset's own
  * transaction instead of keeping a second copy of the seed data. Both callers
  * want the same rows: a first launch and a reset leave one identical starter
- * set. accounts.ts and categories.ts never open a transaction of their own,
- * which is what lets seedInto hand them its handle; should either grow one
- * later, the nested call would join this transaction instead of failing. A
- * seed that failed halfway would leave categories without accounts — and,
+ * set. The repository calls share the caller's transaction. A seed that
+ * failed halfway would leave categories without accounts — and,
  * because of the guard, would never be completed on the next launch.
  */
 import type { Db } from './driver';
 import type { AccountType } from '../domain/types';
-import { createAccount } from './repos/accounts';
+import { createAccount, EMPTY_ACCOUNTS_META_KEY } from './repos/accounts';
 import { createCategory } from './repos/categories';
 import { UNCATEGORIZED_CATEGORY_ID } from './schema';
 
@@ -81,7 +79,8 @@ export async function seedInto(db: Db): Promise<void> {
  *
  * Safe to call on every launch: the first call seeds, every later call returns
  * before opening a transaction. A ledger counts as a first launch only when it
- * has neither a user category nor an account. seedInto writes both, so checking
+ * has neither a user category nor an account and has no explicit empty-account
+ * marker. seedInto writes both, so checking
  * just one of them would seed again after the owner deliberately cleared the
  * other — purging every user category used to bring back the default accounts
  * as duplicates on the next launch. Once either table has a row the ledger is
@@ -92,13 +91,14 @@ export async function seedInto(db: Db): Promise<void> {
  * instead of opening a second one.
  */
 export async function seedDefaults(db: Db): Promise<void> {
-  const existing = await db.get<{ userCategories: number; accounts: number }>(
+  const existing = await db.get<{ userCategories: number; accounts: number; intentionallyEmpty: number }>(
     `SELECT
        (SELECT COUNT(*) FROM category WHERE id <> ?) AS userCategories,
-       (SELECT COUNT(*) FROM account) AS accounts`,
-    [UNCATEGORIZED_CATEGORY_ID]
+       (SELECT COUNT(*) FROM account) AS accounts,
+       EXISTS (SELECT 1 FROM app_meta WHERE key = ?) AS intentionallyEmpty`,
+    [UNCATEGORIZED_CATEGORY_ID, EMPTY_ACCOUNTS_META_KEY]
   );
-  if ((existing?.userCategories ?? 0) > 0 || (existing?.accounts ?? 0) > 0) return;
+  if ((existing?.userCategories ?? 0) > 0 || (existing?.accounts ?? 0) > 0 || existing?.intentionallyEmpty) return;
 
   await db.transaction(seedInto);
 }

@@ -120,7 +120,7 @@ function summaryRows(
       category.cents,
     ]),
     [
-      '总计',
+      '支出总计',
       formulaCell(`ROUND(C${categories.length + 2}/100,2)`, moneyLiteral(formatCents(expenseCents))),
       formulaCell(
         categories.length === 0 ? '0' : `SUM(C2:C${categories.length + 1})`,
@@ -174,7 +174,7 @@ export function buildReportWorkbook(input: ReportWorkbookInput): Uint8Array {
       reportStyle: { wrapColumns: [3, 4, 5, 6, 7] },
     },
     {
-      name: '汇总',
+      name: '支出汇总',
       rows: summaryRows(input.categories, input.expenseCents),
       columnWidths: SUMMARY_WIDTHS,
       freezeHeader: true,

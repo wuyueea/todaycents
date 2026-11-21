@@ -1,6 +1,10 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
-import { archiveAccount, createAccount } from '../../src/db/repos/accounts';
+import { freezeToday } from '../helpers/clock';
+import { archiveAccount, createAccount, listAccounts, updateAccount } from '../../src/db/repos/accounts';
+import { initializeAccountBudgetHistory } from '../../src/db/repos/accountBudgets';
+import { buildBackup, parseBackup, restoreBackup, serializeBackup } from '../../src/db/backup';
+import type { CreateAccountInput } from '../../src/db/repos/accounts';
 import { archiveCategory, createCategory } from '../../src/db/repos/categories';
 import {
   createExpense,
@@ -13,6 +17,20 @@ import { UNCATEGORIZED_CATEGORY_ID } from '../../src/db/schema';
 import type { Db, DbParam } from '../../src/db/driver';
 import { monthReport, reportCategoryExpenses, yearReport } from '../../src/db/repos/reports';
 import type { MonthPoint } from '../../src/db/repos/reports';
+
+const TEST_NOW = new Date(2026, 11, 10, 12);
+freezeToday(TEST_NOW);
+afterEach(() => vi.setSystemTime(TEST_NOW));
+
+async function createEarlierAccount(db: Db, input: CreateAccountInput): Promise<string> {
+  const now = new Date();
+  vi.setSystemTime(new Date(2025, 11, 1, 12));
+  try {
+    return await createAccount(db, input);
+  } finally {
+    vi.setSystemTime(now);
+  }
+}
 
 /**
  * The twelve points a series must contain, with the months after `today`
@@ -37,12 +55,12 @@ function expectedSeries(
 
 async function fixture() {
   const db = await createTestDb();
-  const card = await createAccount(db, {
+  const card = await createEarlierAccount(db, {
     name: '饭卡',
     type: 'prepaid',
     monthlyBudgetCents: 30000,
   });
-  const bank = await createAccount(db, { name: '银行卡', type: 'bank' });
+  const bank = await createEarlierAccount(db, { name: '银行卡', type: 'bank' });
   const food = await createCategory(db, { name: '饮食', kind: 'expense' });
   const daily = await createCategory(db, { name: '日用', kind: 'expense' });
   const transport = await createCategory(db, { name: '交通', kind: 'expense' });
@@ -210,10 +228,10 @@ describe('monthReport', () => {
 
   it('compares budget with actual spending, over only when strictly above it', async () => {
     const db = await createTestDb();
-    const card = await createAccount(db, { name: '饭卡', type: 'prepaid', monthlyBudgetCents: 30000 });
-    const wallet = await createAccount(db, { name: '微信', type: 'ewallet', monthlyBudgetCents: 5000 });
-    const bank = await createAccount(db, { name: '银行卡', type: 'bank' });
-    const old = await createAccount(db, { name: '旧卡', type: 'bank', monthlyBudgetCents: 10000 });
+    const card = await createEarlierAccount(db, { name: '饭卡', type: 'prepaid', monthlyBudgetCents: 30000 });
+    const wallet = await createEarlierAccount(db, { name: '微信', type: 'ewallet', monthlyBudgetCents: 5000 });
+    const bank = await createEarlierAccount(db, { name: '银行卡', type: 'bank' });
+    const old = await createEarlierAccount(db, { name: '旧卡', type: 'bank', monthlyBudgetCents: 10000 });
     const food = await createCategory(db, { name: '饮食', kind: 'expense' });
 
     await createExpense(db, { date: '2026-10-01', accountId: card, amountCents: 32000, categoryId: food });
@@ -255,6 +273,7 @@ describe('monthReport', () => {
       budgets: [
         { accountId: card, name: '饭卡', budgetCents: 30000, spentCents: 0, over: false },
       ],
+      hasUnrecordedBudgets: false,
     });
   });
 
@@ -321,6 +340,90 @@ describe('monthReport', () => {
     const year = await yearReport(readOnly(db), 2026, { today: '2026-10-20' });
     expect(year.expenseCents).toBe(1730);
     expect(year.busiestMonth).toEqual({ month: '2026-10', cents: 1230 });
+  });
+});
+
+describe('historical account budgets', () => {
+  it('freezes elapsed months, keeps the last edit in a month and applies clearing going forward', async () => {
+    const db = await createTestDb();
+    vi.setSystemTime(new Date(2026, 9, 2, 12));
+    const card = await createAccount(db, { name: '饭卡', type: 'prepaid', monthlyBudgetCents: 30000 });
+    const cash = await createAccount(db, { name: '现金', type: 'cash' });
+    await createExpense(db, { date: '2026-10-02', accountId: card, amountCents: 20000, categoryId: null });
+
+    vi.setSystemTime(new Date(2026, 10, 2, 12));
+    await updateAccount(db, card, { monthlyBudgetCents: 40000 });
+    await updateAccount(db, card, { monthlyBudgetCents: 45000 });
+    await updateAccount(db, cash, { monthlyBudgetCents: 10000 });
+    await createExpense(db, { date: '2026-11-02', accountId: card, amountCents: 42000, categoryId: null });
+    // Backfilled spending is still reflected under the original budget.
+    await createExpense(db, { date: '2026-10-01', accountId: card, amountCents: 11000, categoryId: null });
+
+    expect(await monthReport(db, '2026-10')).toMatchObject({
+      expenseCents: 31000,
+      budgets: [{ accountId: card, budgetCents: 30000, spentCents: 31000, over: true }],
+      hasUnrecordedBudgets: false,
+    });
+    expect((await monthReport(db, '2026-11')).budgets).toMatchObject([
+      { accountId: card, budgetCents: 45000, spentCents: 42000, over: false },
+      { accountId: cash, budgetCents: 10000, spentCents: 0, over: false },
+    ]);
+    expect((await monthReport(db, '2026-12')).budgets[0].budgetCents).toBe(45000);
+
+    vi.setSystemTime(new Date(2026, 11, 1, 0, 5));
+    await updateAccount(db, card, { monthlyBudgetCents: null });
+    expect((await monthReport(db, '2026-11')).budgets[0].budgetCents).toBe(45000);
+    expect((await monthReport(db, '2027-01')).budgets.map(row => row.accountId)).toEqual([cash]);
+
+    const restored = await createTestDb();
+    const file = parseBackup(serializeBackup(await buildBackup(db)));
+    expect(file.schemaVersion).toBe(6);
+    await restoreBackup(restored, file);
+    expect(await monthReport(restored, '2026-10')).toMatchObject({
+      budgets: [{ accountId: card, budgetCents: 30000, spentCents: 31000 }],
+    });
+    expect((await monthReport(restored, '2026-11')).budgets[0].budgetCents).toBe(45000);
+    expect((await monthReport(restored, '2027-01')).budgets.map(row => row.accountId)).toEqual([cash]);
+  });
+
+  it('anchors a legacy ledger and legacy backup in the local start month without filling past months', async () => {
+    const db = await createTestDb();
+    vi.setSystemTime(new Date(2026, 9, 1, 12));
+    const card = await createAccount(db, { name: '饭卡', type: 'prepaid', monthlyBudgetCents: 30000 });
+    await createExpense(db, { date: '2026-10-01', accountId: card, amountCents: 2000, categoryId: null });
+    await db.run('DELETE FROM app_meta'); // shape of a ledger last written by the older app
+    const legacyBackup = await buildBackup(db);
+    const restored = await createTestDb();
+
+    vi.setSystemTime(new Date(2026, 10, 1, 0, 5));
+    await initializeAccountBudgetHistory(db);
+    await restoreBackup(restored, legacyBackup);
+    for (const ledger of [db, restored]) {
+      expect(await monthReport(ledger, '2026-10')).toMatchObject({
+        expenseCents: 2000, budgets: [], hasUnrecordedBudgets: true,
+      });
+      expect((await monthReport(ledger, '2026-11')).budgets[0].budgetCents).toBe(30000);
+    }
+
+    vi.setSystemTime(new Date(2026, 11, 1, 12));
+    await initializeAccountBudgetHistory(db);
+    await updateAccount(db, card, { monthlyBudgetCents: 45000 });
+    expect((await monthReport(db, '2026-11')).budgets[0].budgetCents).toBe(30000);
+    expect((await monthReport(db, '2026-12')).budgets[0].budgetCents).toBe(45000);
+  });
+
+  it('rolls back the account edit if the matching history write fails', async () => {
+    const db = await createTestDb();
+    const card = await createEarlierAccount(db, { name: '饭卡', type: 'prepaid', monthlyBudgetCents: 30000 });
+    await db.exec(`
+      CREATE TRIGGER fail_budget_history BEFORE UPDATE ON app_meta
+      WHEN NEW.key GLOB 'account-budget-months:*'
+      BEGIN SELECT RAISE(ABORT, '额度历史写入失败'); END
+    `);
+    await expect(updateAccount(db, card, { name: '新饭卡', monthlyBudgetCents: 45000 }))
+      .rejects.toThrow('额度历史写入失败');
+    expect(await listAccounts(db)).toMatchObject([{ name: '饭卡', monthlyBudgetCents: 30000 }]);
+    expect((await monthReport(db, '2026-12')).budgets[0]).toMatchObject({ name: '饭卡', budgetCents: 30000 });
   });
 });
 

@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { AmountKeypadField } from '../components/AmountKeypadField';
 import { Toast, useToast } from '../components/Toast';
 import { useDb, useQuery } from '../store/useDb';
@@ -108,6 +108,8 @@ export const PROJECT_NO_EFFECT_NOTE = '';
 
 export default function ProjectsScreen() {
   const { db, bump } = useDb();
+  const location = useLocation();
+  const navigate = useNavigate();
   const query = useQuery<ProjectsData>(loadProjectsData, []);
   const { toast, showToast } = useToast();
 
@@ -116,6 +118,14 @@ export default function ProjectsScreen() {
   const [formError, setFormError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const deletedProjectName: unknown = location.state?.deletedProjectName;
+  useEffect(() => {
+    if (typeof deletedProjectName !== 'string') return;
+    showToast(`已删除项目「${deletedProjectName}」`);
+    document.getElementById('projects-heading')?.focus();
+    void navigate(location.pathname, { replace: true, state: null });
+  }, [deletedProjectName, location.pathname, navigate, showToast]);
 
   const data = query.data;
   const rows = data?.rows ?? [];
@@ -202,7 +212,7 @@ export default function ProjectsScreen() {
         <Link className="add-back" to="/settings" aria-label="返回设置">
           ‹
         </Link>
-        <h1>项目</h1>
+        <h1 id="projects-heading" tabIndex={-1}>项目</h1>
         {data !== null && (
           <span className="settings-header__meta">{liveRows.length} 个进行中</span>
         )}

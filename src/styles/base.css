@@ -47,4 +47,54 @@ h1 {
   letter-spacing: .06em;
 }
 
+[data-reorder-handle] {
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+[data-reorder-dragging] {
+  opacity: .48;
+}
+
+[data-reorder-drop-edge] {
+  position: relative;
+}
+
+[data-reorder-drop-edge]::after {
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  z-index: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--v1-ink);
+  content: '';
+  pointer-events: none;
+}
+
+[data-reorder-drop-edge='before']::after {
+  top: 0;
+}
+
+[data-reorder-drop-edge='after']::after {
+  bottom: 0;
+}
+
+.reorder-preview {
+  position: fixed;
+  left: 50%;
+  z-index: 30;
+  max-width: calc(100vw - 32px);
+  padding: 6px 12px;
+  overflow: hidden;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: var(--v1-ink);
+  color: var(--v1-card);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* Sits over the page, under the OS status bar: content that scrolls up is

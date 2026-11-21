@@ -9,7 +9,7 @@ import ProjectDetailScreen, {
 import type { ProjectDetailData } from '../../src/screens/ProjectDetailScreen';
 import type { Project } from '../../src/db/repos/projects';
 import { createProject, listProjects, setTxnProject } from '../../src/db/repos/projects';
-import { createExpense } from '../../src/db/repos/txns';
+import { createExpense, softDeleteTxn } from '../../src/db/repos/txns';
 import type { TxnRow } from '../../src/db/repos/txns';
 import { createAccount, listAccounts } from '../../src/db/repos/accounts';
 import { listCategories } from '../../src/db/repos/categories';
@@ -90,7 +90,7 @@ function detailData(overrides: Partial<ProjectDetailData> = {}): ProjectDetailDa
       }),
     ],
   };
-  return { detail, txnCount: 23, ...overrides };
+  return { detail, txnCount: 23, canDelete: false, ...overrides };
 }
 
 function renderScreen(id = 'p-trip'): string {
@@ -154,10 +154,15 @@ describe('loadProjectDetailData', () => {
     expect(data.detail.project).toMatchObject({ id: projectId, name: '国庆去成都' });
     expect(data.detail.totalCents).toBe(43100);
     expect(data.txnCount).toBe(2);
+    expect(data.canDelete).toBe(false);
     expect(data.detail.byCategory).toEqual([
       { categoryId: transport.id, name: '交通', cents: 26300 },
       { categoryId: food.id, name: '饮食', cents: 16800 },
     ]);
+
+    await softDeleteTxn(db, hotpot);
+    await softDeleteTxn(db, train);
+    expect(await loadProjectDetailData(db, projectId)).toMatchObject({ txnCount: 0, canDelete: false });
     expect(data.detail.recentTxns.map(row => row.id)).toEqual([train, hotpot]);
     // The unrelated row is not the project's, whatever its date.
     expect(data.detail.recentTxns.some(row => row.id === stray)).toBe(false);
@@ -315,6 +320,7 @@ describe('ProjectDetailScreen', () => {
         recentTxns: [],
       },
       txnCount: 0,
+      canDelete: true,
     });
     store.error = null;
     const html = renderScreen();
@@ -322,6 +328,7 @@ describe('ProjectDetailScreen', () => {
     expect(html).toContain('还没有支出，暂无分类占比');
     expect(html).not.toContain('最近几笔');
     expect(html).not.toContain('查看全部流水');
+    expect(html).toContain('>删除项目</button>');
     expect(html).not.toContain('NaN');
   });
 

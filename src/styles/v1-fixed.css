@@ -199,13 +199,13 @@
 }
 
 .fixed-screen--v1 .fixed-row {
-  display: flex;
-  min-height: 58px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 14px;
   border: 0;
+}
+
+.fixed-screen--v1 .fixed-row__link {
+  min-height: 58px;
+  gap: 10px;
+  padding: 10px 4px 10px 14px;
 }
 
 .fixed-screen--v1 .fixed-row + .fixed-row {
@@ -232,6 +232,12 @@
 .fixed-screen--v1 .fixed-row__meta {
   color: var(--v1-t3);
   font-size: 11.5px;
+}
+
+.fixed-screen--v1 .fixed-row__source {
+  color: var(--v1-t2);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .fixed-screen--v1 .fixed-row__numbers {

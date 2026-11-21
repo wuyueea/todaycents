@@ -16,7 +16,6 @@ import {
 import { countTxnRows, readBackupMeta, readRestoreMeta, recordBackupMeta, recordRestoreMeta } from '../../src/backup/meta';
 import type { BackupFileWriter } from '../../src/backup/flow';
 import { beforeBackupFileName, utf8ByteLength } from '../../src/backup/format';
-import { failingDb } from '../helpers/failingDb';
 
 const NOW = new Date(2026, 9, 23, 13, 5, 7);
 const LEDGER_NAME = '记账本-20261023-130507.ledger';
@@ -270,8 +269,10 @@ describe('confirmImport', () => {
       sourceExportedAt: legacy.exportedAt,
     });
     const exportedAgain = await buildBackup(target);
-    expect(exportedAgain.counts.app_meta).toBe(1);
-    expect(exportedAgain.tables.app_meta).toEqual([{ key: '备注', value: '跟随账本' }]);
+    expect(exportedAgain.counts.app_meta).toBe(legacy.counts.account + 1);
+    expect(exportedAgain.tables.app_meta.filter(row =>
+      typeof row.key !== 'string' || !row.key.startsWith('account-budget-months:')
+    )).toEqual([{ key: '备注', value: '跟随账本' }]);
   });
 
   it('rolls back the ledger and keeps device history when recording a restore fails', async () => {
@@ -283,9 +284,13 @@ describe('confirmImport', () => {
     const { text } = await sourceBackupText();
     const prepared = await prepareImport(target, text, LEDGER_NAME, utf8ByteLength(text));
     const writer = memoryWriter();
-    const unavailable = failingDb(target, sql => /INSERT INTO app_meta/.test(sql), 'disk full');
+    await target.exec(`
+      CREATE TRIGGER fail_restore_receipt BEFORE INSERT ON app_meta
+      WHEN NEW.key = 'last_restore'
+      BEGIN SELECT RAISE(ABORT, 'disk full'); END
+    `);
 
-    await expect(confirmImport(unavailable, prepared, writer, NOW)).rejects.toThrow('disk full');
+    await expect(confirmImport(target, prepared, writer, NOW)).rejects.toThrow('disk full');
 
     expect(writer.copies).toHaveLength(1);
     expect((await listTxnsByMonth(target, '2026-10')).map(row => row.note)).toEqual(['keep me']);

@@ -202,7 +202,7 @@ describe('groupTxnsByDate', () => {
 describe('dailyExpenseBars', () => {
   it('covers every day, marks the future and today, and counts only expenses', () => {
     const bars = dailyExpenseBars(
-      [
+      groupTxnsByDate([
         txn({ id: 'expense', occurredDate: '2026-10-20', amountCents: -1230 }),
         txn({
           id: 'transfer',
@@ -211,6 +211,13 @@ describe('dailyExpenseBars', () => {
           amountCents: -60000,
           categoryId: null,
           categoryName: null,
+          transferGroupId: 'g-1',
+        }),
+        txn({
+          id: 'transfer-in',
+          occurredDate: '2026-10-20',
+          direction: 'transfer',
+          amountCents: 60000,
           transferGroupId: 'g-1',
         }),
         txn({ id: 'income', occurredDate: '2026-10-19', amountCents: 500, direction: 'income' }),
@@ -222,7 +229,8 @@ describe('dailyExpenseBars', () => {
           categoryId: null,
           categoryName: null,
         }),
-      ],
+        txn({ id: 'deleted', occurredDate: '2026-10-18', deletedAt: '2026-10-19T00:00:00Z' }),
+      ]),
       '2026-10',
       '2026-10-30'
     );
@@ -231,6 +239,7 @@ describe('dailyExpenseBars', () => {
     expect(bars[19]).toMatchObject({
       date: '2026-10-20',
       expenseCents: 1230,
+      transferCount: 1,
       hasRows: true,
       isFuture: false,
       isToday: false,
@@ -238,8 +247,11 @@ describe('dailyExpenseBars', () => {
     expect(bars[18]).toMatchObject({
       date: '2026-10-19',
       expenseCents: 0,
+      incomeCount: 1,
+      adjustmentCount: 1,
       hasRows: true,
     });
+    expect(bars[17]).toMatchObject({ date: '2026-10-18', hasRows: false });
     expect(bars[29]).toMatchObject({ date: '2026-10-30', isToday: true });
     expect(bars[30]).toMatchObject({ date: '2026-10-31', isFuture: true, hasRows: false });
     expect(barHeightPx(0, 1230)).toBe(2);
@@ -504,13 +516,18 @@ describe('LedgerScreen', () => {
     expect(todayBar).toContain('is-today');
     const spent = openingTag(html, 'data-bar-date="2026-10-20"');
     expect(spent).toContain('is-spent');
+    expect(spent).toContain('aria-label="10月20日 支出 12.30 元，有 1 笔收入"');
     expect(spent).not.toContain('disabled');
     // The button is a full-height hit target; the 2–74px bar is drawn inside.
     const spentBody = html.match(/<button[^>]*data-bar-date="2026-10-20"[^>]*>([\s\S]*?)<\/button>/)?.[1] ?? '';
     expect(spentBody).toContain('ledger-bars__fill');
     expect(spentBody).toContain('style="height:');
     const empty = openingTag(html, 'data-bar-date="2026-10-10"');
+    expect(empty).toContain('aria-label="10月10日 无流水"');
     expect(empty).toContain('disabled');
+    const future = openingTag(html, 'data-bar-date="2026-10-22"');
+    expect(future).toContain('aria-label="10月22日 未来日期"');
+    expect(future).toContain('disabled');
   });
 
   it('never paints another month’s snapshot under this month’s heading', () => {

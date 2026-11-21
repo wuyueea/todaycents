@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { createTestDb } from '../helpers/nodeDb';
 import {
   createAccount,
+  deleteAccount,
+  reorderActiveAccounts,
   listAccounts,
   updateAccount,
   archiveAccount,
@@ -11,6 +13,9 @@ import {
   txnCountByAccount,
   unarchiveAccount,
 } from '../../src/db/repos/accounts';
+import { readAccountBudgetHistories } from '../../src/db/repos/accountBudgets';
+import { buildBackup, restoreBackup } from '../../src/db/backup';
+import { seedDefaults } from '../../src/db/seed';
 import { createExpense, listTxnsByMonth, softDeleteTxn } from '../../src/db/repos/txns';
 
 describe('accounts', () => {
@@ -42,6 +47,71 @@ describe('accounts', () => {
   it('throws for an unknown account instead of reporting a zero balance', async () => {
     const db = await createTestDb();
     await expect(accountBalance(db, 'missing-account')).rejects.toThrow(/account not found/);
+  });
+});
+
+describe('deleteAccount', () => {
+  it('removes an unused archived account with an opening balance and its budget history', async () => {
+    const db = await createTestDb();
+    const unused = await createAccount(db, {
+      name: '测试账户', type: 'cash', initialBalanceCents: 1234, monthlyBudgetCents: 5000,
+    });
+    const keep = await createAccount(db, { name: '保留账户', type: 'cash', initialBalanceCents: 500 });
+    await archiveAccount(db, unused);
+
+    await deleteAccount(db, unused);
+
+    expect(await allBalances(db)).toEqual({ [keep]: 500 });
+    const budgets = await readAccountBudgetHistories(db);
+    expect([...budgets.keys()]).toEqual([keep]);
+    await expect(deleteAccount(db, unused)).rejects.toThrow('已不存在');
+  });
+
+  it('protects live and soft-deleted transactions and legacy template references', async () => {
+    const db = await createTestDb();
+    const account = await createAccount(db, { name: '有历史', type: 'cash' });
+    const entry = await createExpense(db, {
+      date: '2026-10-01', accountId: account, amountCents: 1234, categoryId: null,
+    });
+    await expect(deleteAccount(db, account)).rejects.toThrow('有流水历史');
+    await softDeleteTxn(db, entry);
+    await expect(deleteAccount(db, account)).rejects.toThrow('有流水历史');
+
+    const legacy = await createAccount(db, { name: '模板默认账户', type: 'cash' });
+    await db.run(
+      'INSERT INTO template (id, slot_key, label, default_account_id, active) VALUES (?, ?, ?, ?, 0)',
+      ['legacy', 'legacy-slot', '旧模板', legacy]
+    );
+    await expect(deleteAccount(db, legacy)).rejects.toThrow('仍被旧模板引用');
+    expect(await db.get('SELECT default_account_id FROM template WHERE id = ?', ['legacy']))
+      .toEqual({ default_account_id: legacy });
+    expect(await listAccounts(db)).toHaveLength(2);
+  });
+
+  it('keeps a deliberately empty ledger empty on restart and after restoring a backup', async () => {
+    const db = await createTestDb();
+    const account = await createAccount(db, { name: '误建', type: 'cash' });
+    await deleteAccount(db, account);
+    await seedDefaults(db);
+    expect(await listAccounts(db)).toEqual([]);
+
+    const restored = await createTestDb();
+    await restoreBackup(restored, await buildBackup(db));
+    await seedDefaults(restored);
+    expect(await listAccounts(restored)).toEqual([]);
+  });
+
+  it('keeps the account if removing its budget history fails', async () => {
+    const db = await createTestDb();
+    const account = await createAccount(db, { name: '测试', type: 'cash', monthlyBudgetCents: 5000 });
+    await db.exec(`
+      CREATE TRIGGER reject_budget_cleanup BEFORE DELETE ON app_meta
+      WHEN OLD.key GLOB 'account-budget-months:*'
+      BEGIN SELECT RAISE(ABORT, '无法删除额度历史'); END
+    `);
+    await expect(deleteAccount(db, account)).rejects.toThrow('无法删除额度历史');
+    expect(await listAccounts(db)).toMatchObject([{ id: account }]);
+    expect((await readAccountBudgetHistories(db)).has(account)).toBe(true);
   });
 });
 
@@ -86,6 +156,50 @@ describe('account defaults and ordering', () => {
     await insert('early', '早', 5, '2026-10-01T00:00:00.000Z');
     await insert('first', '首', 1, '2026-10-03T00:00:00.000Z');
     expect((await listAccounts(db)).map(a => a.id)).toEqual(['first', 'early', 'late']);
+  });
+});
+
+describe('account ordering', () => {
+  it('reorders available accounts, preserves the archived slot and survives backup and recovery', async () => {
+    const db = await createTestDb();
+    const first = await createAccount(db, { name: '微信', type: 'ewallet', initialBalanceCents: 100 });
+    const archived = await createAccount(db, { name: '旧卡', type: 'bank' });
+    const second = await createAccount(db, { name: '支付宝', type: 'ewallet' });
+    const third = await createAccount(db, { name: '银行卡', type: 'bank' });
+    await archiveAccount(db, archived);
+
+    await reorderActiveAccounts(db, [third, first, second], [first, second, third]);
+    expect((await listAccounts(db)).map(account => account.id)).toEqual([third, first, second]);
+    expect((await listAccounts(db, { includeArchived: true })).map(account => account.id))
+      .toEqual([third, archived, first, second]);
+
+    const restored = await createTestDb();
+    await restoreBackup(restored, await buildBackup(db));
+    await unarchiveAccount(restored, archived);
+    expect((await listAccounts(restored)).map(account => account.id)).toEqual([third, archived, first, second]);
+    expect(await accountBalance(restored, first)).toBe(100);
+  });
+
+  it('rejects incomplete and stale lists and rolls back an interrupted reorder', async () => {
+    const db = await createTestDb();
+    const first = await createAccount(db, { name: '第一', type: 'ewallet' });
+    const second = await createAccount(db, { name: '第二', type: 'bank' });
+    const third = await createAccount(db, { name: '第三', type: 'cash' });
+    const original = [first, second, third];
+    const next = [second, third, first];
+    await expect(reorderActiveAccounts(db, [first, first, third], original)).rejects.toThrow('不完整');
+
+    await db.exec(`
+      CREATE TRIGGER reject_order BEFORE UPDATE OF sort ON account
+      WHEN OLD.name = '第一'
+      BEGIN SELECT RAISE(ABORT, '排序写入失败'); END
+    `);
+    await expect(reorderActiveAccounts(db, next, original)).rejects.toThrow('排序写入失败');
+    expect((await listAccounts(db)).map(account => account.id)).toEqual(original);
+    await db.exec('DROP TRIGGER reject_order');
+    await reorderActiveAccounts(db, next, original);
+    await expect(reorderActiveAccounts(db, original, original)).rejects.toThrow('账户列表已变化');
+    expect((await listAccounts(db)).map(account => account.id)).toEqual(next);
   });
 });
 

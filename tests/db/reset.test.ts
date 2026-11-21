@@ -157,7 +157,7 @@ describe('resetLedger', () => {
       template: 0,
       txn: 0,
       txn_tag: 0,
-      app_meta: 0,
+      app_meta: 3,
     });
 
     // It equals a first launch, row for row: 清除所有数据 must not leave a
@@ -238,7 +238,7 @@ describe('resetLedger', () => {
       template: 0,
       txn: 0,
       txn_tag: 0,
-      app_meta: 0,
+      app_meta: 3,
     });
   });
 

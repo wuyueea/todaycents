@@ -12,8 +12,9 @@
  * domain/report.
  */
 import type { Db } from '../driver';
-import { assertDateISO, isMonthKey, monthKeyOf, monthRange, todayLocalISO } from '../../domain/date';
+import { assertDateISO, isMonthKey, localDateISO, monthKeyOf, monthRange, todayLocalISO } from '../../domain/date';
 import { compareByCentsThenName, integerPercents, top3WithRest } from '../../domain/report';
+import { budgetForMonth, readAccountBudgetHistories } from './accountBudgets';
 import { listAccounts } from './accounts';
 import {
   categoryShares,
@@ -56,7 +57,7 @@ export interface MonthPoint {
 export interface BudgetActual {
   accountId: string;
   name: string;
-  /** account.monthly_budget_cents; never null in this list. */
+  /** The account's recorded budget for the report month. */
   budgetCents: number;
   /** Expense spending on that account in this month, via sumExpensesByAccount. */
   spentCents: number;
@@ -82,8 +83,10 @@ export interface MonthReport {
   restNames: string;
   /** January to December of the month's year. */
   monthlySeries: MonthPoint[];
-  /** Live accounts that have a monthly budget, in account order. */
+  /** Live accounts with a budget recorded for this month, in account order. */
   budgets: BudgetActual[];
+  /** At least one account in use that month predates its budget records. */
+  hasUnrecordedBudgets: boolean;
 }
 
 /** What the year report screen reads in one call. */
@@ -233,31 +236,40 @@ async function monthlySeries(
 }
 
 /**
- * This month's budget per live account.
+ * Each live account's budget in force during the selected month.
  *
  * The spent side is sumExpensesByAccount over listTxnsByMonth — the one 本月已用
  * rule 统计 already uses — so a transfer leg or an adjustment can never eat a
- * budget. An archived account keeps its history in the totals above but loses
- * its budget row, because the budget is a present intention and the screen only
- * offers live accounts.
+ * budget. An account that predates its budget records can still have spending.
  */
-async function budgetsForMonth(db: Db, monthKey: string): Promise<BudgetActual[]> {
+async function budgetsForMonth(
+  db: Db,
+  monthKey: string
+): Promise<Pick<MonthReport, 'budgets' | 'hasUnrecordedBudgets'>> {
   const accounts = await listAccounts(db);
   const spentByAccount = sumExpensesByAccount(await listTxnsByMonth(db, monthKey));
-  return accounts.flatMap(account => {
-    const budgetCents = account.monthlyBudgetCents;
-    if (budgetCents === null) return [];
+  const histories = await readAccountBudgetHistories(db);
+  let hasUnrecordedBudgets = false;
+  const budgets: BudgetActual[] = [];
+  for (const account of accounts) {
+    const budgetCents = budgetForMonth(histories.get(account.id) ?? [], monthKey);
+    if (budgetCents === undefined) {
+      const createdAt = new Date(account.createdAt);
+      const existed = Number.isFinite(createdAt.getTime()) && monthKeyOf(localDateISO(createdAt)) <= monthKey;
+      if (existed || spentByAccount.has(account.id)) hasUnrecordedBudgets = true;
+      continue;
+    }
+    if (budgetCents === null) continue;
     const spentCents = spentByAccount.get(account.id) ?? 0;
-    return [
-      {
-        accountId: account.id,
-        name: account.name,
-        budgetCents,
-        spentCents,
-        over: spentCents > budgetCents,
-      },
-    ];
-  });
+    budgets.push({
+      accountId: account.id,
+      name: account.name,
+      budgetCents,
+      spentCents,
+      over: spentCents > budgetCents,
+    });
+  }
+  return { budgets, hasUnrecordedBudgets };
 }
 
 /**
@@ -319,7 +331,7 @@ export async function monthReport(
     top3: top.top,
     restNames: top.restNames,
     monthlySeries: await monthlySeries(db, monthKey.slice(0, 4), currentMonth),
-    budgets: await budgetsForMonth(db, monthKey),
+    ...await budgetsForMonth(db, monthKey),
   };
 }
 

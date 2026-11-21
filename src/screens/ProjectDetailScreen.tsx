@@ -1,17 +1,20 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ProjectTxnList } from '../components/ProjectTxnList';
 import { useRestoreTxnEditScroll } from '../components/TxnEditNavigation';
 import type { TxnEditOrigin } from '../components/TxnEditNavigation';
 import { Sheet } from '../components/Sheet';
+import { UnusedRecordDeleteSheet } from '../components/UnusedRecordDeleteSheet';
 import { CategoryBar } from '../components/CategoryBar';
 import { AmountKeypadField } from '../components/AmountKeypadField';
 import { Toast, useToast } from '../components/Toast';
 import { useDb, useQuery } from '../store/useDb';
 import {
   archiveProject,
+  deleteProject,
   projectDetail,
+  projectHistoryCount,
   projectTotals,
   renameProject,
   setProjectBudget,
@@ -46,6 +49,7 @@ export interface ProjectDetailData {
   detail: ProjectDetail;
   /** Live rows assigned to the project, from projectTotals. */
   txnCount: number;
+  canDelete: boolean;
 }
 
 /**
@@ -61,12 +65,16 @@ export async function loadProjectDetailData(
   db: Db,
   id: string
 ): Promise<ProjectDetailData> {
-  const [detail, totals] = await Promise.all([projectDetail(db, id), projectTotals(db)]);
+  const [detail, totals, historyCount] = await Promise.all([
+    projectDetail(db, id),
+    projectTotals(db),
+    projectHistoryCount(db, id),
+  ]);
   const total = totals.find(candidate => candidate.id === id);
   if (total === undefined) {
     throw new Error(`项目不存在：${id}`);
   }
-  return { detail, txnCount: total.txnCount };
+  return { detail, txnCount: total.txnCount, canDelete: historyCount === 0 };
 }
 
 /**
@@ -146,6 +154,7 @@ export function ProjectArchiveSheet({
 
 export default function ProjectDetailScreen({ editReturn = null }: { editReturn?: TxnEditOrigin | null }) {
   const { db, bump } = useDb();
+  const navigate = useNavigate();
   const params = useParams<{ id: string }>();
   const id = params.id ?? '';
   const query = useQuery<ProjectDetailData>(
@@ -160,6 +169,8 @@ export default function ProjectDetailScreen({ editReturn = null }: { editReturn?
   const [editError, setEditError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Pick<Project, 'id' | 'name'> | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const data = query.data;
   useRestoreTxnEditScroll(editReturn, data !== null && !query.loading);
@@ -249,6 +260,25 @@ export default function ProjectDetailScreen({ editReturn = null }: { editReturn?
       showToast(`已恢复归档「${project.name}」，它重新出现在进行中。`);
     } catch (reason) {
       showToast(`恢复失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (db === null || deleteTarget === null || busy) return;
+    setBusy(true);
+    setDeleteError(null);
+    try {
+      await deleteProject(db, deleteTarget.id);
+      bump();
+      void navigate('/settings/projects', {
+        replace: true,
+        state: { deletedProjectName: deleteTarget.name },
+      });
+    } catch (reason) {
+      setDeleteError(`删除失败。${reason instanceof Error ? reason.message : String(reason)}`);
+      bump();
     } finally {
       setBusy(false);
     }
@@ -353,6 +383,19 @@ export default function ProjectDetailScreen({ editReturn = null }: { editReturn?
                 恢复归档
               </button>
             )}
+            {data.canDelete && (
+              <button
+                className="project-archive project-delete"
+                type="button"
+                disabled={busy || db === null || query.loading}
+                onClick={() => {
+                  setDeleteError(null);
+                  setDeleteTarget(data.detail.project);
+                }}
+              >
+                删除项目
+              </button>
+            )}
           </div>
 
           <section className="project-edit" aria-labelledby="project-edit-title">
@@ -419,6 +462,19 @@ export default function ProjectDetailScreen({ editReturn = null }: { editReturn?
           onConfirm={handleArchive}
           onCancel={() => {
             if (!busy) setConfirming(false);
+          }}
+        />
+      )}
+
+      {deleteTarget !== null && (
+        <UnusedRecordDeleteSheet
+          kind="项目"
+          name={deleteTarget.name}
+          busy={busy}
+          error={deleteError}
+          onConfirm={handleDelete}
+          onCancel={() => {
+            if (!busy) setDeleteTarget(null);
           }}
         />
       )}

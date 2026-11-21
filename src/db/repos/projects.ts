@@ -199,6 +199,14 @@ export async function unarchiveProject(db: Db, id: string): Promise<void> {
   await db.run("UPDATE project SET status = 'active', archived_date = NULL WHERE id = ?", [id]);
 }
 
+/** Includes soft-deleted rows, which retain their project reference. */
+export async function projectHistoryCount(db: Db, id: string): Promise<number> {
+  const row = await db.get<{ n: number }>(
+    'SELECT COUNT(*) AS n FROM txn WHERE project_id = ?', [id]
+  );
+  return row?.n ?? 0;
+}
+
 /**
  * Deletes a project that no transaction has ever pointed at, and refuses
  * otherwise.
@@ -226,11 +234,7 @@ export async function deleteProject(db: Db, id: string): Promise<void> {
       throw new Error(`项目不存在：${id}`);
     }
 
-    const row = await tx.get<{ n: number }>(
-      'SELECT COUNT(*) AS n FROM txn WHERE project_id = ?',
-      [id]
-    );
-    const n = row?.n ?? 0;
+    const n = await projectHistoryCount(tx, id);
     if (n > 0) {
       throw new Error(`项目「${project.name}」还有 ${n} 笔流水，不能删除；可以先归档`);
     }

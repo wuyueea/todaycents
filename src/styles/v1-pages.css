@@ -890,6 +890,15 @@
   box-shadow: 0 3px 0 #c98e3e;
 }
 
+.categories-screen--v1[data-reordering] .categories-add {
+  visibility: hidden;
+}
+
+.categories-screen--v1[data-reordering] .toast {
+  position: static;
+  margin: 8px auto 0;
+}
+
 .categories-screen--v1 .category-create {
   margin-top: 12px;
   padding: 12px 14px 14px;
@@ -1963,6 +1972,11 @@
   font: inherit;
   font-size: 14px;
   font-weight: 500;
+}
+
+.project-detail-screen--v1 .project-delete {
+  border: 1px solid var(--v1-line);
+  background: transparent;
 }
 
 .project-detail-screen--v1 .project-edit {

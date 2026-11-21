@@ -177,7 +177,7 @@ describe('ProjectsScreen', () => {
     store.error = null;
     const html = renderScreen();
 
-    expect(html).toContain('<h1>项目</h1>');
+    expect(html).toMatch(/<h1[^>]*>项目<\/h1>/);
     expect(html).toContain('2 个进行中');
     // The page explains nothing about the model; the numbers speak.
     expect(html).not.toContain('另一根轴');
@@ -254,7 +254,7 @@ describe('ProjectsScreen', () => {
     store.error = null;
     let html = renderScreen();
     expect(html).toContain('正在加载项目…');
-    expect(html).toContain('<h1>项目</h1>');
+    expect(html).toMatch(/<h1[^>]*>项目<\/h1>/);
 
     store.error = new Error('no sqlite');
     html = renderScreen();

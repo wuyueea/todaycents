@@ -34,6 +34,7 @@ vi.mock('../../src/store/useDb', () => ({
 
 const PHONE: FixedCostListItem = {
   name: '话费',
+  sourceTxnId: 'txn-phone',
   categoryId: 'c-phone',
   categoryName: '通讯',
   payee: '话费',
@@ -47,6 +48,7 @@ const PHONE: FixedCostListItem = {
 
 const INTERNET: FixedCostListItem = {
   name: '校园网',
+  sourceTxnId: 'txn-internet',
   categoryId: 'c-phone',
   categoryName: '通讯',
   payee: '校园网',
@@ -62,6 +64,7 @@ const CANDIDATE: FixedCostCandidate = {
   id: 'h-phone',
   name: '话费',
   categoryId: 'c-phone',
+  categoryName: '通讯',
   payee: '话费',
   monthlyCents: 5988,
   lastDate: '2026-03-01',
@@ -70,10 +73,20 @@ const CANDIDATE: FixedCostCandidate = {
   detectedAt: '2026-04-02T00:00:00.000Z',
 };
 
+const CONFIRMATION = {
+  hintId: CANDIDATE.id,
+  name: CANDIDATE.name,
+  categoryId: CANDIDATE.categoryId,
+  payee: CANDIDATE.payee,
+  undo: { hintId: CANDIDATE.id, confirmedAt: CANDIDATE.detectedAt, changedTxnIds: ['txn-phone'] },
+};
+
 function fixedData(overrides: Partial<FixedCostsData> = {}): FixedCostsData {
   return {
     candidates: [],
     items: [],
+    stopped: [],
+    dismissed: [],
     recordedCents: 0,
     expectedCents: 0,
     today: '2026-04-01',
@@ -97,9 +110,13 @@ function renderView(overrides: Partial<FixedCostViewProps> = {}): string {
     confirmation: null,
     busy: false,
     notice: null,
+    feedback: null,
     onConfirm: () => {},
     onDismiss: () => {},
     onUndo: () => {},
+    onStop: () => {},
+    onResume: () => {},
+    onRestoreDetection: () => {},
     ...overrides,
   };
   return renderToString(
@@ -153,9 +170,10 @@ describe('loadFixedCostsData', () => {
     const [candidate] = await detectCandidates(db);
 
     const confirmation = await confirmFixedCost(db, candidate);
-    expect(confirmation).toEqual({
+    expect(confirmation).toMatchObject({
       hintId: candidate.id,
       name: '话费',
+      undo: { hintId: candidate.id },
     });
 
     const confirmed = await loadFixedCostsData(db, '2026-03-31');
@@ -216,7 +234,7 @@ describe('FixedCostsView candidate prompt', () => {
   it('does not render the same candidate again while the list catches up', () => {
     const html = renderView({
       data: fixedData({ candidates: [CANDIDATE], items: [PHONE], expectedCents: 5988 }),
-      confirmation: { hintId: CANDIDATE.id, name: '话费' },
+      confirmation: CONFIRMATION,
     });
 
     expect(html).toContain('data-fixed-confirmed');
@@ -227,7 +245,7 @@ describe('FixedCostsView candidate prompt', () => {
   it('turns that block into the confirmed line and keeps the list in place', () => {
     const html = renderView({
       data: fixedData({ items: [PHONE], expectedCents: 5988 }),
-      confirmation: { hintId: CANDIDATE.id, name: '话费' },
+      confirmation: CONFIRMATION,
     });
 
     expect(html).toContain('data-fixed-confirmed');
@@ -260,6 +278,9 @@ describe('FixedCostsView list and empty state', () => {
     expect(html).toContain('每月约 5 日');
     expect(html).toContain('30.00');
     expect(html).toContain('预计下次 4月5日');
+    expect(html).toContain('href="/txn/txn-phone"');
+    expect(html).toContain('href="/txn/txn-internet"');
+    expect(html.match(/查看来源流水/g)).toHaveLength(2);
     // The list sits in the 手动标记 block, and the old §7 footnote is gone.
     expect(html.indexOf('手动标记')).toBeLessThan(html.indexOf('data-fixed-list'));
     expect(html).not.toContain('不会自动记账');

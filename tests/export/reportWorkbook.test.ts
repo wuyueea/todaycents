@@ -163,7 +163,7 @@ describe('buildMonthWorkbook', () => {
     expect(summary).toContain('<c r="B2" s="1"><f>ROUND(C2/100,2)</f><v>12.34</v></c>');
     expect(summary).toContain('<c r="C2" s="2"><v>1234</v></c>');
     expect(summary).toContain(
-      '<c r="A3" s="5" t="inlineStr"><is><t xml:space="preserve">总计</t></is></c>'
+      '<c r="A3" s="5" t="inlineStr"><is><t xml:space="preserve">支出总计</t></is></c>'
     );
     expect(summary).toContain('<c r="B3" s="6"><f>ROUND(C3/100,2)</f><v>12.34</v></c>');
     expect(summary).toContain('<c r="C3" s="7"><f>SUM(C2:C2)</f><v>1234</v></c>');
@@ -221,6 +221,7 @@ describe('buildMonthWorkbook', () => {
     expect(detail.match(/<row /g)).toHaveLength(1);
 
     const summary = summarySheet(workbook.bytes);
+    expect(summary).toContain('>支出总计<');
     expect(summary).toContain('<c r="B2" s="6"><f>ROUND(C2/100,2)</f><v>0.00</v></c>');
     expect(summary).toContain('<c r="C2" s="7"><f>0</f><v>0</v></c>');
   });
@@ -268,16 +269,23 @@ describe('buildReportWorkbook', () => {
     const result = period === 'month' ? await buildMonthWorkbook(db, '2026-10') : await buildYearWorkbook(db, 2026);
     expect(result.detailRows).toBe(7);
     expect(result.summaryRows).toBe(3);
+    const workbook = part(result.bytes, 'xl/workbook.xml');
+    expect(workbook).toContain('<sheet name="明细" sheetId="1" r:id="rId1"/>');
+    expect(workbook).toContain('<sheet name="支出汇总" sheetId="2" r:id="rId2"/>');
     const detail = detailSheet(result.bytes);
     expect(detail).not.toContain('<f>');
     expect(detail).toContain('=SUM(C2:C999)');
     expect(detail).toContain('调整');
     expect(detail.match(/转账/g)).toHaveLength(2);
+    expect(detail).toContain('<v>8000</v>');
     expect(detail).not.toContain('<v>-9000</v>');
     expect(detail).toContain('width="44"');
     expect(detail).toContain('topLeftCell="A2"');
-    expect(detail).not.toContain('>总计<');
+    expect(detail).not.toContain('>支出总计<');
     const summary = summarySheet(result.bytes);
+    expect(summary).toContain(
+      '<c r="A4" s="5" t="inlineStr"><is><t xml:space="preserve">支出总计</t></is></c>'
+    );
     expect(summary).toContain('<c r="C2" s="2"><v>40</v></c>');
     expect(summary).toContain('<c r="C3" s="2"><v>30</v></c>');
     expect(summary).toContain('<c r="B4" s="6"><f>ROUND(C4/100,2)</f><v>0.70</v></c>');
@@ -294,6 +302,7 @@ describe('buildReportWorkbook', () => {
     const workbook = await buildMonthWorkbook(db, '2026-10');
     expect(workbook.detailRows).toBe(1);
     const summary = summarySheet(workbook.bytes);
+    expect(summary).toContain('>支出总计<');
     expect(summary).toContain('<f>0</f><v>0</v>');
     expect(summary).toContain('<f>ROUND(C2/100,2)</f><v>0.00</v>');
     expect(summary).not.toContain('SUM(');

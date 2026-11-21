@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import { Sheet } from '../components/Sheet';
+import { reorderedIds, useReorderGesture } from '../components/useReorderGesture';
+import type { ReorderInsertion } from '../components/useReorderGesture';
 import type { Db } from '../db/driver';
 import type {
   Category,
@@ -11,11 +13,13 @@ import type {
 import {
   archiveCategory,
   archiveCategoryWithUnlink,
+  compareCategoryOrder,
   createCategory,
   inspectCategoryPurge,
   listCategories,
   purgeCategory,
   renameCategory,
+  reorderCategories,
   unarchiveCategory,
 } from '../db/repos/categories';
 import type { PurgeUndoRecord } from '../db/repos/purge';
@@ -65,8 +69,8 @@ const KIND_LABELS: Record<CategoryKind, string> = {
   income: '收入',
 };
 
-function bySort(a: Category, b: Category): number {
-  return a.sort - b.sort || a.name.localeCompare(b.name, 'zh-Hans-CN');
+function reorderGroup(category: Category): string {
+  return category.parentId === null ? `roots:${category.kind}` : `children:${category.parentId}`;
 }
 
 /**
@@ -85,12 +89,12 @@ export function buildCategoryRows(
       category.kind === kind &&
       category.id !== UNCATEGORIZED_CATEGORY_ID
   );
-  const roots = live.filter(category => category.parentId === null).sort(bySort);
+  const roots = live.filter(category => category.parentId === null).sort(compareCategoryOrder);
   const rows: CategoryRow[] = [];
 
   for (const root of roots) {
     rows.push({ category: root, depth: 0 });
-    const children = live.filter(category => category.parentId === root.id).sort(bySort);
+    const children = live.filter(category => category.parentId === root.id).sort(compareCategoryOrder);
     for (const child of children) rows.push({ category: child, depth: 1 });
   }
   return rows;
@@ -107,6 +111,8 @@ export interface CategoryMenuSheetProps {
   onAddChild?(): void;
   onArchive?(): void;
   onUnarchive?(): void;
+  onMoveUp?(): void;
+  onMoveDown?(): void;
   /** 断联并归档: live only. */
   onRetire(): void;
   /** 彻底删除: archived only; never disabled, so the refusal can explain itself. */
@@ -122,6 +128,8 @@ export function CategoryMenuSheet({
   onAddChild,
   onArchive,
   onUnarchive,
+  onMoveUp,
+  onMoveDown,
   onRetire,
   onPurge,
   onCancel,
@@ -152,6 +160,16 @@ export function CategoryMenuSheet({
           <button className="action-menu__item" type="button" onClick={onAddChild}>
             加二级分类
             <span>最多两级</span>
+          </button>
+        )}
+        {onMoveUp !== undefined && (
+          <button className="action-menu__item" type="button" onClick={onMoveUp}>
+            上移
+          </button>
+        )}
+        {onMoveDown !== undefined && (
+          <button className="action-menu__item" type="button" onClick={onMoveDown}>
+            下移
           </button>
         )}
         {category.archivedAt === null ? (
@@ -434,6 +452,7 @@ interface RenameState {
 
 export default function CategoriesScreen() {
   const { db, bump } = useDb();
+  const location = useLocation();
   const query = useQuery<CategoriesData>(loadCategoriesData, []);
   const { toast, showToast, clearToast } = useToast();
 
@@ -462,7 +481,7 @@ export default function CategoriesScreen() {
     .filter(
       category => category.archivedAt !== null && category.id !== UNCATEGORIZED_CATEGORY_ID
     )
-    .sort(bySort);
+    .sort(compareCategoryOrder);
   const liveChildCountByParent = new Map<string, number>();
   for (const category of categories) {
     if (category.archivedAt === null && category.parentId !== null) {
@@ -472,9 +491,44 @@ export default function CategoriesScreen() {
       );
     }
   }
-  const visibleLiveCount =
-    buildCategoryRows(categories, 'expense').length +
-    buildCategoryRows(categories, 'income').length;
+  const expenseRows = buildCategoryRows(categories, 'expense');
+  const incomeRows = buildCategoryRows(categories, 'income');
+  const visibleLiveCount = expenseRows.length + incomeRows.length;
+  const currentRows = kind === 'expense' ? expenseRows : incomeRows;
+  const groups = new Map<string, string[]>();
+  for (const { category } of currentRows) {
+    const group = reorderGroup(category);
+    const siblings = groups.get(group);
+    if (siblings === undefined) groups.set(group, [category.id]);
+    else siblings.push(category.id);
+  }
+  const canReorder = db !== null && !query.loading && !busy && !showCreate && renaming === null &&
+    archiveSheet === null && retireSheet === null && purgeDialog === null;
+  const canDrag = canReorder && menuId === null && [...groups.values()].some(ids => ids.length > 1);
+
+  async function insertCategory(sourceId: string, insertion: ReorderInsertion) {
+    if (db === null || !canReorder) return;
+    const source = currentRows.find(row => row.category.id === sourceId)?.category;
+    if (source === undefined) return;
+    const previousIds = groups.get(reorderGroup(source)) ?? [];
+    const ids = reorderedIds(previousIds, sourceId, insertion);
+    if (ids === null) return;
+
+    setBusy(true);
+    try {
+      await reorderCategories(db, source.kind, source.parentId, ids, previousIds);
+      showToast('已更新分类顺序');
+    } catch (reason) {
+      showToast(`排序失败：${reason instanceof Error ? reason.message : String(reason)}`);
+    } finally {
+      bump();
+      setBusy(false);
+    }
+  }
+
+  const drag = useReorderGesture(canDrag, `${location.key}:${kind}`, (id, insertion) => {
+    void insertCategory(id, insertion);
+  });
 
   const parentOptions = live.filter(
     category => category.parentId === null && category.kind === kind
@@ -484,6 +538,15 @@ export default function CategoriesScreen() {
   const systemCategory = categories.find(
     category => category.id === UNCATEGORIZED_CATEGORY_ID
   );
+  const menuSiblingIds = menuCategory === null ? [] : groups.get(reorderGroup(menuCategory)) ?? [];
+  const menuIndex = menuCategory === null ? -1 : menuSiblingIds.indexOf(menuCategory.id);
+  const moveFromMenu = (delta: -1 | 1) => {
+    if (menuCategory === null || menuIndex < 0) return;
+    const id = menuSiblingIds[menuIndex + delta];
+    if (id === undefined) return;
+    setMenuId(null);
+    void insertCategory(menuCategory.id, { id, edge: delta < 0 ? 'before' : 'after' });
+  };
 
   // The purge's own result renders immediately; the copy loaded with the
   // categories is what survives a restart. Once its timer fires, the key stays
@@ -763,6 +826,10 @@ export default function CategoriesScreen() {
   const renderRow = (row: CategoryRow) => {
     const { category, depth } = row;
     const childCount = live.filter(candidate => candidate.parentId === category.id).length;
+    const current = category.kind === kind;
+    const group = reorderGroup(category);
+    const siblings = groups.get(group);
+    const lastChild = category.parentId !== null && siblings?.at(-1) === category.id;
 
     return (
       <li
@@ -770,6 +837,13 @@ export default function CategoriesScreen() {
         key={category.id}
         data-category-id={category.id}
         data-depth={depth}
+        data-reorder-item={current ? category.id : undefined}
+        data-reorder-group={current ? group : undefined}
+        data-reorder-tail-for={lastChild ? category.parentId : undefined}
+        data-reorder-handle={current && canDrag && (siblings?.length ?? 0) > 1 ? category.name : undefined}
+        data-reorder-dragging={drag !== null &&
+          (drag.sourceId === category.id || drag.sourceId === category.parentId) || undefined}
+        data-reorder-drop-edge={drag?.insertion?.markerId === category.id ? drag.insertion.edge : undefined}
       >
         {renaming?.id === category.id ? (
           <form className="category-rename" onSubmit={handleRename}>
@@ -822,6 +896,7 @@ export default function CategoriesScreen() {
               className="category-row__menu"
               type="button"
               aria-label={`${category.name}的菜单`}
+              data-reorder-ignore
               disabled={busy}
               onClick={() => setMenuId(category.id)}
             >
@@ -870,7 +945,7 @@ export default function CategoriesScreen() {
   };
 
   return (
-    <div className="categories-screen categories-screen--v1">
+    <div className="categories-screen categories-screen--v1" data-reordering={drag !== null || undefined}>
       <header className="settings-header">
         <Link className="add-back" to="/settings" aria-label="返回设置">
           ‹
@@ -906,6 +981,9 @@ export default function CategoriesScreen() {
         </button>
       </div>
       <p className="categories-hint">最多两层：领域 → 细分</p>
+      {[...groups.values()].some(ids => ids.length > 1) && (
+        <p className="categories-hint">长按分类可在同级内拖动排序</p>
+      )}
 
       {data === null ? (
         query.error !== null ? (
@@ -923,7 +1001,7 @@ export default function CategoriesScreen() {
             <p className="categories-note">还没有分类，先新建一个一级分类。</p>
           )}
 
-          {buildCategoryRows(categories, 'expense').length > 0 && (
+          {expenseRows.length > 0 && (
             <section
               aria-labelledby="categories-expense-title"
               hidden={kind !== 'expense'}
@@ -931,13 +1009,13 @@ export default function CategoriesScreen() {
               <h2 className="categories-section" id="categories-expense-title">
                 支出
               </h2>
-              <ul className="category-list">
-                {buildCategoryRows(categories, 'expense').map(renderRow)}
+              <ul className="category-list" data-reorder-list>
+                {expenseRows.map(renderRow)}
               </ul>
             </section>
           )}
 
-          {buildCategoryRows(categories, 'income').length > 0 && (
+          {incomeRows.length > 0 && (
             <section
               aria-labelledby="categories-income-title"
               hidden={kind !== 'income'}
@@ -945,8 +1023,8 @@ export default function CategoriesScreen() {
               <h2 className="categories-section" id="categories-income-title">
                 收入
               </h2>
-              <ul className="category-list">
-                {buildCategoryRows(categories, 'income').map(renderRow)}
+              <ul className="category-list" data-reorder-list>
+                {incomeRows.map(renderRow)}
               </ul>
             </section>
           )}
@@ -1066,6 +1144,10 @@ export default function CategoriesScreen() {
           onAddChild={() => startAddChild(menuCategory)}
           onArchive={() => startArchive(menuCategory)}
           onUnarchive={() => handleUnarchive(menuCategory)}
+          onMoveUp={canReorder && menuIndex > 0 ? () => moveFromMenu(-1) : undefined}
+          onMoveDown={canReorder && menuIndex >= 0 && menuIndex < menuSiblingIds.length - 1
+            ? () => moveFromMenu(1)
+            : undefined}
           onRetire={() => startRetire(menuCategory)}
           onPurge={() => startPurge(menuCategory)}
           onCancel={() => setMenuId(null)}
@@ -1116,6 +1198,11 @@ export default function CategoriesScreen() {
         ))}
 
       {activeUndo !== null && <PurgeUndoToast undo={activeUndo} onUndo={handleUndo} />}
+      {drag !== null && (
+        <div className="reorder-preview" style={{ top: Math.max(12, drag.point.y - 52) }} aria-hidden="true">
+          {drag.name}
+        </div>
+      )}
       {toast !== null && (
         <Toast
           text={toast}
